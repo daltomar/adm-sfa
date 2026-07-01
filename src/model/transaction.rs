@@ -118,6 +118,29 @@ pub enum BrlTxType {
     CashGiftOut,
 }
 
+impl BrlTxType {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "transfer_in" => Some(Self::TransferIn),
+            "brazil_purchase_out" => Some(Self::BrazilPurchaseOut),
+            "cash_gift_out" => Some(Self::CashGiftOut),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TransferIn => "EUR→BRL",
+            Self::BrazilPurchaseOut => "Purchase",
+            Self::CashGiftOut => "Cash gift",
+        }
+    }
+
+    pub fn is_inflow(self) -> bool {
+        matches!(self, Self::TransferIn)
+    }
+}
+
 pub struct BrlTransaction {
     pub id: i64,
     pub date: String,
@@ -127,4 +150,20 @@ pub struct BrlTransaction {
     pub linked_purchase_id: Option<i64>,
     pub linked_outbound_event_id: Option<i64>,
     pub note: Option<String>,
+}
+
+/// Row returned by the BRL ledger list query — includes joined description fields.
+pub struct BrlTxRow {
+    pub id: i64,
+    pub date: String,
+    pub tx_type: BrlTxType,
+    pub amount: Decimal,
+    pub note: Option<String>,
+    pub linked_transfer_id: Option<i64>,
+    pub linked_purchase_id: Option<i64>,
+    pub linked_outbound_event_id: Option<i64>,
+    /// Populated for brazil_purchase_out via JOIN with purchase.
+    pub purchase_channel: Option<String>,
+    /// Populated for cash_gift_out via JOIN with outbound_event → recipient_project.
+    pub recipient_name: Option<String>,
 }

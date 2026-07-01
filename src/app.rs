@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::ui;
 use crate::ui::views::donors::DonorsView;
+use crate::ui::views::brl_ledger::BrlLedgerView;
 use crate::ui::views::eur_ledger::EurLedgerView;
 use crate::ui::views::purchases::PurchasesView;
 
@@ -27,6 +28,7 @@ pub struct App {
     donors_view: DonorsView,
     purchases_view: PurchasesView,
     eur_ledger_view: EurLedgerView,
+    brl_ledger_view: BrlLedgerView,
 }
 
 impl App {
@@ -39,6 +41,7 @@ impl App {
             donors_view: DonorsView::default(),
             purchases_view: PurchasesView::default(),
             eur_ledger_view: EurLedgerView::default(),
+            brl_ledger_view: BrlLedgerView::default(),
         }
     }
 }
@@ -53,7 +56,7 @@ impl eframe::App for App {
                 Section::Dashboard  => ui::views::dashboard::show(ui),
                 Section::Donors     => self.donors_view.show(ui, &self.db),
                 Section::EurLedger  => self.eur_ledger_view.show(ui, &self.db),
-                Section::BrlLedger  => ui::views::brl_ledger::show(ui),
+                Section::BrlLedger  => self.brl_ledger_view.show(ui, &self.db),
                 Section::Purchases  => self.purchases_view.show(ui, &self.db, &self.data_dir),
                 Section::Transfers  => ui::views::transfers::show(ui),
                 Section::Inventory  => ui::views::inventory::show(ui),
