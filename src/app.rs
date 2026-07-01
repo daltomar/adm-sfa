@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::ui;
 use crate::ui::views::donors::DonorsView;
+use crate::ui::views::purchases::PurchasesView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -23,6 +24,7 @@ pub struct App {
     pub db: rusqlite::Connection,
     pub data_dir: PathBuf,
     donors_view: DonorsView,
+    purchases_view: PurchasesView,
 }
 
 impl App {
@@ -33,6 +35,7 @@ impl App {
             db,
             data_dir,
             donors_view: DonorsView::default(),
+            purchases_view: PurchasesView::default(),
         }
     }
 }
@@ -48,7 +51,7 @@ impl eframe::App for App {
                 Section::Donors     => self.donors_view.show(ui, &self.db),
                 Section::EurLedger  => ui::views::eur_ledger::show(ui),
                 Section::BrlLedger  => ui::views::brl_ledger::show(ui),
-                Section::Purchases  => ui::views::purchases::show(ui),
+                Section::Purchases  => self.purchases_view.show(ui, &self.db, &self.data_dir),
                 Section::Transfers  => ui::views::transfers::show(ui),
                 Section::Inventory  => ui::views::inventory::show(ui),
                 Section::Outbound   => ui::views::outbound::show(ui),
