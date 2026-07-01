@@ -11,3 +11,10 @@ pub struct PhysicalDonation {
     pub date_received: String,
     pub notes: Option<String>,
 }
+
+#[derive(Default, Clone)]
+pub struct DonorDraft {
+    pub name: String,
+    pub contact_info: String,
+    pub notes: String,
+}

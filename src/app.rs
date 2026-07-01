@@ -2,6 +2,7 @@ use eframe::egui;
 use std::path::PathBuf;
 
 use crate::ui;
+use crate::ui::views::donors::DonorsView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -21,12 +22,18 @@ pub struct App {
     pub section: Section,
     pub db: rusqlite::Connection,
     pub data_dir: PathBuf,
+    donors_view: DonorsView,
 }
 
 impl App {
     pub fn new(_cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
         let db = crate::db::open_db(&data_dir).expect("failed to open database");
-        Self { section: Section::Dashboard, db, data_dir }
+        Self {
+            section: Section::Dashboard,
+            db,
+            data_dir,
+            donors_view: DonorsView::default(),
+        }
     }
 }
 
@@ -38,7 +45,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             match self.section {
                 Section::Dashboard  => ui::views::dashboard::show(ui),
-                Section::Donors     => ui::views::donors::show(ui),
+                Section::Donors     => self.donors_view.show(ui, &self.db),
                 Section::EurLedger  => ui::views::eur_ledger::show(ui),
                 Section::BrlLedger  => ui::views::brl_ledger::show(ui),
                 Section::Purchases  => ui::views::purchases::show(ui),
