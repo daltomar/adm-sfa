@@ -6,6 +6,7 @@ use crate::ui::views::donors::DonorsView;
 use crate::ui::views::brl_ledger::BrlLedgerView;
 use crate::ui::views::eur_ledger::EurLedgerView;
 use crate::ui::views::purchases::PurchasesView;
+use crate::ui::views::transfers::TransfersView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -29,6 +30,7 @@ pub struct App {
     purchases_view: PurchasesView,
     eur_ledger_view: EurLedgerView,
     brl_ledger_view: BrlLedgerView,
+    transfers_view: TransfersView,
 }
 
 impl App {
@@ -42,6 +44,7 @@ impl App {
             purchases_view: PurchasesView::default(),
             eur_ledger_view: EurLedgerView::default(),
             brl_ledger_view: BrlLedgerView::default(),
+            transfers_view: TransfersView::default(),
         }
     }
 }
@@ -58,7 +61,7 @@ impl eframe::App for App {
                 Section::EurLedger  => self.eur_ledger_view.show(ui, &self.db),
                 Section::BrlLedger  => self.brl_ledger_view.show(ui, &self.db),
                 Section::Purchases  => self.purchases_view.show(ui, &self.db, &self.data_dir),
-                Section::Transfers  => ui::views::transfers::show(ui),
+                Section::Transfers  => self.transfers_view.show(ui, &self.db, &self.data_dir),
                 Section::Inventory  => ui::views::inventory::show(ui),
                 Section::Outbound   => ui::views::outbound::show(ui),
                 Section::Reports    => ui::views::reports::show(ui),
