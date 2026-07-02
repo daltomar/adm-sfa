@@ -1,4 +1,4 @@
-use crate::model::donor::{Donor, DonorDraft};
+use crate::model::donor::{Donor, DonorDraft, PhysicalDonation, PhysicalDonationDraft};
 use rusqlite::{params, Connection, Result};
 
 pub fn list(conn: &Connection) -> Result<Vec<Donor>> {
@@ -38,4 +38,34 @@ pub fn update(conn: &Connection, id: i64, draft: &DonorDraft) -> Result<()> {
 fn opt(s: &str) -> Option<&str> {
     let t = s.trim();
     if t.is_empty() { None } else { Some(t) }
+}
+
+pub fn list_donations(conn: &Connection) -> Result<Vec<PhysicalDonation>> {
+    let mut stmt = conn.prepare(
+        "SELECT pd.id, pd.donor_id, d.name, pd.date_received, pd.notes
+           FROM physical_donation pd
+           LEFT JOIN donor d ON d.id = pd.donor_id
+          ORDER BY pd.date_received DESC, pd.id DESC",
+    )?;
+    let donations = stmt
+        .query_map([], |row| {
+            Ok(PhysicalDonation {
+                id: row.get(0)?,
+                donor_id: row.get(1)?,
+                donor_name: row.get(2)?,
+                date_received: row.get(3)?,
+                notes: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(donations)
+}
+
+pub fn insert_donation(conn: &Connection, draft: &PhysicalDonationDraft) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO physical_donation (donor_id, date_received, notes)
+              VALUES (?1, ?2, ?3)",
+        params![draft.donor_id, draft.date_received.trim(), opt(&draft.notes)],
+    )?;
+    Ok(conn.last_insert_rowid())
 }

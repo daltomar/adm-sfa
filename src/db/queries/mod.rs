@@ -1,4 +1,5 @@
 pub mod brl_ledger;
+pub mod categories;
 pub mod documents;
 pub mod donors;
 pub mod eur_ledger;
