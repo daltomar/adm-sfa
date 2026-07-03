@@ -8,12 +8,62 @@ pub struct RecipientProject {
     pub active: bool,
 }
 
+#[derive(Clone)]
+pub struct RecipientProjectDraft {
+    pub name: String,
+    pub contact_info: String,
+    pub location: String,
+    pub active: bool,
+}
+
+impl Default for RecipientProjectDraft {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            contact_info: String::new(),
+            location: String::new(),
+            active: true,
+        }
+    }
+}
+
 pub struct OutboundEvent {
     pub id: i64,
     pub date: String,
     pub recipient_project_id: i64,
     pub cash_amount_brl: Option<Decimal>,
     pub notes: Option<String>,
+}
+
+/// Row returned by the list query — includes the joined recipient name and
+/// the count of inventory items linked via outbound_event_item.
+pub struct OutboundEventRow {
+    pub id: i64,
+    pub date: String,
+    pub recipient_project_id: i64,
+    pub recipient_name: String,
+    pub cash_amount_brl: Option<Decimal>,
+    pub notes: Option<String>,
+    pub item_count: i64,
+}
+
+#[derive(Clone)]
+pub struct OutboundEventDraft {
+    pub date: String,
+    pub recipient_project_id: Option<i64>,
+    pub cash_amount_brl_str: String,
+    pub notes: String,
+}
+
+impl Default for OutboundEventDraft {
+    fn default() -> Self {
+        Self {
+            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            recipient_project_id: None,
+            cash_amount_brl_str: String::new(),
+            notes: String::new(),
+        }
+    }
 }
 
 pub struct OutboundEventItem {
