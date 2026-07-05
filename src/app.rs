@@ -8,6 +8,7 @@ use crate::ui::views::eur_ledger::EurLedgerView;
 use crate::ui::views::inventory::InventoryView;
 use crate::ui::views::outbound::OutboundView;
 use crate::ui::views::purchases::PurchasesView;
+use crate::ui::views::reports::ReportsView;
 use crate::ui::views::transfers::TransfersView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,7 @@ pub struct App {
     transfers_view: TransfersView,
     inventory_view: InventoryView,
     outbound_view: OutboundView,
+    reports_view: ReportsView,
 }
 
 impl App {
@@ -51,6 +53,7 @@ impl App {
             transfers_view: TransfersView::default(),
             inventory_view: InventoryView::default(),
             outbound_view: OutboundView::default(),
+            reports_view: ReportsView::default(),
         }
     }
 }
@@ -70,7 +73,7 @@ impl eframe::App for App {
                 Section::Transfers  => self.transfers_view.show(ui, &self.db, &self.data_dir),
                 Section::Inventory  => self.inventory_view.show(ui, &self.db, &self.data_dir),
                 Section::Outbound   => self.outbound_view.show(ui, &self.db),
-                Section::Reports    => ui::views::reports::show(ui),
+                Section::Reports    => self.reports_view.show(ui, &self.db),
                 Section::Settings   => ui::views::settings::show(ui),
             }
         });
