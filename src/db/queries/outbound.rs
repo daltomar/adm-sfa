@@ -89,44 +89,28 @@ pub fn item_ids_for_event(conn: &Connection, event_id: i64) -> Result<Vec<i64>> 
 
 pub fn insert(conn: &Connection, draft: &OutboundEventDraft, item_ids: &[i64]) -> Result<i64> {
     let cash_amount = parse_cash(&draft.cash_amount_brl_str);
-
-    conn.execute_batch("BEGIN")?;
-    let result: Result<i64> = (|| {
-        conn.execute(
-            "INSERT INTO outbound_event (date, recipient_project_id, cash_amount_brl, notes)
-                  VALUES (?1, ?2, ?3, ?4)",
-            params![
-                draft.date.trim(),
-                draft.recipient_project_id,
-                cash_amount.map(|d| d.to_string()),
-                opt(&draft.notes),
-            ],
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO outbound_event (date, recipient_project_id, cash_amount_brl, notes)
+              VALUES (?1, ?2, ?3, ?4)",
+        params![
+            draft.date.trim(),
+            draft.recipient_project_id,
+            cash_amount.map(|d| d.to_string()),
+            opt(&draft.notes),
+        ],
+    )?;
+    let event_id = tx.last_insert_rowid();
+    link_items(&tx, event_id, item_ids)?;
+    if let Some(amount) = cash_amount.filter(|d| *d > Decimal::ZERO) {
+        tx.execute(
+            "INSERT INTO brl_transaction (date, type, amount, linked_outbound_event_id)
+                  VALUES (?1, 'cash_gift_out', ?2, ?3)",
+            params![draft.date.trim(), amount.to_string(), event_id],
         )?;
-        let event_id = conn.last_insert_rowid();
-
-        link_items(conn, event_id, item_ids)?;
-
-        if let Some(amount) = cash_amount.filter(|d| *d > Decimal::ZERO) {
-            conn.execute(
-                "INSERT INTO brl_transaction (date, type, amount, linked_outbound_event_id)
-                      VALUES (?1, 'cash_gift_out', ?2, ?3)",
-                params![draft.date.trim(), amount.to_string(), event_id],
-            )?;
-        }
-
-        Ok(event_id)
-    })();
-
-    match result {
-        Ok(id) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(id)
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
     }
+    tx.commit()?;
+    Ok(event_id)
 }
 
 pub fn update(
@@ -136,68 +120,51 @@ pub fn update(
     item_ids: &[i64],
 ) -> Result<()> {
     let cash_amount = parse_cash(&draft.cash_amount_brl_str);
-
-    conn.execute_batch("BEGIN")?;
-    let result: Result<()> = (|| {
-        conn.execute(
-            "UPDATE outbound_event
-                SET date = ?1, recipient_project_id = ?2, cash_amount_brl = ?3, notes = ?4
-              WHERE id = ?5",
-            params![
-                draft.date.trim(),
-                draft.recipient_project_id,
-                cash_amount.map(|d| d.to_string()),
-                opt(&draft.notes),
-                id,
-            ],
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE outbound_event
+            SET date = ?1, recipient_project_id = ?2, cash_amount_brl = ?3, notes = ?4
+          WHERE id = ?5",
+        params![
+            draft.date.trim(),
+            draft.recipient_project_id,
+            cash_amount.map(|d| d.to_string()),
+            opt(&draft.notes),
+            id,
+        ],
+    )?;
+    // Release previously-linked items back to available before re-linking the
+    // current selection, so items removed from the event aren't left "donated".
+    let previous_ids: Vec<i64> = {
+        let mut stmt = tx.prepare(
+            "SELECT inventory_item_id FROM outbound_event_item WHERE outbound_event_id = ?1",
         )?;
-
-        // Release previously-linked items back to available before re-linking the
-        // current selection, so items removed from the event aren't left "donated".
-        let previous_ids: Vec<i64> = {
-            let mut stmt = conn.prepare(
-                "SELECT inventory_item_id FROM outbound_event_item WHERE outbound_event_id = ?1",
-            )?;
-            let ids = stmt.query_map([id], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<i64>>>()?;
-            ids
-        };
-        for prev_id in &previous_ids {
-            conn.execute(
-                "UPDATE inventory_item SET status = 'available' WHERE id = ?1",
-                params![prev_id],
-            )?;
-        }
-        conn.execute("DELETE FROM outbound_event_item WHERE outbound_event_id = ?1", [id])?;
-
-        link_items(conn, id, item_ids)?;
-
-        // Delete-and-recreate the linked cash-gift ledger entry so amount changes propagate.
-        conn.execute(
-            "DELETE FROM brl_transaction
-              WHERE linked_outbound_event_id = ?1 AND type = 'cash_gift_out'",
-            [id],
+        let ids = stmt.query_map([id], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<i64>>>()?;
+        ids
+    };
+    for prev_id in &previous_ids {
+        tx.execute(
+            "UPDATE inventory_item SET status = 'available' WHERE id = ?1",
+            params![prev_id],
         )?;
-        if let Some(amount) = cash_amount.filter(|d| *d > Decimal::ZERO) {
-            conn.execute(
-                "INSERT INTO brl_transaction (date, type, amount, linked_outbound_event_id)
-                      VALUES (?1, 'cash_gift_out', ?2, ?3)",
-                params![draft.date.trim(), amount.to_string(), id],
-            )?;
-        }
-
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(())
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
     }
+    tx.execute("DELETE FROM outbound_event_item WHERE outbound_event_id = ?1", [id])?;
+    link_items(&tx, id, item_ids)?;
+    // Delete-and-recreate the linked cash-gift ledger entry so amount changes propagate.
+    tx.execute(
+        "DELETE FROM brl_transaction
+          WHERE linked_outbound_event_id = ?1 AND type = 'cash_gift_out'",
+        [id],
+    )?;
+    if let Some(amount) = cash_amount.filter(|d| *d > Decimal::ZERO) {
+        tx.execute(
+            "INSERT INTO brl_transaction (date, type, amount, linked_outbound_event_id)
+                  VALUES (?1, 'cash_gift_out', ?2, ?3)",
+            params![draft.date.trim(), amount.to_string(), id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 fn link_items(conn: &Connection, event_id: i64, item_ids: &[i64]) -> Result<()> {

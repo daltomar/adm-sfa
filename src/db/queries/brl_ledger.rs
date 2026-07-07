@@ -1,7 +1,6 @@
 use crate::model::transaction::{BrlTxRow, BrlTxType};
 use rust_decimal::Decimal;
 use rusqlite::{Connection, Result};
-use std::str::FromStr;
 
 pub fn list(conn: &Connection) -> Result<Vec<BrlTxRow>> {
     let mut stmt = conn.prepare(
@@ -46,8 +45,9 @@ pub fn list(conn: &Connection) -> Result<Vec<BrlTxRow>> {
         recipient_name,
     ) in raw
     {
-        let tx_type = BrlTxType::from_str(&type_str).unwrap_or(BrlTxType::TransferIn);
-        let amount = Decimal::from_str(&amount_str).unwrap_or_default();
+        let tx_type = BrlTxType::from_str(&type_str)
+            .ok_or_else(|| invalid_enum(2, &type_str))?;
+        let amount = parse_decimal(3, &amount_str)?;
         rows.push(BrlTxRow {
             id,
             date,
@@ -62,4 +62,18 @@ pub fn list(conn: &Connection) -> Result<Vec<BrlTxRow>> {
         });
     }
     Ok(rows)
+}
+
+fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
+    s.parse::<Decimal>().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
+fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        col,
+        rusqlite::types::Type::Text,
+        format!("unknown discriminant: {val:?}").into(),
+    )
 }

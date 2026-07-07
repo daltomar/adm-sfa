@@ -51,7 +51,8 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
         notes,
     ) in raw
     {
-        let source_type = SourceType::from_str(&source_type_str).unwrap_or(SourceType::Donation);
+        let source_type = SourceType::from_str(&source_type_str)
+            .ok_or_else(|| invalid_enum(4, &source_type_str))?;
         let source_desc = match source_type {
             SourceType::Donation => match (donor_name, date_received) {
                 (Some(n), _) => n,
@@ -69,8 +70,10 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
             source_donation_id,
             source_purchase_id,
             source_desc,
-            location: Location::from_str(&location_str).unwrap_or(Location::Germany),
-            status: ItemStatus::from_str(&status_str).unwrap_or(ItemStatus::Available),
+            location: Location::from_str(&location_str)
+                .ok_or_else(|| invalid_enum(10, &location_str))?,
+            status: ItemStatus::from_str(&status_str)
+                .ok_or_else(|| invalid_enum(11, &status_str))?,
             notes,
         });
     }
@@ -122,4 +125,12 @@ pub fn update(conn: &Connection, id: i64, draft: &InventoryItemDraft) -> Result<
 fn opt(s: &str) -> Option<&str> {
     let t = s.trim();
     if t.is_empty() { None } else { Some(t) }
+}
+
+fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        col,
+        rusqlite::types::Type::Text,
+        format!("unknown discriminant: {val:?}").into(),
+    )
 }

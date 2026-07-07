@@ -1,7 +1,6 @@
 use crate::model::transfer::{AnnualTransfer, TransferDraft};
 use rust_decimal::Decimal;
 use rusqlite::{params, Connection, Result};
-use std::str::FromStr;
 
 pub fn list(conn: &Connection) -> Result<Vec<AnnualTransfer>> {
     let mut stmt = conn.prepare(
@@ -27,9 +26,9 @@ pub fn list(conn: &Connection) -> Result<Vec<AnnualTransfer>> {
         transfers.push(AnnualTransfer {
             id,
             date,
-            eur_amount_sent: Decimal::from_str(&eur_str).unwrap_or_default(),
-            exchange_rate: Decimal::from_str(&rate_str).unwrap_or_default(),
-            brl_amount_received: Decimal::from_str(&brl_str).unwrap_or_default(),
+            eur_amount_sent: parse_decimal(2, &eur_str)?,
+            exchange_rate: parse_decimal(3, &rate_str)?,
+            brl_amount_received: parse_decimal(4, &brl_str)?,
             notes,
         });
     }
@@ -37,111 +36,94 @@ pub fn list(conn: &Connection) -> Result<Vec<AnnualTransfer>> {
 }
 
 pub fn insert(conn: &Connection, draft: &TransferDraft) -> Result<i64> {
-    let eur_amount: Decimal = draft.eur_amount_sent_str.trim().parse().unwrap_or_default();
-    let rate: Decimal = draft.exchange_rate_str.trim().parse().unwrap_or_default();
+    let eur_amount = parse_amount(&draft.eur_amount_sent_str)?;
+    let rate = parse_amount(&draft.exchange_rate_str)?;
     let brl_amount = eur_amount * rate;
 
-    conn.execute_batch("BEGIN")?;
-    let result: Result<i64> = (|| {
-        conn.execute(
-            "INSERT INTO annual_transfer
-                    (date, eur_amount_sent, exchange_rate, brl_amount_received, notes)
-                  VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                draft.date.trim(),
-                eur_amount.to_string(),
-                rate.to_string(),
-                brl_amount.to_string(),
-                opt(&draft.notes),
-            ],
-        )?;
-        let transfer_id = conn.last_insert_rowid();
-
-        conn.execute(
-            "INSERT INTO eur_transaction (date, type, amount, linked_transfer_id)
-                  VALUES (?1, 'transfer_to_brl_out', ?2, ?3)",
-            params![draft.date.trim(), eur_amount.to_string(), transfer_id],
-        )?;
-        conn.execute(
-            "INSERT INTO brl_transaction (date, type, amount, linked_transfer_id)
-                  VALUES (?1, 'transfer_in', ?2, ?3)",
-            params![draft.date.trim(), brl_amount.to_string(), transfer_id],
-        )?;
-
-        Ok(transfer_id)
-    })();
-
-    match result {
-        Ok(id) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(id)
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
-    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO annual_transfer
+                (date, eur_amount_sent, exchange_rate, brl_amount_received, notes)
+              VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            draft.date.trim(),
+            eur_amount.to_string(),
+            rate.to_string(),
+            brl_amount.to_string(),
+            opt(&draft.notes),
+        ],
+    )?;
+    let transfer_id = tx.last_insert_rowid();
+    tx.execute(
+        "INSERT INTO eur_transaction (date, type, amount, linked_transfer_id)
+              VALUES (?1, 'transfer_to_brl_out', ?2, ?3)",
+        params![draft.date.trim(), eur_amount.to_string(), transfer_id],
+    )?;
+    tx.execute(
+        "INSERT INTO brl_transaction (date, type, amount, linked_transfer_id)
+              VALUES (?1, 'transfer_in', ?2, ?3)",
+        params![draft.date.trim(), brl_amount.to_string(), transfer_id],
+    )?;
+    tx.commit()?;
+    Ok(transfer_id)
 }
 
 pub fn update(conn: &Connection, id: i64, draft: &TransferDraft) -> Result<()> {
-    let eur_amount: Decimal = draft.eur_amount_sent_str.trim().parse().unwrap_or_default();
-    let rate: Decimal = draft.exchange_rate_str.trim().parse().unwrap_or_default();
+    let eur_amount = parse_amount(&draft.eur_amount_sent_str)?;
+    let rate = parse_amount(&draft.exchange_rate_str)?;
     let brl_amount = eur_amount * rate;
 
-    conn.execute_batch("BEGIN")?;
-    let result: Result<()> = (|| {
-        conn.execute(
-            "UPDATE annual_transfer
-                SET date = ?1, eur_amount_sent = ?2, exchange_rate = ?3,
-                    brl_amount_received = ?4, notes = ?5
-              WHERE id = ?6",
-            params![
-                draft.date.trim(),
-                eur_amount.to_string(),
-                rate.to_string(),
-                brl_amount.to_string(),
-                opt(&draft.notes),
-                id,
-            ],
-        )?;
-
-        // Delete-and-recreate the linked ledger entries so date/amount changes propagate.
-        conn.execute(
-            "DELETE FROM eur_transaction WHERE linked_transfer_id = ?1 AND type = 'transfer_to_brl_out'",
-            [id],
-        )?;
-        conn.execute(
-            "DELETE FROM brl_transaction WHERE linked_transfer_id = ?1 AND type = 'transfer_in'",
-            [id],
-        )?;
-
-        conn.execute(
-            "INSERT INTO eur_transaction (date, type, amount, linked_transfer_id)
-                  VALUES (?1, 'transfer_to_brl_out', ?2, ?3)",
-            params![draft.date.trim(), eur_amount.to_string(), id],
-        )?;
-        conn.execute(
-            "INSERT INTO brl_transaction (date, type, amount, linked_transfer_id)
-                  VALUES (?1, 'transfer_in', ?2, ?3)",
-            params![draft.date.trim(), brl_amount.to_string(), id],
-        )?;
-
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(())
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
-    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE annual_transfer
+            SET date = ?1, eur_amount_sent = ?2, exchange_rate = ?3,
+                brl_amount_received = ?4, notes = ?5
+          WHERE id = ?6",
+        params![
+            draft.date.trim(),
+            eur_amount.to_string(),
+            rate.to_string(),
+            brl_amount.to_string(),
+            opt(&draft.notes),
+            id,
+        ],
+    )?;
+    // Delete-and-recreate the linked ledger entries so date/amount changes propagate.
+    tx.execute(
+        "DELETE FROM eur_transaction WHERE linked_transfer_id = ?1 AND type = 'transfer_to_brl_out'",
+        [id],
+    )?;
+    tx.execute(
+        "DELETE FROM brl_transaction WHERE linked_transfer_id = ?1 AND type = 'transfer_in'",
+        [id],
+    )?;
+    tx.execute(
+        "INSERT INTO eur_transaction (date, type, amount, linked_transfer_id)
+              VALUES (?1, 'transfer_to_brl_out', ?2, ?3)",
+        params![draft.date.trim(), eur_amount.to_string(), id],
+    )?;
+    tx.execute(
+        "INSERT INTO brl_transaction (date, type, amount, linked_transfer_id)
+              VALUES (?1, 'transfer_in', ?2, ?3)",
+        params![draft.date.trim(), brl_amount.to_string(), id],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn opt(s: &str) -> Option<&str> {
     let t = s.trim();
     if t.is_empty() { None } else { Some(t) }
+}
+
+fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
+    s.parse::<Decimal>().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
+fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
+    s.trim().parse::<Decimal>().map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+    })
 }
