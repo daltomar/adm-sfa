@@ -1,9 +1,9 @@
-use std::io::Write;
 use std::path::Path;
 use walkdir::WalkDir;
 
 /// Zips the entire data directory (DB + documents/) to `dest`.
 /// Uses zip v8 — verify SimpleFileOptions API if this fails to compile.
+#[allow(dead_code)]
 pub fn backup_to_zip(data_dir: &Path, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let file = std::fs::File::create(dest)?;
     let mut writer = zip::ZipWriter::new(file);

@@ -3,7 +3,7 @@ use std::path::Path;
 /// Write a CSV file with the given headers and rows.
 pub fn write(
     path: &Path,
-    headers: &[&str],
+    headers: &[String],
     rows: &[Vec<String>],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut wtr = csv::Writer::from_path(path)?;

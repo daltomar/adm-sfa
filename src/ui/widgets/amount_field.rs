@@ -3,10 +3,12 @@ use rust_decimal::Decimal;
 
 /// Decimal text input that validates on focus-loss.
 /// Returns the parsed value if the current text is valid.
+#[allow(dead_code)]
 pub struct AmountField {
     text: String,
 }
 
+#[allow(dead_code)]
 impl AmountField {
     pub fn new(initial: &Decimal) -> Self {
         Self { text: initial.to_string() }

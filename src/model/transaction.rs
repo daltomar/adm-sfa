@@ -46,6 +46,8 @@ impl EurTxType {
     }
 }
 
+// Bare row type; UI uses EurTxRow (with joined fields) instead.
+#[allow(dead_code)]
 pub struct EurTransaction {
     pub id: i64,
     pub date: String,
@@ -141,6 +143,8 @@ impl BrlTxType {
     }
 }
 
+// Bare row type; UI uses BrlTxRow (with joined fields) instead.
+#[allow(dead_code)]
 pub struct BrlTransaction {
     pub id: i64,
     pub date: String,

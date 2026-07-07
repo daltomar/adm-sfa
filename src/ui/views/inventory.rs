@@ -506,10 +506,10 @@ impl InventoryView {
         }
 
         if let Some((doc_id, filename)) = remove_doc {
-            match docs_fs::soft_delete(&documents_dir, &filename) {
-                Err(e) => self.error = Some(format!("File move failed: {e}")),
-                Ok(()) => match docs_qry::soft_delete(db, doc_id) {
-                    Err(e) => self.error = Some(format!("DB update failed: {e}")),
+            match docs_qry::soft_delete(db, doc_id) {
+                Err(e) => self.error = Some(format!("DB update failed: {e}")),
+                Ok(()) => match docs_fs::soft_delete(&documents_dir, &filename) {
+                    Err(e) => self.error = Some(format!("File move failed: {e}")),
                     Ok(()) => {
                         self.docs_needs_reload = true;
                         self.error = None;

@@ -3,7 +3,10 @@ use rust_decimal::Decimal;
 pub struct RecipientProject {
     pub id: i64,
     pub name: String,
+    // contact_info/location stored in DB; displayed when Settings is implemented
+    #[allow(dead_code)]
     pub contact_info: Option<String>,
+    #[allow(dead_code)]
     pub location: Option<String>,
     pub active: bool,
 }
@@ -27,6 +30,8 @@ impl Default for RecipientProjectDraft {
     }
 }
 
+// Bare row type; UI uses OutboundEventRow (with joined fields) instead.
+#[allow(dead_code)]
 pub struct OutboundEvent {
     pub id: i64,
     pub date: String,
@@ -66,6 +71,8 @@ impl Default for OutboundEventDraft {
     }
 }
 
+// Mirrors the outbound_event_item join table; not directly constructed in UI code.
+#[allow(dead_code)]
 pub struct OutboundEventItem {
     pub outbound_event_id: i64,
     pub inventory_item_id: i64,

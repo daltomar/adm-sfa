@@ -10,6 +10,7 @@ pub struct PhysicalDonation {
     pub donor_id: Option<i64>,
     pub donor_name: Option<String>,
     pub date_received: String,
+    #[allow(dead_code)]
     pub notes: Option<String>,
 }
 
