@@ -9,7 +9,7 @@ use crate::db::queries::{
     eur_ledger as eur_qry, inventory as inventory_qry, outbound as outbound_qry,
 };
 use crate::model::donor::{Donor, PhysicalDonation};
-use crate::model::inventory::InventoryItemRow;
+use crate::model::inventory::{InventoryItemRow, SourceType};
 use crate::model::outbound::{OutboundEventRow, RecipientProject};
 use crate::model::transaction::{BrlTxRow, BrlTxType, EurTxRow, EurTxType};
 
@@ -40,6 +40,7 @@ pub struct ReportsView {
 
     loaded: bool,
     error: Option<String>,
+    export_status: Option<Result<String, String>>,
 
     donors: Vec<Donor>,
     donations: Vec<PhysicalDonation>,
@@ -60,6 +61,7 @@ impl Default for ReportsView {
             recipient_filter: None,
             loaded: false,
             error: None,
+            export_status: None,
             donors: Vec::new(),
             donations: Vec::new(),
             eur_rows: Vec::new(),
@@ -162,7 +164,17 @@ impl ReportsView {
             if ui.button("⟳ Refresh").clicked() {
                 self.loaded = false;
             }
+            ui.add_space(8.0);
+            if ui.button("Export CSV").clicked() {
+                self.export_csv();
+            }
         });
+        if let Some(status) = &self.export_status {
+            match status {
+                Ok(msg) => ui.colored_label(egui::Color32::DARK_GREEN, msg),
+                Err(msg) => ui.colored_label(egui::Color32::RED, format!("Export failed: {msg}")),
+            };
+        }
         ui.weak("Date range applies to all tabs except Inventory. Recipient project filters Outbound and Audit trail.");
     }
 
@@ -777,6 +789,312 @@ impl ReportsView {
                     });
                 }
             });
+    }
+    fn export_csv(&mut self) {
+        let tab_label = TABS.iter().find(|(t, _)| *t == self.tab).map(|(_, l)| *l).unwrap_or("report");
+        let filename = format!("{}.csv", tab_label.to_lowercase().replace(' ', "-"));
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&filename)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        let (headers, rows) = match self.tab {
+            Tab::Donors => self.csv_data_donors(),
+            Tab::Eur => self.csv_data_eur(),
+            Tab::Brl => self.csv_data_brl(),
+            Tab::Inventory => self.csv_data_inventory(),
+            Tab::Outbound => self.csv_data_outbound(),
+            Tab::AuditTrail => self.csv_data_audit_trail(),
+        };
+        self.export_status = Some(
+            crate::reports::csv::write(&path, &headers, &rows)
+                .map(|()| format!("Exported to {}", path.display()))
+                .map_err(|e| e.to_string()),
+        );
+    }
+
+    fn csv_data_donors(&self) -> (Vec<&'static str>, Vec<Vec<String>>) {
+        let headers = vec!["Donor", "Cash donations", "Cash total (EUR)", "Physical donations"];
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        for donor in &self.donors {
+            let cash: Vec<&EurTxRow> = self
+                .eur_rows
+                .iter()
+                .filter(|r| {
+                    r.tx_type == EurTxType::DonationIn
+                        && r.donor_id == Some(donor.id)
+                        && in_range(&r.date, &self.date_from, &self.date_to)
+                })
+                .collect();
+            let item_count = self
+                .donations
+                .iter()
+                .filter(|d| {
+                    d.donor_id == Some(donor.id)
+                        && in_range(&d.date_received, &self.date_from, &self.date_to)
+                })
+                .count();
+            if cash.is_empty() && item_count == 0 {
+                continue;
+            }
+            let cash_total: Decimal = cash.iter().map(|r| r.amount).sum();
+            rows.push(vec![
+                donor.name.clone(),
+                cash.len().to_string(),
+                format!("{:.2}", cash_total),
+                item_count.to_string(),
+            ]);
+        }
+        let anon_cash: Vec<&EurTxRow> = self
+            .eur_rows
+            .iter()
+            .filter(|r| {
+                r.tx_type == EurTxType::DonationIn
+                    && r.donor_id.is_none()
+                    && in_range(&r.date, &self.date_from, &self.date_to)
+            })
+            .collect();
+        let anon_items = self
+            .donations
+            .iter()
+            .filter(|d| d.donor_id.is_none() && in_range(&d.date_received, &self.date_from, &self.date_to))
+            .count();
+        if !anon_cash.is_empty() || anon_items > 0 {
+            let cash_total: Decimal = anon_cash.iter().map(|r| r.amount).sum();
+            rows.push(vec![
+                "Anonymous".to_string(),
+                anon_cash.len().to_string(),
+                format!("{:.2}", cash_total),
+                anon_items.to_string(),
+            ]);
+        }
+        (headers, rows)
+    }
+
+    fn csv_data_eur(&self) -> (Vec<&'static str>, Vec<Vec<String>>) {
+        let headers = vec!["Date", "Type", "Description", "Amount (EUR)"];
+        let rows = self
+            .eur_rows
+            .iter()
+            .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
+            .map(|r| {
+                let description = match r.tx_type {
+                    EurTxType::DonationIn => {
+                        r.donor_name.clone().unwrap_or_else(|| "Anonymous".to_string())
+                    }
+                    EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
+                    EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
+                    EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
+                };
+                let sign = if r.tx_type.is_inflow() { "" } else { "-" };
+                vec![
+                    r.date.clone(),
+                    r.tx_type.label().to_string(),
+                    description,
+                    format!("{sign}{:.2}", r.amount),
+                ]
+            })
+            .collect();
+        (headers, rows)
+    }
+
+    fn csv_data_brl(&self) -> (Vec<&'static str>, Vec<Vec<String>>) {
+        let headers = vec!["Date", "Type", "Description", "Amount (BRL)"];
+        let rows = self
+            .brl_rows
+            .iter()
+            .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
+            .map(|r| {
+                let description = match r.tx_type {
+                    BrlTxType::TransferIn => "EUR→BRL transfer".to_string(),
+                    BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
+                    BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
+                };
+                let sign = if r.tx_type.is_inflow() { "" } else { "-" };
+                vec![
+                    r.date.clone(),
+                    r.tx_type.label().to_string(),
+                    description,
+                    format!("{sign}{:.2}", r.amount),
+                ]
+            })
+            .collect();
+        (headers, rows)
+    }
+
+    fn csv_data_inventory(&self) -> (Vec<&'static str>, Vec<Vec<String>>) {
+        let headers = vec!["Name", "Category", "Status", "Location", "Source type", "Source"];
+        let rows = self
+            .inventory_rows
+            .iter()
+            .map(|item| {
+                let source_type = match item.source_type {
+                    SourceType::Donation => "Donation",
+                    SourceType::Purchase => "Purchase",
+                };
+                vec![
+                    item.name.clone(),
+                    item.category_name.clone(),
+                    item.status.label().to_string(),
+                    item.location.label().to_string(),
+                    source_type.to_string(),
+                    item.source_desc.clone(),
+                ]
+            })
+            .collect();
+        (headers, rows)
+    }
+
+    fn csv_data_outbound(&self) -> (Vec<&'static str>, Vec<Vec<String>>) {
+        let headers = vec!["Date", "Recipient", "Items", "Cash (BRL)"];
+        let rows = self
+            .outbound_rows
+            .iter()
+            .filter(|e| in_range(&e.date, &self.date_from, &self.date_to))
+            .filter(|e| self.recipient_filter.is_none_or(|rid| e.recipient_project_id == rid))
+            .map(|e| {
+                vec![
+                    e.date.clone(),
+                    e.recipient_name.clone(),
+                    e.item_count.to_string(),
+                    e.cash_amount_brl.map(|c| format!("{:.2}", c)).unwrap_or_default(),
+                ]
+            })
+            .collect();
+        (headers, rows)
+    }
+
+    fn csv_data_audit_trail(&self) -> (Vec<&'static str>, Vec<Vec<String>>) {
+        let headers = vec!["Date", "Ledger", "Type", "Description", "Amount", "Documents"];
+        struct Entry {
+            date: String,
+            ledger: &'static str,
+            kind: &'static str,
+            description: String,
+            amount: String,
+            docs: i64,
+        }
+        let mut entries: Vec<Entry> = Vec::new();
+
+        for r in &self.eur_rows {
+            if !in_range(&r.date, &self.date_from, &self.date_to) {
+                continue;
+            }
+            let docs = match r.tx_type {
+                EurTxType::PurchaseOut => r
+                    .linked_purchase_id
+                    .and_then(|id| self.doc_counts.get(&("purchase".to_string(), id)).copied())
+                    .unwrap_or(0),
+                EurTxType::TransferToBrlOut => r
+                    .linked_transfer_id
+                    .and_then(|id| self.doc_counts.get(&("transfer".to_string(), id)).copied())
+                    .unwrap_or(0),
+                _ => 0,
+            };
+            let description = match r.tx_type {
+                EurTxType::DonationIn => {
+                    r.donor_name.clone().unwrap_or_else(|| "Anonymous".to_string())
+                }
+                EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
+                EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
+                EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
+            };
+            let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
+            entries.push(Entry {
+                date: r.date.clone(),
+                ledger: "EUR",
+                kind: r.tx_type.label(),
+                description,
+                amount: format!("{sign}€{:.2}", r.amount),
+                docs,
+            });
+        }
+
+        for r in &self.brl_rows {
+            if !in_range(&r.date, &self.date_from, &self.date_to) {
+                continue;
+            }
+            if let (Some(rid), BrlTxType::CashGiftOut) = (self.recipient_filter, r.tx_type) {
+                let matches = self
+                    .outbound_rows
+                    .iter()
+                    .find(|e| Some(e.id) == r.linked_outbound_event_id)
+                    .map(|e| e.recipient_project_id == rid)
+                    .unwrap_or(false);
+                if !matches {
+                    continue;
+                }
+            }
+            let docs = match r.tx_type {
+                BrlTxType::BrazilPurchaseOut => r
+                    .linked_purchase_id
+                    .and_then(|id| self.doc_counts.get(&("purchase".to_string(), id)).copied())
+                    .unwrap_or(0),
+                BrlTxType::TransferIn => r
+                    .linked_transfer_id
+                    .and_then(|id| self.doc_counts.get(&("transfer".to_string(), id)).copied())
+                    .unwrap_or(0),
+                BrlTxType::CashGiftOut => 0,
+            };
+            let description = match r.tx_type {
+                BrlTxType::TransferIn => "EUR→BRL transfer".to_string(),
+                BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
+                BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
+            };
+            let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
+            entries.push(Entry {
+                date: r.date.clone(),
+                ledger: "BRL",
+                kind: r.tx_type.label(),
+                description,
+                amount: format!("{sign}R${:.2}", r.amount),
+                docs,
+            });
+        }
+
+        for e in &self.outbound_rows {
+            if !in_range(&e.date, &self.date_from, &self.date_to) {
+                continue;
+            }
+            if let Some(rid) = self.recipient_filter {
+                if e.recipient_project_id != rid {
+                    continue;
+                }
+            }
+            let mut desc = format!("{} item(s) to {}", e.item_count, e.recipient_name);
+            if let Some(cash) = e.cash_amount_brl {
+                if cash > Decimal::ZERO {
+                    desc.push_str(&format!(" + R$ {cash:.2} cash gift"));
+                }
+            }
+            entries.push(Entry {
+                date: e.date.clone(),
+                ledger: "Outbound",
+                kind: "Donation",
+                description: desc,
+                amount: String::new(),
+                docs: 0,
+            });
+        }
+
+        entries.sort_by(|a, b| b.date.cmp(&a.date));
+
+        let rows = entries
+            .into_iter()
+            .map(|e| {
+                vec![
+                    e.date,
+                    e.ledger.to_string(),
+                    e.kind.to_string(),
+                    e.description,
+                    e.amount,
+                    if e.docs > 0 { e.docs.to_string() } else { String::new() },
+                ]
+            })
+            .collect();
+        (headers, rows)
     }
 }
 
