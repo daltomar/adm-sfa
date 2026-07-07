@@ -12,6 +12,8 @@ impl Location {
         }
     }
 
+    // Inherent method returning Option rather than impl std::str::FromStr,
+    // consistent with the other domain enums in this codebase.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "germany" => Some(Location::Germany),

@@ -176,7 +176,11 @@ impl BrlLedgerView {
 
 fn compute_balance(rows: &[BrlTxRow]) -> Decimal {
     rows.iter().fold(Decimal::ZERO, |acc, r| {
-        if r.tx_type.is_inflow() { acc + r.amount } else { acc - r.amount }
+        if r.tx_type.is_inflow() {
+            acc + r.amount
+        } else {
+            acc - r.amount
+        }
     })
 }
 

@@ -12,8 +12,8 @@ pub fn open_db(data_dir: &Path) -> rusqlite::Result<Connection> {
 }
 
 fn run_migrations(conn: &mut Connection) -> rusqlite_migration::Result<()> {
-    Migrations::new(vec![
-        M::up(include_str!("../../migrations/001_initial.sql")),
-    ])
+    Migrations::new(vec![M::up(include_str!(
+        "../../migrations/001_initial.sql"
+    ))])
     .to_latest(conn)
 }

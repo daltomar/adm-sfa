@@ -81,19 +81,24 @@ impl DonorsView {
                 if self.donors.is_empty() {
                     ui.weak("No donors yet.");
                 }
-                for i in 0..self.donors.len() {
-                    let id = self.donors[i].id;
-                    let name = self.donors[i].name.clone();
-                    let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
-                    if ui.selectable_label(selected, &name).clicked() {
-                        self.draft = DonorDraft {
-                            name: self.donors[i].name.clone(),
-                            contact_info: self.donors[i].contact_info.clone().unwrap_or_default(),
-                            notes: self.donors[i].notes.clone().unwrap_or_default(),
-                        };
-                        self.mode = Mode::Editing(id);
-                        self.error = None;
+                let mut pending_edit: Option<(i64, DonorDraft)> = None;
+                for donor in &self.donors {
+                    let selected = matches!(self.mode, Mode::Editing(eid) if eid == donor.id);
+                    if ui.selectable_label(selected, &donor.name).clicked() {
+                        pending_edit = Some((
+                            donor.id,
+                            DonorDraft {
+                                name: donor.name.clone(),
+                                contact_info: donor.contact_info.clone().unwrap_or_default(),
+                                notes: donor.notes.clone().unwrap_or_default(),
+                            },
+                        ));
                     }
+                }
+                if let Some((id, draft)) = pending_edit {
+                    self.draft = draft;
+                    self.mode = Mode::Editing(id);
+                    self.error = None;
                 }
             });
     }
@@ -114,10 +119,7 @@ impl DonorsView {
             .min_col_width(80.0)
             .show(ui, |ui| {
                 ui.label("Name *");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.draft.name)
-                        .desired_width(280.0),
-                );
+                ui.add(egui::TextEdit::singleline(&mut self.draft.name).desired_width(280.0));
                 ui.end_row();
 
                 ui.label("Contact");
@@ -145,10 +147,7 @@ impl DonorsView {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             let name_ok = !self.draft.name.trim().is_empty();
-            if ui
-                .add_enabled(name_ok, egui::Button::new("Save"))
-                .clicked()
-            {
+            if ui.add_enabled(name_ok, egui::Button::new("Save")).clicked() {
                 let result = if is_adding {
                     qry::insert(db, &self.draft).map(|_| ())
                 } else if let Some(id) = edit_id {

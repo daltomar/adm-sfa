@@ -20,6 +20,9 @@ pub struct EurLedgerView {
     error: Option<String>,
     needs_reload: bool,
     donors: Vec<(i64, String)>,
+    // Loaded once and never invalidated. A donor added in the Donors section while
+    // this view is open won't appear in the dropdown until the app is restarted.
+    // Acceptable for a single-user app with no cross-view reactive invalidation.
     donors_loaded: bool,
 }
 
@@ -125,7 +128,14 @@ impl EurLedgerView {
                     let row_label = if desc.is_empty() {
                         format!("{}  {}  {}€{:.2}", date, tx_type.label(), sign, amount)
                     } else {
-                        format!("{}  {}  {}€{:.2}  {}", date, tx_type.label(), sign, amount, desc)
+                        format!(
+                            "{}  {}  {}€{:.2}  {}",
+                            date,
+                            tx_type.label(),
+                            sign,
+                            amount,
+                            desc
+                        )
                     };
 
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id)
@@ -161,8 +171,11 @@ impl EurLedgerView {
 
     fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection) {
         let is_adding = matches!(self.mode, Mode::Adding);
-        let edit_id: Option<i64> =
-            if let Mode::Editing(id) = self.mode { Some(id) } else { None };
+        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode {
+            Some(id)
+        } else {
+            None
+        };
 
         ui.heading(if is_adding { "New Entry" } else { "Edit Entry" });
         ui.add_space(8.0);
@@ -171,7 +184,11 @@ impl EurLedgerView {
         if is_adding {
             ui.horizontal(|ui| {
                 ui.label("Type:");
-                ui.radio_value(&mut self.draft.tx_type, ManualEurTxType::DonationIn, "Donation");
+                ui.radio_value(
+                    &mut self.draft.tx_type,
+                    ManualEurTxType::DonationIn,
+                    "Donation",
+                );
                 ui.radio_value(
                     &mut self.draft.tx_type,
                     ManualEurTxType::SelfFundingIn,
@@ -225,11 +242,7 @@ impl EurLedgerView {
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.draft.donor_id, None, "(none)");
                             for (did, name) in &donors {
-                                ui.selectable_value(
-                                    &mut self.draft.donor_id,
-                                    Some(*did),
-                                    name,
-                                );
+                                ui.selectable_value(&mut self.draft.donor_id, Some(*did), name);
                             }
                         });
                     ui.end_row();
@@ -325,7 +338,11 @@ impl EurLedgerView {
 
 fn compute_balance(rows: &[EurTxRow]) -> Decimal {
     rows.iter().fold(Decimal::ZERO, |acc, r| {
-        if r.tx_type.is_inflow() { acc + r.amount } else { acc - r.amount }
+        if r.tx_type.is_inflow() {
+            acc + r.amount
+        } else {
+            acc - r.amount
+        }
     })
 }
 
@@ -334,8 +351,6 @@ fn row_desc(row: &EurTxRow) -> String {
         EurTxType::DonationIn => row.donor_name.clone().unwrap_or_default(),
         EurTxType::SelfFundingIn => row.note.clone().unwrap_or_default(),
         EurTxType::PurchaseOut => row.purchase_channel.clone().unwrap_or_default(),
-        EurTxType::TransferToBrlOut => {
-            row.note.clone().unwrap_or_else(|| "EUR→BRL".to_string())
-        }
+        EurTxType::TransferToBrlOut => row.note.clone().unwrap_or_else(|| "EUR→BRL".to_string()),
     }
 }

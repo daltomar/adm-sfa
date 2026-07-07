@@ -21,7 +21,9 @@ pub fn generate_filename(
         if !existing.iter().any(|name| name == &candidate) {
             return candidate;
         }
-        n += 1;
+        n = n
+            .checked_add(1)
+            .expect("generate_filename: collision counter overflowed u32");
     }
 }
 

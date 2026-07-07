@@ -2,8 +2,8 @@ use eframe::egui;
 use std::path::PathBuf;
 
 use crate::ui;
-use crate::ui::views::donors::DonorsView;
 use crate::ui::views::brl_ledger::BrlLedgerView;
+use crate::ui::views::donors::DonorsView;
 use crate::ui::views::eur_ledger::EurLedgerView;
 use crate::ui::views::inventory::InventoryView;
 use crate::ui::views::outbound::OutboundView;
@@ -63,19 +63,17 @@ impl eframe::App for App {
         egui::Panel::left("nav").show(ui, |ui| {
             ui::sidebar::show(ui, &mut self.section);
         });
-        egui::CentralPanel::default().show(ui, |ui| {
-            match self.section {
-                Section::Dashboard  => ui::views::dashboard::show(ui),
-                Section::Donors     => self.donors_view.show(ui, &self.db),
-                Section::EurLedger  => self.eur_ledger_view.show(ui, &self.db),
-                Section::BrlLedger  => self.brl_ledger_view.show(ui, &self.db),
-                Section::Purchases  => self.purchases_view.show(ui, &self.db, &self.data_dir),
-                Section::Transfers  => self.transfers_view.show(ui, &self.db, &self.data_dir),
-                Section::Inventory  => self.inventory_view.show(ui, &self.db, &self.data_dir),
-                Section::Outbound   => self.outbound_view.show(ui, &self.db),
-                Section::Reports    => self.reports_view.show(ui, &self.db),
-                Section::Settings   => ui::views::settings::show(ui),
-            }
+        egui::CentralPanel::default().show(ui, |ui| match self.section {
+            Section::Dashboard => ui::views::dashboard::show(ui),
+            Section::Donors => self.donors_view.show(ui, &self.db),
+            Section::EurLedger => self.eur_ledger_view.show(ui, &self.db),
+            Section::BrlLedger => self.brl_ledger_view.show(ui, &self.db),
+            Section::Purchases => self.purchases_view.show(ui, &self.db, &self.data_dir),
+            Section::Transfers => self.transfers_view.show(ui, &self.db, &self.data_dir),
+            Section::Inventory => self.inventory_view.show(ui, &self.db, &self.data_dir),
+            Section::Outbound => self.outbound_view.show(ui, &self.db),
+            Section::Reports => self.reports_view.show(ui, &self.db),
+            Section::Settings => ui::views::settings::show(ui),
         });
     }
 }

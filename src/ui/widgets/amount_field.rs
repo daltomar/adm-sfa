@@ -11,7 +11,9 @@ pub struct AmountField {
 #[allow(dead_code)]
 impl AmountField {
     pub fn new(initial: &Decimal) -> Self {
-        Self { text: initial.to_string() }
+        Self {
+            text: initial.to_string(),
+        }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, label: &str) -> Option<Decimal> {

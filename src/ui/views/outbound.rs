@@ -101,15 +101,15 @@ impl OutboundView {
             .default_size(320.0)
             .show(ui, |ui| self.show_list(ui));
 
-        egui::ScrollArea::vertical().id_salt("outbound_detail_scroll").show(ui, |ui| {
-            match self.mode {
+        egui::ScrollArea::vertical()
+            .id_salt("outbound_detail_scroll")
+            .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
                     ui.weak("Select an outbound donation, or add a new one.");
                 }
                 Mode::Adding | Mode::Editing(_) => self.show_form(ui, db),
-            }
-        });
+            });
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
@@ -122,7 +122,8 @@ impl OutboundView {
             self.error = None;
             self.selected_item_ids = HashSet::new();
             self.new_recipient_project = None;
-            self.inventory_loaded = false;
+            // inventory_loaded is NOT reset here — the inventory hasn't changed.
+            // It IS reset after a successful save, which marks items as donated.
         }
 
         ui.separator();
@@ -132,47 +133,60 @@ impl OutboundView {
             ui.separator();
         }
 
-        egui::ScrollArea::vertical().id_salt("outbound_list_scroll").show(ui, |ui| {
-            if self.events.is_empty() {
-                ui.weak("No outbound donations yet.");
-                return;
-            }
-            for i in 0..self.events.len() {
-                let ev = &self.events[i];
-                let id = ev.id;
-                let mut row = format!("{}  {}  {} item(s)", ev.date, ev.recipient_name, ev.item_count);
-                if let Some(cash) = ev.cash_amount_brl {
-                    if cash > Decimal::ZERO {
-                        row.push_str(&format!("  R$ {cash:.2}"));
+        egui::ScrollArea::vertical()
+            .id_salt("outbound_list_scroll")
+            .show(ui, |ui| {
+                if self.events.is_empty() {
+                    ui.weak("No outbound donations yet.");
+                    return;
+                }
+                for i in 0..self.events.len() {
+                    let ev = &self.events[i];
+                    let id = ev.id;
+                    let mut row = format!(
+                        "{}  {}  {} item(s)",
+                        ev.date, ev.recipient_name, ev.item_count
+                    );
+                    if let Some(cash) = ev.cash_amount_brl {
+                        if cash > Decimal::ZERO {
+                            row.push_str(&format!("  R$ {cash:.2}"));
+                        }
+                    }
+                    let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
+                    if ui.selectable_label(selected, &row).clicked() {
+                        let ev = &self.events[i];
+                        self.draft = OutboundEventDraft {
+                            date: ev.date.clone(),
+                            recipient_project_id: Some(ev.recipient_project_id),
+                            cash_amount_brl_str: ev
+                                .cash_amount_brl
+                                .map(|d| d.to_string())
+                                .unwrap_or_default(),
+                            notes: ev.notes.clone().unwrap_or_default(),
+                        };
+                        self.mode = Mode::Editing(id);
+                        self.error = None;
+                        self.new_recipient_project = None;
+                        self.inventory_loaded = false;
+                        self.items_needs_reload = true;
                     }
                 }
-                let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
-                if ui.selectable_label(selected, &row).clicked() {
-                    let ev = &self.events[i];
-                    self.draft = OutboundEventDraft {
-                        date: ev.date.clone(),
-                        recipient_project_id: Some(ev.recipient_project_id),
-                        cash_amount_brl_str: ev
-                            .cash_amount_brl
-                            .map(|d| d.to_string())
-                            .unwrap_or_default(),
-                        notes: ev.notes.clone().unwrap_or_default(),
-                    };
-                    self.mode = Mode::Editing(id);
-                    self.error = None;
-                    self.new_recipient_project = None;
-                    self.inventory_loaded = false;
-                    self.items_needs_reload = true;
-                }
-            }
-        });
+            });
     }
 
     fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection) {
         let is_adding = matches!(self.mode, Mode::Adding);
-        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode { Some(id) } else { None };
+        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode {
+            Some(id)
+        } else {
+            None
+        };
 
-        ui.heading(if is_adding { "New Outbound Donation" } else { "Edit Outbound Donation" });
+        ui.heading(if is_adding {
+            "New Outbound Donation"
+        } else {
+            "Edit Outbound Donation"
+        });
         ui.add_space(8.0);
 
         egui::Grid::new("outbound_form_grid")
@@ -228,7 +242,11 @@ impl OutboundView {
 
         let cash_amount = {
             let t = self.draft.cash_amount_brl_str.trim();
-            if t.is_empty() { Some(Decimal::ZERO) } else { t.parse::<Decimal>().ok() }
+            if t.is_empty() {
+                Some(Decimal::ZERO)
+            } else {
+                t.parse::<Decimal>().ok()
+            }
         };
         let cash_ok = cash_amount.is_some();
         let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
@@ -315,22 +333,17 @@ impl OutboundView {
                     .min_col_width(80.0)
                     .show(ui, |ui| {
                         ui.label("Name *");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut np.name).desired_width(220.0),
-                        );
+                        ui.add(egui::TextEdit::singleline(&mut np.name).desired_width(220.0));
                         ui.end_row();
 
                         ui.label("Contact info");
                         ui.add(
-                            egui::TextEdit::singleline(&mut np.contact_info)
-                                .desired_width(220.0),
+                            egui::TextEdit::singleline(&mut np.contact_info).desired_width(220.0),
                         );
                         ui.end_row();
 
                         ui.label("Location");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut np.location).desired_width(220.0),
-                        );
+                        ui.add(egui::TextEdit::singleline(&mut np.location).desired_width(220.0));
                         ui.end_row();
                     });
 
@@ -382,9 +395,10 @@ impl OutboundView {
             return;
         }
 
-        egui::ScrollArea::vertical().id_salt("outbound_item_picker_scroll").max_height(220.0).show(
-            ui,
-            |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("outbound_item_picker_scroll")
+            .max_height(220.0)
+            .show(ui, |ui| {
                 for item in eligible {
                     let mut checked = self.selected_item_ids.contains(&item.id);
                     let label = format!(
@@ -402,8 +416,7 @@ impl OutboundView {
                         }
                     }
                 }
-            },
-        );
+            });
 
         ui.add_space(4.0);
         ui.weak(format!("{} item(s) selected", self.selected_item_ids.len()));

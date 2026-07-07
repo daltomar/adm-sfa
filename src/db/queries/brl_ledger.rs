@@ -1,6 +1,6 @@
 use crate::model::transaction::{BrlTxRow, BrlTxType};
-use rust_decimal::Decimal;
 use rusqlite::{Connection, Result};
+use rust_decimal::Decimal;
 
 pub fn list(conn: &Connection) -> Result<Vec<BrlTxRow>> {
     let mut stmt = conn.prepare(
@@ -45,8 +45,7 @@ pub fn list(conn: &Connection) -> Result<Vec<BrlTxRow>> {
         recipient_name,
     ) in raw
     {
-        let tx_type = BrlTxType::from_str(&type_str)
-            .ok_or_else(|| invalid_enum(2, &type_str))?;
+        let tx_type = BrlTxType::from_str(&type_str).ok_or_else(|| invalid_enum(2, &type_str))?;
         let amount = parse_decimal(3, &amount_str)?;
         rows.push(BrlTxRow {
             id,

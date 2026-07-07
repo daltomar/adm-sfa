@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::db::queries::{
-    brl_ledger as brl_qry, documents as documents_qry, donors as donors_qry,
-    eur_ledger as eur_qry, inventory as inventory_qry, outbound as outbound_qry,
+    brl_ledger as brl_qry, documents as documents_qry, donors as donors_qry, eur_ledger as eur_qry,
+    inventory as inventory_qry, outbound as outbound_qry,
 };
 use crate::model::donor::{Donor, PhysicalDonation};
 use crate::model::inventory::{InventoryItemRow, SourceType};
@@ -80,6 +80,13 @@ impl Default for ReportsView {
     }
 }
 
+struct DonorRow {
+    name: String,
+    cash_count: i64,
+    cash_total: Decimal,
+    item_count: i64,
+}
+
 struct AuditEntry {
     date: String,
     ledger: &'static str,
@@ -106,7 +113,8 @@ impl ReportsView {
                 }
             }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(250));
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.export_dialog_rx = None;
@@ -120,8 +128,7 @@ impl ReportsView {
                 Ok(()) => {
                     self.loaded = true;
                     self.error = None;
-                    self.last_refreshed =
-                        Some(chrono::Local::now().format("%H:%M:%S").to_string());
+                    self.last_refreshed = Some(chrono::Local::now().format("%H:%M:%S").to_string());
                 }
                 Err(e) => self.error = Some(e.to_string()),
             }
@@ -141,16 +148,16 @@ impl ReportsView {
         ui.separator();
         ui.add_space(4.0);
 
-        egui::ScrollArea::vertical().id_salt("reports_scroll").show(ui, |ui| {
-            match self.tab {
+        egui::ScrollArea::vertical()
+            .id_salt("reports_scroll")
+            .show(ui, |ui| match self.tab {
                 Tab::Donors => self.show_donor_breakdown(ui),
                 Tab::Eur => self.show_eur_summary(ui),
                 Tab::Brl => self.show_brl_summary(ui),
                 Tab::Inventory => self.show_inventory_summary(ui),
                 Tab::Outbound => self.show_outbound_summary(ui),
                 Tab::AuditTrail => self.show_audit_trail(ui),
-            }
-        });
+            });
     }
 
     fn reload(&mut self, db: &Connection) -> rusqlite::Result<()> {
@@ -212,7 +219,14 @@ impl ReportsView {
             ui.add_space(8.0);
             let exporting = self.export_dialog_rx.is_some();
             if ui
-                .add_enabled(!exporting, egui::Button::new(if exporting { "Exporting…" } else { "Export CSV" }))
+                .add_enabled(
+                    !exporting,
+                    egui::Button::new(if exporting {
+                        "Exporting…"
+                    } else {
+                        "Export CSV"
+                    }),
+                )
                 .clicked()
             {
                 let tab_label = TABS
@@ -266,62 +280,7 @@ impl ReportsView {
         ui.label(egui::RichText::new("Contributions per donor").strong());
         ui.add_space(6.0);
 
-        struct Row {
-            name: String,
-            cash_count: i64,
-            cash_total: Decimal,
-            item_count: i64,
-        }
-        let mut rows: Vec<Row> = Vec::new();
-
-        for donor in &self.donors {
-            let cash: Vec<&EurTxRow> = self
-                .eur_rows
-                .iter()
-                .filter(|r| {
-                    r.tx_type == EurTxType::DonationIn
-                        && r.donor_id == Some(donor.id)
-                        && in_range(&r.date, &self.date_from, &self.date_to)
-                })
-                .collect();
-            let item_count = self
-                .donations
-                .iter()
-                .filter(|d| {
-                    d.donor_id == Some(donor.id)
-                        && in_range(&d.date_received, &self.date_from, &self.date_to)
-                })
-                .count() as i64;
-            if cash.is_empty() && item_count == 0 {
-                continue;
-            }
-            let cash_total: Decimal = cash.iter().map(|r| r.amount).sum();
-            rows.push(Row { name: donor.name.clone(), cash_count: cash.len() as i64, cash_total, item_count });
-        }
-
-        let anon_cash: Vec<&EurTxRow> = self
-            .eur_rows
-            .iter()
-            .filter(|r| {
-                r.tx_type == EurTxType::DonationIn
-                    && r.donor_id.is_none()
-                    && in_range(&r.date, &self.date_from, &self.date_to)
-            })
-            .collect();
-        let anon_items = self
-            .donations
-            .iter()
-            .filter(|d| d.donor_id.is_none() && in_range(&d.date_received, &self.date_from, &self.date_to))
-            .count() as i64;
-        if !anon_cash.is_empty() || anon_items > 0 {
-            let cash_total: Decimal = anon_cash.iter().map(|r| r.amount).sum();
-            rows.push(Row {
-                name: "Anonymous".to_string(),
-                cash_count: anon_cash.len() as i64,
-                cash_total,
-                item_count: anon_items,
-            });
-        }
+        let rows = self.build_donor_rows();
 
         if rows.is_empty() {
             ui.weak("No donor activity in the selected date range.");
@@ -378,7 +337,11 @@ impl ReportsView {
             .iter()
             .filter(|r| !self.date_from.is_empty() && r.date.as_str() < self.date_from.as_str())
             .fold(Decimal::ZERO, |acc, r| {
-                if r.tx_type.is_inflow() { acc + r.amount } else { acc - r.amount }
+                if r.tx_type.is_inflow() {
+                    acc + r.amount
+                } else {
+                    acc - r.amount
+                }
             });
 
         let period: Vec<&EurTxRow> = self
@@ -389,7 +352,10 @@ impl ReportsView {
 
         let sum_for = |t: EurTxType| -> (i64, Decimal) {
             let matching: Vec<&&EurTxRow> = period.iter().filter(|r| r.tx_type == t).collect();
-            (matching.len() as i64, matching.iter().map(|r| r.amount).sum())
+            (
+                matching.len() as i64,
+                matching.iter().map(|r| r.amount).sum(),
+            )
         };
 
         let (don_count, don_total) = sum_for(EurTxType::DonationIn);
@@ -400,32 +366,35 @@ impl ReportsView {
         let net = don_total + sf_total - pur_total - tr_total;
         let ending_balance = starting_balance + net;
 
-        egui::Grid::new("eur_summary_grid").num_columns(3).spacing([16.0, 6.0]).show(ui, |ui| {
-            ui.label("");
-            ui.label(egui::RichText::new("Count").strong());
-            ui.label(egui::RichText::new("Total (€)").strong());
-            ui.end_row();
+        egui::Grid::new("eur_summary_grid")
+            .num_columns(3)
+            .spacing([16.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("");
+                ui.label(egui::RichText::new("Count").strong());
+                ui.label(egui::RichText::new("Total (€)").strong());
+                ui.end_row();
 
-            ui.label("Donations in");
-            ui.label(don_count.to_string());
-            ui.label(format!("{:.2}", don_total));
-            ui.end_row();
+                ui.label("Donations in");
+                ui.label(don_count.to_string());
+                ui.label(format!("{:.2}", don_total));
+                ui.end_row();
 
-            ui.label("Self-funding in");
-            ui.label(sf_count.to_string());
-            ui.label(format!("{:.2}", sf_total));
-            ui.end_row();
+                ui.label("Self-funding in");
+                ui.label(sf_count.to_string());
+                ui.label(format!("{:.2}", sf_total));
+                ui.end_row();
 
-            ui.label("Purchases out");
-            ui.label(pur_count.to_string());
-            ui.label(format!("{:.2}", pur_total));
-            ui.end_row();
+                ui.label("Purchases out");
+                ui.label(pur_count.to_string());
+                ui.label(format!("{:.2}", pur_total));
+                ui.end_row();
 
-            ui.label("Transfers out");
-            ui.label(tr_count.to_string());
-            ui.label(format!("{:.2}", tr_total));
-            ui.end_row();
-        });
+                ui.label("Transfers out");
+                ui.label(tr_count.to_string());
+                ui.label(format!("{:.2}", tr_total));
+                ui.end_row();
+            });
 
         ui.add_space(8.0);
         ui.separator();
@@ -444,7 +413,11 @@ impl ReportsView {
             .iter()
             .filter(|r| !self.date_from.is_empty() && r.date.as_str() < self.date_from.as_str())
             .fold(Decimal::ZERO, |acc, r| {
-                if r.tx_type.is_inflow() { acc + r.amount } else { acc - r.amount }
+                if r.tx_type.is_inflow() {
+                    acc + r.amount
+                } else {
+                    acc - r.amount
+                }
             });
 
         let period: Vec<&BrlTxRow> = self
@@ -455,7 +428,10 @@ impl ReportsView {
 
         let sum_for = |t: BrlTxType| -> (i64, Decimal) {
             let matching: Vec<&&BrlTxRow> = period.iter().filter(|r| r.tx_type == t).collect();
-            (matching.len() as i64, matching.iter().map(|r| r.amount).sum())
+            (
+                matching.len() as i64,
+                matching.iter().map(|r| r.amount).sum(),
+            )
         };
 
         let (tr_count, tr_total) = sum_for(BrlTxType::TransferIn);
@@ -465,27 +441,30 @@ impl ReportsView {
         let net = tr_total - pur_total - gift_total;
         let ending_balance = starting_balance + net;
 
-        egui::Grid::new("brl_summary_grid").num_columns(3).spacing([16.0, 6.0]).show(ui, |ui| {
-            ui.label("");
-            ui.label(egui::RichText::new("Count").strong());
-            ui.label(egui::RichText::new("Total (R$)").strong());
-            ui.end_row();
+        egui::Grid::new("brl_summary_grid")
+            .num_columns(3)
+            .spacing([16.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("");
+                ui.label(egui::RichText::new("Count").strong());
+                ui.label(egui::RichText::new("Total (R$)").strong());
+                ui.end_row();
 
-            ui.label("Transfer in");
-            ui.label(tr_count.to_string());
-            ui.label(format!("{:.2}", tr_total));
-            ui.end_row();
+                ui.label("Transfer in");
+                ui.label(tr_count.to_string());
+                ui.label(format!("{:.2}", tr_total));
+                ui.end_row();
 
-            ui.label("Brazil purchases out");
-            ui.label(pur_count.to_string());
-            ui.label(format!("{:.2}", pur_total));
-            ui.end_row();
+                ui.label("Brazil purchases out");
+                ui.label(pur_count.to_string());
+                ui.label(format!("{:.2}", pur_total));
+                ui.end_row();
 
-            ui.label("Cash gifts out");
-            ui.label(gift_count.to_string());
-            ui.label(format!("{:.2}", gift_total));
-            ui.end_row();
-        });
+                ui.label("Cash gifts out");
+                ui.label(gift_count.to_string());
+                ui.label(format!("{:.2}", gift_total));
+                ui.end_row();
+            });
 
         ui.add_space(8.0);
         ui.separator();
@@ -504,7 +483,9 @@ impl ReportsView {
         let mut by_location: BTreeMap<&'static str, i64> = BTreeMap::new();
 
         for item in &self.inventory_rows {
-            *by_cat_status.entry((item.category_name.clone(), item.status.label())).or_insert(0) += 1;
+            *by_cat_status
+                .entry((item.category_name.clone(), item.status.label()))
+                .or_insert(0) += 1;
             *by_location.entry(item.location.label()).or_insert(0) += 1;
         }
 
@@ -584,7 +565,10 @@ impl ReportsView {
             .outbound_rows
             .iter()
             .filter(|e| in_range(&e.date, &self.date_from, &self.date_to))
-            .filter(|e| self.recipient_filter.is_none_or(|rid| e.recipient_project_id == rid))
+            .filter(|e| {
+                self.recipient_filter
+                    .is_none_or(|rid| e.recipient_project_id == rid)
+            })
             .collect();
 
         if filtered.is_empty() {
@@ -594,7 +578,10 @@ impl ReportsView {
 
         let mut by_recipient: BTreeMap<String, (i64, i64, Decimal)> = BTreeMap::new();
         for e in &filtered {
-            let entry = by_recipient.entry(e.recipient_name.clone()).or_insert((0, 0, Decimal::ZERO));
+            let entry =
+                by_recipient
+                    .entry(e.recipient_name.clone())
+                    .or_insert((0, 0, Decimal::ZERO));
             entry.0 += 1;
             entry.1 += e.item_count;
             entry.2 += e.cash_amount_brl.unwrap_or(Decimal::ZERO);
@@ -749,16 +736,43 @@ impl ReportsView {
                             ui.label(&e.amount);
                         });
                         row.col(|ui| {
-                            ui.label(if e.docs > 0 { e.docs.to_string() } else { "—".to_string() });
+                            ui.label(if e.docs > 0 {
+                                e.docs.to_string()
+                            } else {
+                                "—".to_string()
+                            });
                         });
                     });
                 }
             });
     }
     fn csv_data_donors(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = ["Donor", "Cash donations", "Cash total (EUR)", "Physical donations"]
-            .iter().map(|s| s.to_string()).collect();
-        let mut rows: Vec<Vec<String>> = Vec::new();
+        let headers = [
+            "Donor",
+            "Cash donations",
+            "Cash total (EUR)",
+            "Physical donations",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let rows = self
+            .build_donor_rows()
+            .into_iter()
+            .map(|r| {
+                vec![
+                    r.name,
+                    r.cash_count.to_string(),
+                    format!("{:.2}", r.cash_total),
+                    r.item_count.to_string(),
+                ]
+            })
+            .collect();
+        (headers, rows)
+    }
+
+    fn build_donor_rows(&self) -> Vec<DonorRow> {
+        let mut rows: Vec<DonorRow> = Vec::new();
         for donor in &self.donors {
             let cash: Vec<&EurTxRow> = self
                 .eur_rows
@@ -776,17 +790,17 @@ impl ReportsView {
                     d.donor_id == Some(donor.id)
                         && in_range(&d.date_received, &self.date_from, &self.date_to)
                 })
-                .count();
+                .count() as i64;
             if cash.is_empty() && item_count == 0 {
                 continue;
             }
             let cash_total: Decimal = cash.iter().map(|r| r.amount).sum();
-            rows.push(vec![
-                donor.name.clone(),
-                cash.len().to_string(),
-                format!("{:.2}", cash_total),
-                item_count.to_string(),
-            ]);
+            rows.push(DonorRow {
+                name: donor.name.clone(),
+                cash_count: cash.len() as i64,
+                cash_total,
+                item_count,
+            });
         }
         let anon_cash: Vec<&EurTxRow> = self
             .eur_rows
@@ -800,32 +814,37 @@ impl ReportsView {
         let anon_items = self
             .donations
             .iter()
-            .filter(|d| d.donor_id.is_none() && in_range(&d.date_received, &self.date_from, &self.date_to))
-            .count();
+            .filter(|d| {
+                d.donor_id.is_none() && in_range(&d.date_received, &self.date_from, &self.date_to)
+            })
+            .count() as i64;
         if !anon_cash.is_empty() || anon_items > 0 {
             let cash_total: Decimal = anon_cash.iter().map(|r| r.amount).sum();
-            rows.push(vec![
-                "Anonymous".to_string(),
-                anon_cash.len().to_string(),
-                format!("{:.2}", cash_total),
-                anon_items.to_string(),
-            ]);
+            rows.push(DonorRow {
+                name: "Anonymous".to_string(),
+                cash_count: anon_cash.len() as i64,
+                cash_total,
+                item_count: anon_items,
+            });
         }
-        (headers, rows)
+        rows
     }
 
     fn csv_data_eur(&self) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = ["Date", "Type", "Description", "Amount (EUR)"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let rows = self
             .eur_rows
             .iter()
             .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
             .map(|r| {
                 let description = match r.tx_type {
-                    EurTxType::DonationIn => {
-                        r.donor_name.clone().unwrap_or_else(|| "Anonymous".to_string())
-                    }
+                    EurTxType::DonationIn => r
+                        .donor_name
+                        .clone()
+                        .unwrap_or_else(|| "Anonymous".to_string()),
                     EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
                     EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
                     EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
@@ -844,7 +863,9 @@ impl ReportsView {
 
     fn csv_data_brl(&self) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = ["Date", "Type", "Description", "Amount (BRL)"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let rows = self
             .brl_rows
             .iter()
@@ -868,8 +889,17 @@ impl ReportsView {
     }
 
     fn csv_data_inventory(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = ["Name", "Category", "Status", "Location", "Source type", "Source"]
-            .iter().map(|s| s.to_string()).collect();
+        let headers = [
+            "Name",
+            "Category",
+            "Status",
+            "Location",
+            "Source type",
+            "Source",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let rows = self
             .inventory_rows
             .iter()
@@ -893,18 +923,25 @@ impl ReportsView {
 
     fn csv_data_outbound(&self) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = ["Date", "Recipient", "Items", "Cash (BRL)"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let rows = self
             .outbound_rows
             .iter()
             .filter(|e| in_range(&e.date, &self.date_from, &self.date_to))
-            .filter(|e| self.recipient_filter.is_none_or(|rid| e.recipient_project_id == rid))
+            .filter(|e| {
+                self.recipient_filter
+                    .is_none_or(|rid| e.recipient_project_id == rid)
+            })
             .map(|e| {
                 vec![
                     e.date.clone(),
                     e.recipient_name.clone(),
                     e.item_count.to_string(),
-                    e.cash_amount_brl.map(|c| format!("{:.2}", c)).unwrap_or_default(),
+                    e.cash_amount_brl
+                        .map(|c| format!("{:.2}", c))
+                        .unwrap_or_default(),
                 ]
             })
             .collect();
@@ -912,10 +949,17 @@ impl ReportsView {
     }
 
     fn csv_data_audit_trail(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = ["Date", "Ledger", "Type", "Description", "Amount", "Documents"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let headers = [
+            "Date",
+            "Ledger",
+            "Type",
+            "Description",
+            "Amount",
+            "Documents",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let rows = self
             .build_audit_entries()
             .into_iter()
@@ -926,7 +970,11 @@ impl ReportsView {
                     e.kind.to_string(),
                     e.description,
                     e.amount,
-                    if e.docs > 0 { e.docs.to_string() } else { String::new() },
+                    if e.docs > 0 {
+                        e.docs.to_string()
+                    } else {
+                        String::new()
+                    },
                 ]
             })
             .collect();
@@ -952,9 +1000,10 @@ impl ReportsView {
                 _ => 0,
             };
             let description = match r.tx_type {
-                EurTxType::DonationIn => {
-                    r.donor_name.clone().unwrap_or_else(|| "Anonymous".to_string())
-                }
+                EurTxType::DonationIn => r
+                    .donor_name
+                    .clone()
+                    .unwrap_or_else(|| "Anonymous".to_string()),
                 EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
                 EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
                 EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),

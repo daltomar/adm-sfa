@@ -1,6 +1,6 @@
 use crate::model::transaction::{EurTxDraft, EurTxRow, EurTxType};
-use rust_decimal::Decimal;
 use rusqlite::{params, Connection, Result};
+use rust_decimal::Decimal;
 
 pub fn list(conn: &Connection) -> Result<Vec<EurTxRow>> {
     let mut stmt = conn.prepare(
@@ -30,10 +30,20 @@ pub fn list(conn: &Connection) -> Result<Vec<EurTxRow>> {
         .collect::<Result<Vec<_>>>()?;
 
     let mut rows = Vec::with_capacity(raw.len());
-    for (id, date, type_str, amount_str, donor_id, note, linked_purchase_id, linked_transfer_id, donor_name, purchase_channel) in raw
+    for (
+        id,
+        date,
+        type_str,
+        amount_str,
+        donor_id,
+        note,
+        linked_purchase_id,
+        linked_transfer_id,
+        donor_name,
+        purchase_channel,
+    ) in raw
     {
-        let tx_type = EurTxType::from_str(&type_str)
-            .ok_or_else(|| invalid_enum(2, &type_str))?;
+        let tx_type = EurTxType::from_str(&type_str).ok_or_else(|| invalid_enum(2, &type_str))?;
         let amount = parse_decimal(3, &amount_str)?;
         rows.push(EurTxRow {
             id,
@@ -61,7 +71,7 @@ pub fn insert(conn: &Connection, draft: &EurTxDraft) -> Result<i64> {
             draft.tx_type.as_eur_tx_type().as_str(),
             amount.to_string(),
             draft.donor_id,
-            opt(&draft.note),
+            super::opt(&draft.note),
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -73,14 +83,15 @@ pub fn update(conn: &Connection, id: i64, draft: &EurTxDraft) -> Result<()> {
         "UPDATE eur_transaction
             SET date = ?1, amount = ?2, donor_id = ?3, note = ?4
           WHERE id = ?5",
-        params![draft.date.trim(), amount.to_string(), draft.donor_id, opt(&draft.note), id],
+        params![
+            draft.date.trim(),
+            amount.to_string(),
+            draft.donor_id,
+            super::opt(&draft.note),
+            id
+        ],
     )?;
     Ok(())
-}
-
-fn opt(s: &str) -> Option<&str> {
-    let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
 }
 
 fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
@@ -90,9 +101,9 @@ fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
 }
 
 fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
-    s.trim().parse::<Decimal>().map_err(|e| {
-        rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-    })
+    s.trim()
+        .parse::<Decimal>()
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }
 
 fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {

@@ -153,9 +153,17 @@ impl TransfersView {
 
     fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection) {
         let is_adding = matches!(self.mode, Mode::Adding);
-        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode { Some(id) } else { None };
+        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode {
+            Some(id)
+        } else {
+            None
+        };
 
-        ui.heading(if is_adding { "New Transfer" } else { "Edit Transfer" });
+        ui.heading(if is_adding {
+            "New Transfer"
+        } else {
+            "Edit Transfer"
+        });
         ui.add_space(8.0);
 
         egui::Grid::new("transfer_form_grid")
@@ -197,8 +205,14 @@ impl TransfersView {
             });
 
         if let (Ok(eur), Ok(rate)) = (
-            self.draft.eur_amount_sent_str.trim().parse::<rust_decimal::Decimal>(),
-            self.draft.exchange_rate_str.trim().parse::<rust_decimal::Decimal>(),
+            self.draft
+                .eur_amount_sent_str
+                .trim()
+                .parse::<rust_decimal::Decimal>(),
+            self.draft
+                .exchange_rate_str
+                .trim()
+                .parse::<rust_decimal::Decimal>(),
         ) {
             ui.add_space(4.0);
             ui.label(format!("BRL amount received: R$ {:.2}", eur * rate));
@@ -310,7 +324,11 @@ impl TransfersView {
                 ui.group(|ui| {
                     ui.label(format!(
                         "File: {}",
-                        pending.path.file_name().unwrap_or_default().to_string_lossy()
+                        pending
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
                     ));
                     ui.horizontal(|ui| {
                         ui.label("Label:");
@@ -337,54 +355,61 @@ impl TransfersView {
             }
         } else if ui.button("Attach file…").clicked() {
             if let Some(path) = rfd::FileDialog::new().pick_file() {
-                let default_label =
-                    self.labels.first().cloned().unwrap_or_else(|| "other".to_string());
-                self.pending_doc =
-                    Some(PendingAttachment { path, label: default_label, error: None });
+                let default_label = self
+                    .labels
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "other".to_string());
+                self.pending_doc = Some(PendingAttachment {
+                    path,
+                    label: default_label,
+                    error: None,
+                });
             }
         }
 
         match doc_action {
             DocAction::Cancel => self.pending_doc = None,
             DocAction::Confirm => {
-                let (path, label) = {
-                    let p = self.pending_doc.as_ref().unwrap();
-                    (p.path.clone(), p.label.clone())
-                };
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("bin")
-                    .to_lowercase();
-                let existing: Vec<String> =
-                    self.docs.iter().map(|d| d.filename.clone()).collect();
-                let filename = docs_fs::generate_filename(
-                    &self.draft.date,
-                    "transfer",
-                    edit_id,
-                    &label,
-                    &existing,
-                    &ext,
-                );
-                match docs_fs::copy_to_documents(&path, &documents_dir, &filename) {
-                    Err(e) => {
-                        if let Some(p) = &mut self.pending_doc {
-                            p.error = Some(format!("Copy failed: {e}"));
-                        }
-                    }
-                    Ok(()) => match docs_qry::insert(db, "transfer", edit_id, &filename, &label) {
-                        Ok(()) => {
-                            self.pending_doc = None;
-                            self.docs_needs_reload = true;
-                            self.error = None;
-                        }
+                if let Some(p) = self.pending_doc.as_ref() {
+                    let (path, label) = (p.path.clone(), p.label.clone());
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("bin")
+                        .to_lowercase();
+                    let existing: Vec<String> =
+                        self.docs.iter().map(|d| d.filename.clone()).collect();
+                    let filename = docs_fs::generate_filename(
+                        &self.draft.date,
+                        "transfer",
+                        edit_id,
+                        &label,
+                        &existing,
+                        &ext,
+                    );
+                    match docs_fs::copy_to_documents(&path, &documents_dir, &filename) {
                         Err(e) => {
                             if let Some(p) = &mut self.pending_doc {
-                                p.error = Some(format!("DB insert failed: {e}"));
+                                p.error = Some(format!("Copy failed: {e}"));
                             }
                         }
-                    },
-                }
+                        Ok(()) => {
+                            match docs_qry::insert(db, "transfer", edit_id, &filename, &label) {
+                                Ok(()) => {
+                                    self.pending_doc = None;
+                                    self.docs_needs_reload = true;
+                                    self.error = None;
+                                }
+                                Err(e) => {
+                                    if let Some(p) = &mut self.pending_doc {
+                                        p.error = Some(format!("DB insert failed: {e}"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } // if let Some(p)
             }
             DocAction::None => {}
         }

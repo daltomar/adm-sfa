@@ -1,4 +1,6 @@
-use crate::model::inventory::{InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType};
+use crate::model::inventory::{
+    InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
+};
 use rusqlite::{params, Connection, Result};
 
 pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
@@ -94,7 +96,7 @@ pub fn insert(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {
             draft.source_purchase_id,
             draft.location.as_str(),
             draft.status.as_str(),
-            opt(&draft.notes),
+            super::opt(&draft.notes),
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -115,16 +117,11 @@ pub fn update(conn: &Connection, id: i64, draft: &InventoryItemDraft) -> Result<
             draft.source_purchase_id,
             draft.location.as_str(),
             draft.status.as_str(),
-            opt(&draft.notes),
+            super::opt(&draft.notes),
             id,
         ],
     )?;
     Ok(())
-}
-
-fn opt(s: &str) -> Option<&str> {
-    let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
 }
 
 fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {

@@ -1,8 +1,8 @@
 use crate::model::outbound::{
     OutboundEventDraft, OutboundEventRow, RecipientProject, RecipientProjectDraft,
 };
-use rust_decimal::Decimal;
 use rusqlite::{params, Connection, Result};
+use rust_decimal::Decimal;
 use std::str::FromStr;
 
 pub fn list_recipient_projects(conn: &Connection) -> Result<Vec<RecipientProject>> {
@@ -31,8 +31,8 @@ pub fn insert_recipient_project(conn: &Connection, draft: &RecipientProjectDraft
               VALUES (?1, ?2, ?3, ?4)",
         params![
             draft.name.trim(),
-            opt(&draft.contact_info),
-            opt(&draft.location),
+            super::opt(&draft.contact_info),
+            super::opt(&draft.location),
             draft.active as i64,
         ],
     )?;
@@ -83,7 +83,9 @@ pub fn item_ids_for_event(conn: &Connection, event_id: i64) -> Result<Vec<i64>> 
     let mut stmt = conn.prepare(
         "SELECT inventory_item_id FROM outbound_event_item WHERE outbound_event_id = ?1",
     )?;
-    let ids = stmt.query_map([event_id], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>>>()?;
+    let ids = stmt
+        .query_map([event_id], |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>>>()?;
     Ok(ids)
 }
 
@@ -97,7 +99,7 @@ pub fn insert(conn: &Connection, draft: &OutboundEventDraft, item_ids: &[i64]) -
             draft.date.trim(),
             draft.recipient_project_id,
             cash_amount.map(|d| d.to_string()),
-            opt(&draft.notes),
+            super::opt(&draft.notes),
         ],
     )?;
     let event_id = tx.last_insert_rowid();
@@ -129,7 +131,7 @@ pub fn update(
             draft.date.trim(),
             draft.recipient_project_id,
             cash_amount.map(|d| d.to_string()),
-            opt(&draft.notes),
+            super::opt(&draft.notes),
             id,
         ],
     )?;
@@ -139,7 +141,9 @@ pub fn update(
         let mut stmt = tx.prepare(
             "SELECT inventory_item_id FROM outbound_event_item WHERE outbound_event_id = ?1",
         )?;
-        let ids = stmt.query_map([id], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<i64>>>()?;
+        let ids = stmt
+            .query_map([id], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<i64>>>()?;
         ids
     };
     for prev_id in &previous_ids {
@@ -148,7 +152,10 @@ pub fn update(
             params![prev_id],
         )?;
     }
-    tx.execute("DELETE FROM outbound_event_item WHERE outbound_event_id = ?1", [id])?;
+    tx.execute(
+        "DELETE FROM outbound_event_item WHERE outbound_event_id = ?1",
+        [id],
+    )?;
     link_items(&tx, id, item_ids)?;
     // Delete-and-recreate the linked cash-gift ledger entry so amount changes propagate.
     tx.execute(
@@ -189,9 +196,4 @@ fn parse_cash(s: &str) -> Option<Decimal> {
     } else {
         t.parse().ok()
     }
-}
-
-fn opt(s: &str) -> Option<&str> {
-    let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
 }

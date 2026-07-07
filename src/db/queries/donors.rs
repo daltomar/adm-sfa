@@ -7,22 +7,27 @@ pub fn list(conn: &Connection) -> Result<Vec<Donor>> {
            FROM donor
           ORDER BY name COLLATE NOCASE",
     )?;
-    let donors = stmt.query_map([], |row| {
-        Ok(Donor {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            contact_info: row.get(2)?,
-            notes: row.get(3)?,
-        })
-    })?
-    .collect::<Result<Vec<_>>>()?;
+    let donors = stmt
+        .query_map([], |row| {
+            Ok(Donor {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                contact_info: row.get(2)?,
+                notes: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
     Ok(donors)
 }
 
 pub fn insert(conn: &Connection, draft: &DonorDraft) -> Result<i64> {
     conn.execute(
         "INSERT INTO donor (name, contact_info, notes) VALUES (?1, ?2, ?3)",
-        params![draft.name.trim(), opt(&draft.contact_info), opt(&draft.notes)],
+        params![
+            draft.name.trim(),
+            super::opt(&draft.contact_info),
+            super::opt(&draft.notes)
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -30,14 +35,14 @@ pub fn insert(conn: &Connection, draft: &DonorDraft) -> Result<i64> {
 pub fn update(conn: &Connection, id: i64, draft: &DonorDraft) -> Result<()> {
     conn.execute(
         "UPDATE donor SET name = ?1, contact_info = ?2, notes = ?3 WHERE id = ?4",
-        params![draft.name.trim(), opt(&draft.contact_info), opt(&draft.notes), id],
+        params![
+            draft.name.trim(),
+            super::opt(&draft.contact_info),
+            super::opt(&draft.notes),
+            id
+        ],
     )?;
     Ok(())
-}
-
-fn opt(s: &str) -> Option<&str> {
-    let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
 }
 
 pub fn list_donations(conn: &Connection) -> Result<Vec<PhysicalDonation>> {
@@ -65,7 +70,11 @@ pub fn insert_donation(conn: &Connection, draft: &PhysicalDonationDraft) -> Resu
     conn.execute(
         "INSERT INTO physical_donation (donor_id, date_received, notes)
               VALUES (?1, ?2, ?3)",
-        params![draft.donor_id, draft.date_received.trim(), opt(&draft.notes)],
+        params![
+            draft.donor_id,
+            draft.date_received.trim(),
+            super::opt(&draft.notes)
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }

@@ -2,7 +2,11 @@ use crate::model::document::Document;
 use rusqlite::{params, Connection, Result};
 use std::collections::HashMap;
 
-pub fn list_for_record(conn: &Connection, record_type: &str, record_id: i64) -> Result<Vec<Document>> {
+pub fn list_for_record(
+    conn: &Connection,
+    record_type: &str,
+    record_id: i64,
+) -> Result<Vec<Document>> {
     let mut stmt = conn.prepare(
         "SELECT id, filename, record_type, record_id, label, deleted
            FROM document
@@ -35,7 +39,10 @@ pub fn counts_by_record(conn: &Connection) -> Result<HashMap<(String, i64), i64>
     )?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(((row.get::<_, String>(0)?, row.get::<_, i64>(1)?), row.get::<_, i64>(2)?))
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, i64>(1)?),
+                row.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<Result<HashMap<_, _>>>()?;
     Ok(rows)

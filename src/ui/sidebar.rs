@@ -3,15 +3,15 @@ use eframe::egui;
 
 const SECTIONS: &[(Section, &str)] = &[
     (Section::Dashboard, "Dashboard"),
-    (Section::Donors,    "Donors"),
+    (Section::Donors, "Donors"),
     (Section::EurLedger, "EUR Ledger"),
     (Section::BrlLedger, "BRL Ledger"),
     (Section::Purchases, "Purchases"),
     (Section::Transfers, "Transfers"),
     (Section::Inventory, "Inventory"),
-    (Section::Outbound,  "Outbound"),
-    (Section::Reports,   "Reports"),
-    (Section::Settings,  "Settings"),
+    (Section::Outbound, "Outbound"),
+    (Section::Reports, "Reports"),
+    (Section::Settings, "Settings"),
 ];
 
 pub fn show(ui: &mut egui::Ui, current: &mut Section) {

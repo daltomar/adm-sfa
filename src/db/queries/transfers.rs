@@ -1,6 +1,6 @@
 use crate::model::transfer::{AnnualTransfer, TransferDraft};
-use rust_decimal::Decimal;
 use rusqlite::{params, Connection, Result};
+use rust_decimal::Decimal;
 
 pub fn list(conn: &Connection) -> Result<Vec<AnnualTransfer>> {
     let mut stmt = conn.prepare(
@@ -50,7 +50,7 @@ pub fn insert(conn: &Connection, draft: &TransferDraft) -> Result<i64> {
             eur_amount.to_string(),
             rate.to_string(),
             brl_amount.to_string(),
-            opt(&draft.notes),
+            super::opt(&draft.notes),
         ],
     )?;
     let transfer_id = tx.last_insert_rowid();
@@ -84,7 +84,7 @@ pub fn update(conn: &Connection, id: i64, draft: &TransferDraft) -> Result<()> {
             eur_amount.to_string(),
             rate.to_string(),
             brl_amount.to_string(),
-            opt(&draft.notes),
+            super::opt(&draft.notes),
             id,
         ],
     )?;
@@ -111,11 +111,6 @@ pub fn update(conn: &Connection, id: i64, draft: &TransferDraft) -> Result<()> {
     Ok(())
 }
 
-fn opt(s: &str) -> Option<&str> {
-    let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
-}
-
 fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
     s.parse::<Decimal>().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
@@ -123,7 +118,7 @@ fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
 }
 
 fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
-    s.trim().parse::<Decimal>().map_err(|e| {
-        rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-    })
+    s.trim()
+        .parse::<Decimal>()
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }

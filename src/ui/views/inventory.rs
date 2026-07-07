@@ -10,7 +10,9 @@ use crate::docs_fs;
 use crate::model::category::Category;
 use crate::model::document::Document;
 use crate::model::donor::{PhysicalDonation, PhysicalDonationDraft};
-use crate::model::inventory::{InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType};
+use crate::model::inventory::{
+    InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
+};
 use crate::model::purchase::Purchase;
 
 enum Mode {
@@ -234,7 +236,11 @@ impl InventoryView {
 
     fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection) {
         let is_adding = matches!(self.mode, Mode::Adding);
-        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode { Some(id) } else { None };
+        let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode {
+            Some(id)
+        } else {
+            None
+        };
 
         ui.heading(if is_adding { "New Item" } else { "Edit Item" });
         ui.add_space(8.0);
@@ -297,8 +303,16 @@ impl InventoryView {
         ui.add_space(4.0);
         ui.label(egui::RichText::new("Source").strong());
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.draft.source_type, SourceType::Donation, "Donation");
-            ui.radio_value(&mut self.draft.source_type, SourceType::Purchase, "Purchase");
+            ui.radio_value(
+                &mut self.draft.source_type,
+                SourceType::Donation,
+                "Donation",
+            );
+            ui.radio_value(
+                &mut self.draft.source_type,
+                SourceType::Purchase,
+                "Purchase",
+            );
         });
         ui.add_space(4.0);
 
@@ -533,7 +547,11 @@ impl InventoryView {
                 ui.group(|ui| {
                     ui.label(format!(
                         "File: {}",
-                        pending.path.file_name().unwrap_or_default().to_string_lossy()
+                        pending
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
                     ));
                     ui.horizontal(|ui| {
                         ui.label("Label:");
@@ -560,57 +578,57 @@ impl InventoryView {
             }
         } else if ui.button("Attach file…").clicked() {
             if let Some(path) = rfd::FileDialog::new().pick_file() {
-                let default_label =
-                    self.labels.first().cloned().unwrap_or_else(|| "other".to_string());
-                self.pending_doc =
-                    Some(PendingAttachment { path, label: default_label, error: None });
+                let default_label = self
+                    .labels
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "other".to_string());
+                self.pending_doc = Some(PendingAttachment {
+                    path,
+                    label: default_label,
+                    error: None,
+                });
             }
         }
 
         match doc_action {
             DocAction::Cancel => self.pending_doc = None,
             DocAction::Confirm => {
-                let (path, label) = {
-                    let p = self.pending_doc.as_ref().unwrap();
-                    (p.path.clone(), p.label.clone())
-                };
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("bin")
-                    .to_lowercase();
-                let existing: Vec<String> =
-                    self.docs.iter().map(|d| d.filename.clone()).collect();
-                // Items have no single "date" field of their own; use today's date
-                // so filenames stay chronologically sortable at attach time.
-                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                let filename = docs_fs::generate_filename(
-                    &today,
-                    "item",
-                    edit_id,
-                    &label,
-                    &existing,
-                    &ext,
-                );
-                match docs_fs::copy_to_documents(&path, &documents_dir, &filename) {
-                    Err(e) => {
-                        if let Some(p) = &mut self.pending_doc {
-                            p.error = Some(format!("Copy failed: {e}"));
-                        }
-                    }
-                    Ok(()) => match docs_qry::insert(db, "item", edit_id, &filename, &label) {
-                        Ok(()) => {
-                            self.pending_doc = None;
-                            self.docs_needs_reload = true;
-                            self.error = None;
-                        }
+                if let Some(p) = self.pending_doc.as_ref() {
+                    let (path, label) = (p.path.clone(), p.label.clone());
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("bin")
+                        .to_lowercase();
+                    let existing: Vec<String> =
+                        self.docs.iter().map(|d| d.filename.clone()).collect();
+                    // Items have no single "date" field of their own; use today's date
+                    // so filenames stay chronologically sortable at attach time.
+                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                    let filename = docs_fs::generate_filename(
+                        &today, "item", edit_id, &label, &existing, &ext,
+                    );
+                    match docs_fs::copy_to_documents(&path, &documents_dir, &filename) {
                         Err(e) => {
                             if let Some(p) = &mut self.pending_doc {
-                                p.error = Some(format!("DB insert failed: {e}"));
+                                p.error = Some(format!("Copy failed: {e}"));
                             }
                         }
-                    },
-                }
+                        Ok(()) => match docs_qry::insert(db, "item", edit_id, &filename, &label) {
+                            Ok(()) => {
+                                self.pending_doc = None;
+                                self.docs_needs_reload = true;
+                                self.error = None;
+                            }
+                            Err(e) => {
+                                if let Some(p) = &mut self.pending_doc {
+                                    p.error = Some(format!("DB insert failed: {e}"));
+                                }
+                            }
+                        },
+                    }
+                } // if let Some(p)
             }
             DocAction::None => {}
         }
@@ -625,5 +643,11 @@ fn donation_label(d: &PhysicalDonation) -> String {
 }
 
 fn purchase_label(p: &Purchase) -> String {
-    format!("{}  {}  {}{:.2}", p.date, p.channel, p.currency.symbol(), p.cost)
+    format!(
+        "{}  {}  {}{:.2}",
+        p.date,
+        p.channel,
+        p.currency.symbol(),
+        p.cost
+    )
 }
