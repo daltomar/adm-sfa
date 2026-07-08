@@ -184,6 +184,8 @@ impl InventoryView {
             self.docs = Vec::new();
             self.pending_doc = None;
             self.new_donation = None;
+            self.purchases_loaded = false;
+            self.donations_loaded = false;
         }
 
         ui.separator();

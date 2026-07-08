@@ -42,8 +42,6 @@ pub struct ReportsView {
     last_refreshed: Option<String>,
     error: Option<String>,
     export_status: Option<Result<String, String>>,
-    export_dialog_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
-    export_dialog_data: Option<(Vec<String>, Vec<Vec<String>>)>,
 
     donors: Vec<Donor>,
     donations: Vec<PhysicalDonation>,
@@ -66,8 +64,6 @@ impl Default for ReportsView {
             last_refreshed: None,
             error: None,
             export_status: None,
-            export_dialog_rx: None,
-            export_dialog_data: None,
             donors: Vec::new(),
             donations: Vec::new(),
             eur_rows: Vec::new(),
@@ -98,31 +94,6 @@ struct AuditEntry {
 
 impl ReportsView {
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
-        // Poll the background export dialog thread.
-        let dialog_result = self.export_dialog_rx.as_ref().map(|rx| rx.try_recv());
-        match dialog_result {
-            Some(Ok(maybe_path)) => {
-                self.export_dialog_rx = None;
-                let data = self.export_dialog_data.take();
-                if let (Some(path), Some((headers, rows))) = (maybe_path, data) {
-                    self.export_status = Some(
-                        crate::reports::csv::write(&path, &headers, &rows)
-                            .map(|()| format!("Exported to {}", path.display()))
-                            .map_err(|e| e.to_string()),
-                    );
-                }
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(250));
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                self.export_dialog_rx = None;
-                self.export_dialog_data = None;
-            }
-            None => {}
-        }
-
         if !self.loaded {
             match self.reload(db) {
                 Ok(()) => {
@@ -217,18 +188,7 @@ impl ReportsView {
                 ui.weak(format!("↑ {ts}"));
             }
             ui.add_space(8.0);
-            let exporting = self.export_dialog_rx.is_some();
-            if ui
-                .add_enabled(
-                    !exporting,
-                    egui::Button::new(if exporting {
-                        "Exporting…"
-                    } else {
-                        "Export CSV"
-                    }),
-                )
-                .clicked()
-            {
+            if ui.button("Export CSV").clicked() {
                 let tab_label = TABS
                     .iter()
                     .find(|(t, _)| *t == self.tab)
@@ -243,18 +203,17 @@ impl ReportsView {
                     Tab::Outbound => self.csv_data_outbound(),
                     Tab::AuditTrail => self.csv_data_audit_trail(),
                 };
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let path = rfd::FileDialog::new()
-                        .set_file_name(&filename)
-                        .add_filter("CSV", &["csv"])
-                        .save_file();
-                    let _ = tx.send(path);
-                });
-                self.export_dialog_rx = Some(rx);
-                self.export_dialog_data = Some((headers, rows));
-                self.export_status = None;
-                ui.ctx().request_repaint();
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(&filename)
+                    .add_filter("CSV", &["csv"])
+                    .save_file()
+                {
+                    self.export_status = Some(
+                        crate::reports::csv::write(&path, &headers, &rows)
+                            .map(|()| format!("Exported to {}", path.display()))
+                            .map_err(|e| e.to_string()),
+                    );
+                }
             }
         });
         if let Some(status) = &self.export_status {

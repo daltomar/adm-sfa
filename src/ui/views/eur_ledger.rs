@@ -20,9 +20,6 @@ pub struct EurLedgerView {
     error: Option<String>,
     needs_reload: bool,
     donors: Vec<(i64, String)>,
-    // Loaded once and never invalidated. A donor added in the Donors section while
-    // this view is open won't appear in the dropdown until the app is restarted.
-    // Acceptable for a single-user app with no cross-view reactive invalidation.
     donors_loaded: bool,
 }
 
@@ -49,6 +46,7 @@ impl EurLedgerView {
                     self.balance = compute_balance(&rows);
                     self.rows = rows;
                     self.needs_reload = false;
+                    self.donors_loaded = false;
                 }
                 Err(e) => self.error = Some(e.to_string()),
             }
@@ -101,6 +99,7 @@ impl EurLedgerView {
             self.draft = EurTxDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
+            self.donors_loaded = false;
         }
 
         ui.separator();

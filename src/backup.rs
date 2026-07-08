@@ -13,9 +13,8 @@ pub fn backup_to_zip(data_dir: &Path, dest: &Path) -> Result<(), Box<dyn std::er
         let _ = std::fs::remove_file(&tmp);
         return result;
     }
-    std::fs::rename(&tmp, dest).map_err(|e| {
+    std::fs::rename(&tmp, dest).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
-        e
     })?;
     Ok(())
 }
