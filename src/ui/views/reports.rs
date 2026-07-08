@@ -93,6 +93,10 @@ struct AuditEntry {
 }
 
 impl ReportsView {
+    pub fn invalidate(&mut self) {
+        self.loaded = false;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
         if !self.loaded {
             match self.reload(db) {
@@ -189,6 +193,7 @@ impl ReportsView {
             }
             ui.add_space(8.0);
             if ui.button("Export CSV").clicked() {
+                self.export_status = None;
                 let tab_label = TABS
                     .iter()
                     .find(|(t, _)| *t == self.tab)

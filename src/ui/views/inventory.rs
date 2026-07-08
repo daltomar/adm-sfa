@@ -80,6 +80,13 @@ impl Default for InventoryView {
 }
 
 impl InventoryView {
+    pub fn invalidate(&mut self) {
+        self.needs_reload = true;
+        self.purchases_loaded = false;
+        self.donations_loaded = false;
+        self.donors_loaded = false;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         if self.needs_reload {
             match qry::list(db) {
@@ -186,6 +193,7 @@ impl InventoryView {
             self.new_donation = None;
             self.purchases_loaded = false;
             self.donations_loaded = false;
+            self.donors_loaded = false;
         }
 
         ui.separator();

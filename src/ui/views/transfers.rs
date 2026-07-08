@@ -48,6 +48,10 @@ impl Default for TransfersView {
 }
 
 impl TransfersView {
+    pub fn invalidate(&mut self) {
+        self.needs_reload = true;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         if self.needs_reload {
             match qry::list(db) {

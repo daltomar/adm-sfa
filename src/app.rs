@@ -27,6 +27,7 @@ pub enum Section {
 
 pub struct App {
     pub section: Section,
+    prev_section: Section,
     pub db: rusqlite::Connection,
     pub data_dir: PathBuf,
     donors_view: DonorsView,
@@ -44,6 +45,7 @@ impl App {
         let db = crate::db::open_db(&data_dir).expect("failed to open database");
         Self {
             section: Section::Dashboard,
+            prev_section: Section::Dashboard,
             db,
             data_dir,
             donors_view: DonorsView::default(),
@@ -63,6 +65,22 @@ impl eframe::App for App {
         egui::Panel::left("nav").show(ui, |ui| {
             ui::sidebar::show(ui, &mut self.section);
         });
+
+        if self.section != self.prev_section {
+            match self.section {
+                Section::Donors => self.donors_view.invalidate(),
+                Section::EurLedger => self.eur_ledger_view.invalidate(),
+                Section::BrlLedger => self.brl_ledger_view.invalidate(),
+                Section::Purchases => self.purchases_view.invalidate(),
+                Section::Transfers => self.transfers_view.invalidate(),
+                Section::Inventory => self.inventory_view.invalidate(),
+                Section::Outbound => self.outbound_view.invalidate(),
+                Section::Reports => self.reports_view.invalidate(),
+                Section::Dashboard | Section::Settings => {}
+            }
+            self.prev_section = self.section;
+        }
+
         egui::CentralPanel::default().show(ui, |ui| match self.section {
             Section::Dashboard => ui::views::dashboard::show(ui),
             Section::Donors => self.donors_view.show(ui, &self.db),

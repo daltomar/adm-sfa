@@ -53,6 +53,12 @@ impl Default for OutboundView {
 }
 
 impl OutboundView {
+    pub fn invalidate(&mut self) {
+        self.needs_reload = true;
+        self.inventory_loaded = false;
+        self.recipient_projects_loaded = false;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
         if self.needs_reload {
             match qry::list(db) {
