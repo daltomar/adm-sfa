@@ -42,6 +42,8 @@ pub struct ReportsView {
     last_refreshed: Option<String>,
     error: Option<String>,
     export_status: Option<Result<String, String>>,
+    csv_path_input: Option<String>,
+    csv_pending_data: Option<(Vec<String>, Vec<Vec<String>>)>,
 
     donors: Vec<Donor>,
     donations: Vec<PhysicalDonation>,
@@ -64,6 +66,8 @@ impl Default for ReportsView {
             last_refreshed: None,
             error: None,
             export_status: None,
+            csv_path_input: None,
+            csv_pending_data: None,
             donors: Vec::new(),
             donations: Vec::new(),
             eur_rows: Vec::new(),
@@ -208,19 +212,51 @@ impl ReportsView {
                     Tab::Outbound => self.csv_data_outbound(),
                     Tab::AuditTrail => self.csv_data_audit_trail(),
                 };
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(&filename)
-                    .add_filter("CSV", &["csv"])
-                    .save_file()
-                {
-                    self.export_status = Some(
-                        crate::reports::csv::write(&path, &headers, &rows)
-                            .map(|()| format!("Exported to {}", path.display()))
-                            .map_err(|e| e.to_string()),
-                    );
-                }
+                let default_path = dirs::download_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
+                    .join(&filename)
+                    .to_string_lossy()
+                    .into_owned();
+                self.csv_path_input = Some(default_path);
+                self.csv_pending_data = Some((headers, rows));
             }
         });
+
+        let mut csv_save = false;
+        let mut csv_cancel = false;
+        if let Some(ref mut path_str) = self.csv_path_input {
+            ui.group(|ui| {
+                ui.label("Save CSV to:");
+                ui.add(
+                    egui::TextEdit::singleline(path_str)
+                        .desired_width(500.0),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        csv_save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        csv_cancel = true;
+                    }
+                });
+            });
+        }
+        if csv_save {
+            if let (Some(path_str), Some((headers, rows))) =
+                (self.csv_path_input.take(), self.csv_pending_data.take())
+            {
+                let path = std::path::PathBuf::from(path_str.trim());
+                self.export_status = Some(
+                    crate::reports::csv::write(&path, &headers, &rows)
+                        .map(|()| format!("Saved to {}", path.display()))
+                        .map_err(|e| e.to_string()),
+                );
+            }
+        } else if csv_cancel {
+            self.csv_path_input = None;
+            self.csv_pending_data = None;
+        }
+
         if let Some(status) = &self.export_status {
             match status {
                 Ok(msg) => ui.colored_label(egui::Color32::DARK_GREEN, msg),

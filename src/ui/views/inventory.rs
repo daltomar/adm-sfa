@@ -52,6 +52,7 @@ pub struct InventoryView {
     labels: Vec<String>,
     docs_needs_reload: bool,
     pending_doc: Option<PendingAttachment>,
+    path_input: Option<String>,
 }
 
 impl Default for InventoryView {
@@ -75,6 +76,7 @@ impl Default for InventoryView {
             labels: Vec::new(),
             docs_needs_reload: false,
             pending_doc: None,
+            path_input: None,
         }
     }
 }
@@ -190,6 +192,7 @@ impl InventoryView {
             self.error = None;
             self.docs = Vec::new();
             self.pending_doc = None;
+            self.path_input = None;
             self.new_donation = None;
             self.purchases_loaded = false;
             self.donations_loaded = false;
@@ -238,6 +241,7 @@ impl InventoryView {
                         self.error = None;
                         self.docs_needs_reload = true;
                         self.pending_doc = None;
+                        self.path_input = None;
                         self.new_donation = None;
                     }
                 }
@@ -371,6 +375,7 @@ impl InventoryView {
                 self.mode = Mode::List;
                 self.error = None;
                 self.pending_doc = None;
+                self.path_input = None;
                 self.new_donation = None;
             }
         });
@@ -586,8 +591,35 @@ impl InventoryView {
                     });
                 });
             }
-        } else if ui.button("Attach file…").clicked() {
-            if let Some(path) = rfd::FileDialog::new().pick_file() {
+        } else {
+            let mut confirmed_path: Option<PathBuf> = None;
+            let mut path_cancelled = false;
+            if let Some(ref mut path_str) = self.path_input {
+                ui.group(|ui| {
+                    ui.label("File path:");
+                    ui.add(
+                        egui::TextEdit::singleline(path_str)
+                            .hint_text("/home/user/scan.pdf")
+                            .desired_width(380.0),
+                    );
+                    let path = PathBuf::from(path_str.trim());
+                    let is_file = path.is_file();
+                    if !path_str.trim().is_empty() && !is_file {
+                        ui.weak("File not found.");
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(is_file, egui::Button::new("Next →")).clicked() {
+                            confirmed_path = Some(path);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            path_cancelled = true;
+                        }
+                    });
+                });
+            } else if ui.button("Attach file…").clicked() {
+                self.path_input = Some(String::new());
+            }
+            if let Some(path) = confirmed_path {
                 let default_label = self
                     .labels
                     .first()
@@ -598,6 +630,9 @@ impl InventoryView {
                     label: default_label,
                     error: None,
                 });
+                self.path_input = None;
+            } else if path_cancelled {
+                self.path_input = None;
             }
         }
 
