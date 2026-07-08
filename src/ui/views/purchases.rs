@@ -52,6 +52,7 @@ impl Default for PurchasesView {
 impl PurchasesView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
+        self.labels.clear();
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {

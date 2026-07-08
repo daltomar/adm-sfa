@@ -56,6 +56,38 @@ pub fn labels(conn: &Connection) -> Result<Vec<String>> {
     Ok(names)
 }
 
+pub fn list_labels(conn: &Connection) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare("SELECT id, name FROM document_label ORDER BY id")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn insert_label(conn: &Connection, name: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO document_label (name) VALUES (?1)",
+        params![name.trim()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_label(conn: &Connection, id: i64, name: &str) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE document_label SET name = ?1 WHERE id = ?2",
+        params![name.trim(), id],
+    )?;
+    if changed == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(())
+}
+
+pub fn delete_label(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM document_label WHERE id = ?1", [id])?;
+    Ok(())
+}
+
 pub fn insert(
     conn: &Connection,
     record_type: &str,

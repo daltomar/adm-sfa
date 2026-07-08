@@ -87,6 +87,7 @@ impl InventoryView {
         self.purchases_loaded = false;
         self.donations_loaded = false;
         self.donors_loaded = false;
+        self.labels.clear();
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {

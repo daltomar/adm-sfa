@@ -9,6 +9,7 @@ use crate::ui::views::inventory::InventoryView;
 use crate::ui::views::outbound::OutboundView;
 use crate::ui::views::purchases::PurchasesView;
 use crate::ui::views::reports::ReportsView;
+use crate::ui::views::settings::SettingsView;
 use crate::ui::views::transfers::TransfersView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub struct App {
     inventory_view: InventoryView,
     outbound_view: OutboundView,
     reports_view: ReportsView,
+    settings_view: SettingsView,
 }
 
 impl App {
@@ -56,6 +58,7 @@ impl App {
             inventory_view: InventoryView::default(),
             outbound_view: OutboundView::default(),
             reports_view: ReportsView::default(),
+            settings_view: SettingsView::default(),
         }
     }
 }
@@ -76,7 +79,8 @@ impl eframe::App for App {
                 Section::Inventory => self.inventory_view.invalidate(),
                 Section::Outbound => self.outbound_view.invalidate(),
                 Section::Reports => self.reports_view.invalidate(),
-                Section::Dashboard | Section::Settings => {}
+                Section::Settings => self.settings_view.invalidate(),
+                Section::Dashboard => {}
             }
             self.prev_section = self.section;
         }
@@ -91,7 +95,7 @@ impl eframe::App for App {
             Section::Inventory => self.inventory_view.show(ui, &self.db, &self.data_dir),
             Section::Outbound => self.outbound_view.show(ui, &self.db),
             Section::Reports => self.reports_view.show(ui, &self.db),
-            Section::Settings => ui::views::settings::show(ui),
+            Section::Settings => self.settings_view.show(ui, &self.db),
         });
     }
 }
