@@ -285,8 +285,17 @@ impl ReportsView {
             });
         }
         if pdf_save {
-            if let Some(path_str) = self.pdf_path_input.take() {
-                let path = std::path::PathBuf::from(path_str.trim());
+            let path_str = self
+                .pdf_path_input
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let path = std::path::PathBuf::from(&path_str);
+            if path.as_os_str().is_empty() {
+                self.export_status = Some(Err("Please enter a file path.".to_string()));
+            } else {
+                self.pdf_path_input = None;
                 let generated = chrono::Local::now().format("%Y-%m-%d").to_string();
                 let sections = self.build_pdf_sections();
                 self.export_status = Some(
