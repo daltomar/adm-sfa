@@ -44,6 +44,7 @@ pub struct ReportsView {
     export_status: Option<Result<String, String>>,
     csv_path_input: Option<String>,
     csv_pending_data: Option<(Vec<String>, Vec<Vec<String>>)>,
+    pdf_path_input: Option<String>,
 
     donors: Vec<Donor>,
     donations: Vec<PhysicalDonation>,
@@ -68,6 +69,7 @@ impl Default for ReportsView {
             export_status: None,
             csv_path_input: None,
             csv_pending_data: None,
+            pdf_path_input: None,
             donors: Vec::new(),
             donations: Vec::new(),
             eur_rows: Vec::new(),
@@ -220,6 +222,15 @@ impl ReportsView {
                 self.csv_path_input = Some(default_path);
                 self.csv_pending_data = Some((headers, rows));
             }
+            if ui.button("Export PDF").clicked() {
+                self.export_status = None;
+                let default_path = dirs::download_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
+                    .join("adm-sfa-report.pdf")
+                    .to_string_lossy()
+                    .into_owned();
+                self.pdf_path_input = Some(default_path);
+            }
         });
 
         let mut csv_save = false;
@@ -255,6 +266,43 @@ impl ReportsView {
         } else if csv_cancel {
             self.csv_path_input = None;
             self.csv_pending_data = None;
+        }
+
+        let mut pdf_save = false;
+        let mut pdf_cancel = false;
+        if let Some(ref mut path_str) = self.pdf_path_input {
+            ui.group(|ui| {
+                ui.label("Save PDF to (full report, all sections):");
+                ui.add(egui::TextEdit::singleline(path_str).desired_width(500.0));
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        pdf_save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        pdf_cancel = true;
+                    }
+                });
+            });
+        }
+        if pdf_save {
+            if let Some(path_str) = self.pdf_path_input.take() {
+                let path = std::path::PathBuf::from(path_str.trim());
+                let generated = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let sections = self.build_pdf_sections();
+                self.export_status = Some(
+                    crate::reports::pdf::export(
+                        &path,
+                        &generated,
+                        &self.date_from,
+                        &self.date_to,
+                        &sections,
+                    )
+                    .map(|()| format!("Saved to {}", path.display()))
+                    .map_err(|e| e.to_string()),
+                );
+            }
+        } else if pdf_cancel {
+            self.pdf_path_input = None;
         }
 
         if let Some(status) = &self.export_status {
@@ -979,6 +1027,23 @@ impl ReportsView {
             })
             .collect();
         (headers, rows)
+    }
+
+    fn build_pdf_sections(&self) -> Vec<crate::reports::pdf::PdfSection> {
+        let (dh, dr) = self.csv_data_donors();
+        let (eh, er) = self.csv_data_eur();
+        let (bh, br) = self.csv_data_brl();
+        let (ih, ir) = self.csv_data_inventory();
+        let (oh, or_) = self.csv_data_outbound();
+        let (ah, ar) = self.csv_data_audit_trail();
+        vec![
+            crate::reports::pdf::PdfSection { title: "Donor Breakdown",     headers: dh,  rows: dr  },
+            crate::reports::pdf::PdfSection { title: "EUR Ledger",           headers: eh,  rows: er  },
+            crate::reports::pdf::PdfSection { title: "BRL Ledger",           headers: bh,  rows: br  },
+            crate::reports::pdf::PdfSection { title: "Inventory",            headers: ih,  rows: ir  },
+            crate::reports::pdf::PdfSection { title: "Outbound Donations",   headers: oh,  rows: or_ },
+            crate::reports::pdf::PdfSection { title: "Full Audit Trail",     headers: ah,  rows: ar  },
+        ]
     }
 
     fn build_audit_entries(&self) -> Vec<AuditEntry> {
