@@ -34,6 +34,35 @@ there.
 - **Dashboard:** currently an empty placeholder. Suggested content is
   documented in `SPEC.md §5.5` — not yet prioritised.
 
+## Pending features (approved, not yet implemented)
+
+### Purchase `multiple_items` flag
+
+Add a boolean `multiple_items` to the `purchase` table. Controls whether
+a purchase may be linked to more than one inventory item.
+
+**Behaviour:**
+- `multiple_items = false` (default for new purchases): the purchase can
+  only appear as `source_purchase_id` on exactly one `inventory_item`.
+  The inventory source picker must grey out / exclude single-item
+  purchases that already have one item linked. Save must also validate.
+- `multiple_items = true`: no limit — multiple inventory items can share
+  the same purchase (e.g. a lot purchase of several decks).
+
+**Implementation notes:**
+- New migration `migrations/002_purchase_multiple_items.sql`:
+  1. `ALTER TABLE purchase ADD COLUMN multiple_items INTEGER NOT NULL DEFAULT 0`
+  2. `UPDATE purchase SET multiple_items = 1 WHERE id IN (SELECT source_purchase_id FROM inventory_item GROUP BY source_purchase_id HAVING COUNT(*) > 1)`
+  The second statement preserves integrity for existing data where a
+  purchase is already shared across items.
+- `Purchase` and `PurchaseDraft` models gain `multiple_items: bool`.
+- `purchases::list/insert/update` queries updated accordingly.
+- New query: count of inventory items per purchase (to know which
+  single-item purchases are already at capacity).
+- Purchases UI: checkbox "Multiple items from this purchase" on the form.
+- Inventory UI (`show_purchase_source`): exclude or visually mark
+  single-item purchases already linked to another item; validate on save.
+
 ## How to work in this repo
 
 1. On starting a session, read `SPEC.md` and `stack-plan.md` in full before
