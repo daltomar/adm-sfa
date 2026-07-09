@@ -30,6 +30,7 @@ impl Currency {
     }
 }
 
+#[derive(Clone)]
 pub struct Purchase {
     pub id: i64,
     pub date: String,
@@ -37,6 +38,7 @@ pub struct Purchase {
     pub cost: Decimal,
     pub channel: String,
     pub seller_info: Option<String>,
+    pub multiple_items: bool,
 }
 
 #[derive(Clone)]
@@ -46,6 +48,7 @@ pub struct PurchaseDraft {
     pub cost_str: String,
     pub channel: String,
     pub seller_info: String,
+    pub multiple_items: bool,
 }
 
 impl Default for PurchaseDraft {
@@ -56,6 +59,7 @@ impl Default for PurchaseDraft {
             cost_str: String::new(),
             channel: String::new(),
             seller_info: String::new(),
+            multiple_items: false,
         }
     }
 }

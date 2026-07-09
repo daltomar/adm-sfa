@@ -138,12 +138,14 @@ impl PurchasesView {
                 for i in 0..self.purchases.len() {
                     let p = &self.purchases[i];
                     let id = p.id;
+                    let multi = if p.multiple_items { "  [multi]" } else { "" };
                     let row = format!(
-                        "{}  {}  {} {:.2}",
+                        "{}  {}  {} {:.2}{}",
                         p.date,
                         p.channel,
                         p.currency.symbol(),
-                        p.cost
+                        p.cost,
+                        multi
                     );
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
                     if ui.selectable_label(selected, &row).clicked() {
@@ -153,6 +155,7 @@ impl PurchasesView {
                             cost_str: self.purchases[i].cost.to_string(),
                             channel: self.purchases[i].channel.clone(),
                             seller_info: self.purchases[i].seller_info.clone().unwrap_or_default(),
+                            multiple_items: self.purchases[i].multiple_items,
                         };
                         self.mode = Mode::Editing(id);
                         self.error = None;
@@ -223,6 +226,13 @@ impl PurchasesView {
                         .desired_rows(4),
                 );
                 ui.end_row();
+
+                ui.label("Multiple items");
+                ui.checkbox(
+                    &mut self.draft.multiple_items,
+                    "This purchase covers more than one inventory item",
+                );
+                ui.end_row();
             });
 
         if let Some(err) = &self.error {
@@ -254,12 +264,32 @@ impl PurchasesView {
                         Err(e) => self.error = Some(e.to_string()),
                     }
                 } else if let Some(id) = edit_id {
-                    match qry::update(db, id, &self.draft) {
-                        Ok(()) => {
-                            self.needs_reload = true;
-                            self.error = None;
+                    // Guard: disallow removing the multiple_items flag when
+                    // more than one inventory item is already linked.
+                    let blocked = if !self.draft.multiple_items {
+                        match qry::linked_item_count(db, id) {
+                            Ok(n) if n > 1 => Some(n),
+                            Ok(_) => None,
+                            Err(e) => {
+                                self.error = Some(e.to_string());
+                                return;
+                            }
                         }
-                        Err(e) => self.error = Some(e.to_string()),
+                    } else {
+                        None
+                    };
+                    if let Some(n) = blocked {
+                        self.error = Some(format!(
+                            "Cannot mark as single-item: {n} inventory items are already linked to this purchase."
+                        ));
+                    } else {
+                        match qry::update(db, id, &self.draft) {
+                            Ok(()) => {
+                                self.needs_reload = true;
+                                self.error = None;
+                            }
+                            Err(e) => self.error = Some(e.to_string()),
+                        }
                     }
                 }
             }

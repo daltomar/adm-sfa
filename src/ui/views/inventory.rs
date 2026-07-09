@@ -351,7 +351,9 @@ impl InventoryView {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.add_enabled(form_ok, egui::Button::new("Save")).clicked() {
-                if is_adding {
+                if let Some(msg) = self.purchase_source_conflict(edit_id) {
+                    self.error = Some(msg);
+                } else if is_adding {
                     match qry::insert(db, &self.draft) {
                         Ok(new_id) => {
                             self.mode = Mode::Editing(new_id);
@@ -491,23 +493,72 @@ impl InventoryView {
             ui.weak("No purchases yet — add one in the Purchases section first.");
             return;
         }
+
+        let edit_id = if let Mode::Editing(id) = self.mode { Some(id) } else { None };
+
+        // Purchases that are single-item and already linked to a *different* item.
+        let blocked: std::collections::HashSet<i64> = self
+            .items
+            .iter()
+            .filter(|item| edit_id != Some(item.id))
+            .filter_map(|item| item.source_purchase_id)
+            .filter(|&pid| {
+                self.purchases
+                    .iter()
+                    .any(|p| p.id == pid && !p.multiple_items)
+            })
+            .collect();
+
+        let purchases = self.purchases.clone();
         let selected_label = self
             .draft
             .source_purchase_id
-            .and_then(|pid| self.purchases.iter().find(|p| p.id == pid))
+            .and_then(|pid| purchases.iter().find(|p| p.id == pid))
             .map(purchase_label)
             .unwrap_or_else(|| "(choose one)".to_string());
+
         egui::ComboBox::from_id_salt("inventory_purchase_combo")
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
-                for p in &self.purchases {
-                    ui.selectable_value(
-                        &mut self.draft.source_purchase_id,
-                        Some(p.id),
-                        purchase_label(p),
-                    );
+                for p in &purchases {
+                    if blocked.contains(&p.id) {
+                        let label = format!("{} (in use)", purchase_label(p));
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(&label).color(egui::Color32::from_gray(140)),
+                        ));
+                    } else {
+                        ui.selectable_value(
+                            &mut self.draft.source_purchase_id,
+                            Some(p.id),
+                            purchase_label(p),
+                        );
+                    }
                 }
             });
+    }
+
+    fn purchase_source_conflict(&self, edit_id: Option<i64>) -> Option<String> {
+        if self.draft.source_type != SourceType::Purchase {
+            return None;
+        }
+        let pid = self.draft.source_purchase_id?;
+        // If pid is not in the cache the FK constraint in SQLite will catch it at insert/update.
+        let p = self.purchases.iter().find(|p| p.id == pid)?;
+        if p.multiple_items {
+            return None;
+        }
+        let already_used = self.items.iter()
+            .filter(|item| edit_id != Some(item.id))
+            .any(|item| item.source_purchase_id == Some(pid));
+        if already_used {
+            Some(format!(
+                "'{}' is a single-item purchase already linked to another inventory item. \
+                 Enable 'Multiple items' on the purchase to allow this.",
+                p.channel
+            ))
+        } else {
+            None
+        }
     }
 
     fn show_documents(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
@@ -715,11 +766,6 @@ fn donation_label(d: &PhysicalDonation) -> String {
 }
 
 fn purchase_label(p: &Purchase) -> String {
-    format!(
-        "{}  {}  {}{:.2}",
-        p.date,
-        p.channel,
-        p.currency.symbol(),
-        p.cost
-    )
+    let multi = if p.multiple_items { "  [multi]" } else { "" };
+    format!("{}  {}  {}{:.2}{}", p.date, p.channel, p.currency.symbol(), p.cost, multi)
 }
