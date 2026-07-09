@@ -314,6 +314,27 @@ impl PurchasesView {
 
         ui.add_space(8.0);
 
+        // Drag-and-drop: pick up a file dropped onto the window when no attachment is in progress.
+        if self.pending_doc.is_none() && self.path_input.is_none() {
+            let dropped = ui.input(|i| i.raw.dropped_files.clone());
+            if let Some(file) = dropped.first() {
+                if let Some(path) = &file.path {
+                    if path.is_file() {
+                        let default_label = self
+                            .labels
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "other".to_string());
+                        self.pending_doc = Some(PendingAttachment {
+                            path: path.clone(),
+                            label: default_label,
+                            error: None,
+                        });
+                    }
+                }
+            }
+        }
+
         // Pending attachment — use deferred action to avoid split-borrow on self.pending_doc.
         enum DocAction {
             None,
@@ -384,6 +405,12 @@ impl PurchasesView {
                 });
             } else if ui.button("Attach file…").clicked() {
                 self.path_input = Some(String::new());
+            }
+            let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
+            if hovering {
+                ui.colored_label(egui::Color32::from_rgb(80, 160, 230), "↓ Drop file to attach");
+            } else {
+                ui.weak("or drag a file onto this window");
             }
             if let Some(path) = confirmed_path {
                 let default_label = self
