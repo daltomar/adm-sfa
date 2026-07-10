@@ -29,12 +29,13 @@ CREATE TABLE annual_transfer (
 );
 
 CREATE TABLE purchase (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    date        TEXT    NOT NULL,
-    currency    TEXT    NOT NULL CHECK (currency IN ('EUR', 'BRL')),
-    cost        TEXT    NOT NULL,
-    channel     TEXT    NOT NULL,
-    seller_info TEXT
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT    NOT NULL,
+    currency        TEXT    NOT NULL CHECK (currency IN ('EUR', 'BRL')),
+    cost            TEXT    NOT NULL,
+    channel         TEXT    NOT NULL,
+    seller_info     TEXT,
+    multiple_items  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE physical_donation (

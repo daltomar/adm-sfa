@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use eframe::egui;
 use rusqlite::Connection;
 
@@ -16,6 +18,9 @@ pub struct SettingsView {
     lbl_new_name: String,
     lbl_editing: Option<(i64, String)>,
     lbl_error: Option<String>,
+
+    backup_path_input: Option<String>,
+    backup_status: Option<Result<String, String>>,
 }
 
 impl Default for SettingsView {
@@ -30,6 +35,8 @@ impl Default for SettingsView {
             lbl_new_name: String::new(),
             lbl_editing: None,
             lbl_error: None,
+            backup_path_input: None,
+            backup_status: None,
         }
     }
 }
@@ -39,7 +46,7 @@ impl SettingsView {
         self.needs_reload = true;
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
+    pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         if self.needs_reload {
             match (cat_qry::list(db), docs_qry::list_labels(db)) {
                 (Ok(cats), Ok(lbls)) => {
@@ -65,6 +72,10 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
                 self.show_labels_panel(ui, db);
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
+                self.show_backup_panel(ui, data_dir);
             });
     }
 
@@ -351,6 +362,77 @@ impl SettingsView {
             if let Some((_, ref mut d)) = self.lbl_editing {
                 *d = edit_draft;
             }
+        }
+    }
+
+    fn show_backup_panel(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
+        ui.label(egui::RichText::new("Backup").strong());
+        ui.add_space(4.0);
+        ui.weak("Zips the database and all documents into a single archive.");
+        ui.add_space(6.0);
+
+        if ui.button("Backup Now").clicked() {
+            self.backup_status = None;
+            let default_name = format!(
+                "adm-sfa-backup-{}.zip",
+                chrono::Local::now().format("%Y-%m-%d")
+            );
+            let default_path = dirs::download_dir()
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
+                .join(default_name)
+                .to_string_lossy()
+                .into_owned();
+            self.backup_path_input = Some(default_path);
+        }
+
+        let mut save = false;
+        let mut cancel = false;
+        if let Some(ref mut path_str) = self.backup_path_input {
+            ui.group(|ui| {
+                ui.label("Save backup to:");
+                ui.add(egui::TextEdit::singleline(path_str).desired_width(500.0));
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        }
+        if save {
+            let path_str = self
+                .backup_path_input
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let path = std::path::PathBuf::from(&path_str);
+            if path.as_os_str().is_empty() {
+                self.backup_status = Some(Err("Please enter a file path.".to_string()));
+            } else {
+                self.backup_path_input = None;
+                self.backup_status = Some(
+                    crate::backup::backup_to_zip(data_dir, &path)
+                        .map(|()| format!("Saved to {}", path.display()))
+                        .map_err(|e| e.to_string()),
+                );
+            }
+        } else if cancel {
+            self.backup_path_input = None;
+        }
+
+        if let Some(status) = &self.backup_status {
+            ui.add_space(4.0);
+            match status {
+                Ok(msg) => {
+                    ui.colored_label(egui::Color32::DARK_GREEN, msg);
+                }
+                Err(msg) => {
+                    ui.colored_label(egui::Color32::RED, format!("Backup failed: {msg}"));
+                }
+            };
         }
     }
 }

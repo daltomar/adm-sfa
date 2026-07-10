@@ -95,7 +95,7 @@ impl eframe::App for App {
             Section::Inventory => self.inventory_view.show(ui, &self.db, &self.data_dir),
             Section::Outbound => self.outbound_view.show(ui, &self.db),
             Section::Reports => self.reports_view.show(ui, &self.db),
-            Section::Settings => self.settings_view.show(ui, &self.db),
+            Section::Settings => self.settings_view.show(ui, &self.db, &self.data_dir),
         });
     }
 }
