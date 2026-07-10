@@ -54,6 +54,114 @@ purchase may be linked to more than one inventory item.
 - Added via `migrations/002_purchase_multiple_items.sql`; `schema.sql`'s
   `purchase` table is kept in sync with this column.
 
+## Pending features (approved, not yet implemented)
+
+Source: `NewFeature-PurchaseStatus.md`. Both reviewed for harmony against
+the current implementation before coding starts.
+
+### Purchase negotiation status
+
+Allows a purchase to be recorded at the moment a negotiation begins (e.g.
+a Kleinanzeigen chat) without committing it to the EUR/BRL ledger until
+the deal is confirmed.
+
+**Design deviates from the source doc**: the source doc puts the new
+status on the *item*. Reviewed against the current implementation and
+resolved: it belongs on **`purchase`**, not `inventory_item`. Reasons:
+(1) `inventory_item.status` is already a closed, unrelated enum
+(`available`/`reserved`/`donated`) — reusing it would collide; (2) the
+EUR/BRL ledger write is already atomic with `purchase` insert/update
+(`src/db/queries/purchases.rs`), not with item creation, so gating the
+ledger write on the *purchase's* lifecycle is the smaller, more localized
+change; (3) inventory item creation already requires a fully-persisted
+purchase to link to (`show_purchase_source` in
+`src/ui/views/inventory.rs`) — under this design that requirement is
+untouched, since inventory items are still only ever created once a
+purchase reaches `bought`.
+
+**Behaviour:**
+- New `purchase.status` (`negotiating` | `bought`). Default `bought`, to
+  preserve today's behavior for the common case of a purchase entered
+  after the fact. A "Start as negotiating" toggle on the purchase form
+  opts into the deferred flow for an in-progress deal.
+- `negotiating`: purchase row is inserted (channel, seller_info, cost,
+  etc. captured as today) but **no** `eur_transaction`/`brl_transaction`
+  row is written.
+- `negotiating → bought`: single status edit; this transition is what
+  triggers the ledger write (mirrors today's insert-time ledger write,
+  just moved to the transition).
+- `bought` is terminal: reverting `bought → negotiating` is out of scope
+  (would require reversing a ledger entry) — disallow in the UI.
+- Dropping a negotiating purchase: no ledger effect (none was ever
+  written). Needs a deletion path — **purchases currently have no delete
+  function; confirm whether "dropped" means a hard delete of the row or
+  a new `dropped` status before implementing.**
+
+**Ledger constraint (non-negotiable, inherited from the source doc):** a
+`negotiating` purchase must not appear in any EUR/BRL ledger total or
+per-donor breakdown. Satisfied for free by this design — no ledger row
+exists until `bought`, so no query changes are needed to keep negotiating
+purchases out of ledger totals or reports.
+
+**Implementation notes / harmony conflicts found:**
+- `purchases::insert` and `purchases::update`
+  (`src/db/queries/purchases.rs:43-116`) currently write the linked
+  ledger row unconditionally, and `update()` deletes+recreates it on
+  every edit. Both need to become conditional on `status`.
+- `show_purchase_source` in `src/ui/views/inventory.rs:491-538` lists
+  purchases from `purchases_qry::list` with no status filter today —
+  needs to exclude `negotiating` purchases from the source picker (you
+  can't create an inventory item against money that isn't committed
+  yet).
+- Open question: the source doc requests a lookup table
+  (`purchase_status`) "for consistency with the first-class-entity
+  convention," but its own text notes the set is closed and not expected
+  to grow — which matches how `purchase.currency` and
+  `inventory_item.status` are already modeled in this codebase (TEXT +
+  CHECK constraint, not a lookup table). Recommend following the
+  existing-codebase convention (CHECK-constrained TEXT) over the source
+  doc's suggestion, for consistency with `status`/`currency` already on
+  these same two tables — confirm before implementing.
+- SPEC.md §3.6 (Purchase) does not yet document this field — needs a
+  matching SPEC.md update once the design above is confirmed and before
+  implementation starts, per this file's "keep SPEC.md, stack-plan.md,
+  and code in sync" rule.
+
+### Native screenshot capture & filing
+
+Source: `NewFeature-PurchaseStatus.md` §3.y. Additive, no design
+conflicts found — mostly new capability, not a change to existing
+behavior.
+
+**Behaviour:** a "Capture screenshot" button on an item/purchase/transfer
+record invokes the OS's native region-select screenshot tool
+(config-driven command per OS, seeded default per detected OS), receives
+the resulting PNG at a controlled temp path, and files it as a labeled
+document via the existing naming convention (SPEC.md §4.2) — same as a
+drag-and-dropped file, just sourced from a screenshot instead of the
+filesystem. Cancel / non-zero exit → no document, no orphan record, a
+neutral "capture cancelled" state.
+
+**Implementation notes / harmony gaps found:**
+- No shared "file an already-on-disk path as a document" helper exists
+  yet — the drag-and-drop flow (commit `28f1c87`) duplicates the
+  generate-filename → copy-to-documents → insert-document-row sequence
+  inline in `purchases.rs`, `transfers.rs`, and `inventory.rs`. This
+  feature would be a 4th call site — worth extracting a shared helper
+  (e.g. in `docs_fs.rs`) at that point rather than duplicating a 4th
+  time.
+- No generic settings/config table exists (only `category` and
+  `document_label` are DB-backed config today). Per-OS capture command
+  strings and a default label need new schema — not yet in SPEC.md.
+- `std::process::Command` is not used anywhere in this codebase yet —
+  this is a new capability with no established error-handling/platform-
+  dispatch pattern to follow; needs one designed (missing-tool vs.
+  non-zero-exit vs. user-cancel all need distinct, clear handling per the
+  source doc's constraints).
+- `src/ui/widgets/document_panel.rs` is currently a dead stub (never
+  called) — worth checking whether this feature should finally use or
+  replace it, or whether it should be deleted as unused.
+
 ## How to work in this repo
 
 1. On starting a session, read `SPEC.md` and `stack-plan.md` in full before
