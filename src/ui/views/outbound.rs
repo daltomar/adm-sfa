@@ -251,10 +251,16 @@ impl OutboundView {
             if t.is_empty() {
                 Some(Decimal::ZERO)
             } else {
-                t.parse::<Decimal>().ok()
+                crate::money::parse_amount_input(t)
             }
         };
         let cash_ok = cash_amount.is_some();
+        if !cash_ok {
+            ui.colored_label(
+                egui::Color32::RED,
+                "Not a valid amount — use e.g. 12.34 or 12,34",
+            );
+        }
         let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
         let form_ok = !self.draft.date.trim().is_empty()
             && self.draft.recipient_project_id.is_some()

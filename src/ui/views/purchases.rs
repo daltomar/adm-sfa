@@ -240,13 +240,21 @@ impl PurchasesView {
             ui.colored_label(egui::Color32::RED, err);
         }
 
-        let cost_ok = self
-            .draft
-            .cost_str
-            .trim()
-            .parse::<rust_decimal::Decimal>()
+        let cost_text = self.draft.cost_str.trim();
+        let cost_parsed = crate::money::parse_amount_input(cost_text);
+        let cost_ok = cost_parsed
             .map(|d| d > rust_decimal::Decimal::ZERO)
             .unwrap_or(false);
+        if !cost_text.is_empty() {
+            if cost_parsed.is_none() {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    "Not a valid amount — use e.g. 12.34 or 12,34",
+                );
+            } else if !cost_ok {
+                ui.colored_label(egui::Color32::RED, "Cost must be greater than zero");
+            }
+        }
         let form_ok =
             !self.draft.date.trim().is_empty() && !self.draft.channel.trim().is_empty() && cost_ok;
 

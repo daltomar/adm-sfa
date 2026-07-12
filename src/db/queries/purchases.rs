@@ -132,9 +132,9 @@ fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
 }
 
 fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
-    s.trim()
-        .parse::<Decimal>()
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    crate::money::parse_amount_input(s).ok_or_else(|| {
+        rusqlite::Error::ToSqlConversionFailure(format!("invalid amount: {s:?}").into())
+    })
 }
 
 fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {

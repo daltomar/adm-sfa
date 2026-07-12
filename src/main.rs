@@ -3,6 +3,7 @@ mod backup;
 mod db;
 mod docs_fs;
 mod model;
+mod money;
 mod reports;
 mod ui;
 

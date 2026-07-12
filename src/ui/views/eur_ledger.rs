@@ -266,13 +266,19 @@ impl EurLedgerView {
             ui.colored_label(egui::Color32::RED, err);
         }
 
-        let amount_ok = self
-            .draft
-            .amount_str
-            .trim()
-            .parse::<Decimal>()
-            .map(|d| d > Decimal::ZERO)
-            .unwrap_or(false);
+        let amount_text = self.draft.amount_str.trim();
+        let amount_parsed = crate::money::parse_amount_input(amount_text);
+        let amount_ok = amount_parsed.map(|d| d > Decimal::ZERO).unwrap_or(false);
+        if !amount_text.is_empty() {
+            if amount_parsed.is_none() {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    "Not a valid amount — use e.g. 12.34 or 12,34",
+                );
+            } else if !amount_ok {
+                ui.colored_label(egui::Color32::RED, "Amount must be greater than zero");
+            }
+        }
         let form_ok = !self.draft.date.trim().is_empty() && amount_ok;
 
         ui.add_space(12.0);

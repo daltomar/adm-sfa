@@ -194,6 +194,6 @@ fn parse_cash(s: &str) -> Option<Decimal> {
     if t.is_empty() {
         None
     } else {
-        t.parse().ok()
+        crate::money::parse_amount_input(t)
     }
 }

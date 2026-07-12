@@ -213,15 +213,9 @@ impl TransfersView {
                 ui.end_row();
             });
 
-        if let (Ok(eur), Ok(rate)) = (
-            self.draft
-                .eur_amount_sent_str
-                .trim()
-                .parse::<rust_decimal::Decimal>(),
-            self.draft
-                .exchange_rate_str
-                .trim()
-                .parse::<rust_decimal::Decimal>(),
+        if let (Some(eur), Some(rate)) = (
+            crate::money::parse_amount_input(self.draft.eur_amount_sent_str.trim()),
+            crate::money::parse_amount_input(self.draft.exchange_rate_str.trim()),
         ) {
             ui.add_space(4.0);
             ui.label(format!("BRL amount received: R$ {:.2}", eur * rate));
@@ -232,20 +226,36 @@ impl TransfersView {
             ui.colored_label(egui::Color32::RED, err);
         }
 
-        let eur_ok = self
-            .draft
-            .eur_amount_sent_str
-            .trim()
-            .parse::<rust_decimal::Decimal>()
+        let eur_text = self.draft.eur_amount_sent_str.trim();
+        let eur_parsed = crate::money::parse_amount_input(eur_text);
+        let eur_ok = eur_parsed
             .map(|d| d > rust_decimal::Decimal::ZERO)
             .unwrap_or(false);
-        let rate_ok = self
-            .draft
-            .exchange_rate_str
-            .trim()
-            .parse::<rust_decimal::Decimal>()
+        if !eur_text.is_empty() {
+            if eur_parsed.is_none() {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    "EUR amount sent isn't a valid amount — use e.g. 12.34 or 12,34",
+                );
+            } else if !eur_ok {
+                ui.colored_label(egui::Color32::RED, "EUR amount sent must be greater than zero");
+            }
+        }
+        let rate_text = self.draft.exchange_rate_str.trim();
+        let rate_parsed = crate::money::parse_amount_input(rate_text);
+        let rate_ok = rate_parsed
             .map(|d| d > rust_decimal::Decimal::ZERO)
             .unwrap_or(false);
+        if !rate_text.is_empty() {
+            if rate_parsed.is_none() {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    "Exchange rate isn't a valid amount — use e.g. 5.4321 or 5,4321",
+                );
+            } else if !rate_ok {
+                ui.colored_label(egui::Color32::RED, "Exchange rate must be greater than zero");
+            }
+        }
         let form_ok = !self.draft.date.trim().is_empty() && eur_ok && rate_ok;
 
         ui.add_space(12.0);
