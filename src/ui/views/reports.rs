@@ -54,6 +54,7 @@ pub struct ReportsView {
     outbound_rows: Vec<OutboundEventRow>,
     recipient_projects: Vec<RecipientProject>,
     doc_counts: HashMap<(String, i64), i64>,
+    outbound_item_names: HashMap<i64, Vec<String>>,
 }
 
 impl Default for ReportsView {
@@ -78,6 +79,7 @@ impl Default for ReportsView {
             outbound_rows: Vec::new(),
             recipient_projects: Vec::new(),
             doc_counts: HashMap::new(),
+            outbound_item_names: HashMap::new(),
         }
     }
 }
@@ -150,6 +152,7 @@ impl ReportsView {
         self.outbound_rows = outbound_qry::list(db)?;
         self.recipient_projects = outbound_qry::list_recipient_projects(db)?;
         self.doc_counts = documents_qry::counts_by_record(db)?;
+        self.outbound_item_names = outbound_qry::item_names_by_event(db)?;
         Ok(())
     }
 
@@ -930,70 +933,133 @@ impl ReportsView {
 
         if filtered.is_empty() {
             ui.weak("No outbound donations in the selected range.");
+        } else {
+            let mut by_recipient: BTreeMap<String, (i64, i64, Decimal)> = BTreeMap::new();
+            for e in &filtered {
+                let entry =
+                    by_recipient
+                        .entry(e.recipient_name.clone())
+                        .or_insert((0, 0, Decimal::ZERO));
+                entry.0 += 1;
+                entry.1 += e.item_count;
+                entry.2 += e.cash_amount_brl.unwrap_or(Decimal::ZERO);
+            }
+
+            ui.label(egui::RichText::new("Per recipient project").italics());
+            TableBuilder::new(ui)
+                .id_salt("outbound_by_recipient_table")
+                .striped(true)
+                .column(Column::auto().at_least(160.0))
+                .column(Column::auto().at_least(80.0))
+                .column(Column::auto().at_least(80.0))
+                .column(Column::remainder().at_least(100.0))
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.strong("Recipient");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Events");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Items");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Cash (R$)");
+                    });
+                })
+                .body(|mut body| {
+                    for (name, (events, items, cash)) in &by_recipient {
+                        body.row(22.0, |mut row| {
+                            row.col(|ui| {
+                                ui.label(name);
+                            });
+                            row.col(|ui| {
+                                ui.label(events.to_string());
+                            });
+                            row.col(|ui| {
+                                ui.label(items.to_string());
+                            });
+                            row.col(|ui| {
+                                ui.label(format!("{:.2}", cash));
+                            });
+                        });
+                    }
+                });
+
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Events").italics());
+            TableBuilder::new(ui)
+                .id_salt("outbound_events_table")
+                .striped(true)
+                .column(Column::auto().at_least(90.0))
+                .column(Column::auto().at_least(140.0))
+                .column(Column::auto().at_least(60.0))
+                .column(Column::remainder().at_least(90.0))
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.strong("Date");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Recipient");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Items");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Cash (R$)");
+                    });
+                })
+                .body(|mut body| {
+                    for e in &filtered {
+                        body.row(22.0, |mut row| {
+                            row.col(|ui| {
+                                ui.label(&e.date);
+                            });
+                            row.col(|ui| {
+                                ui.label(&e.recipient_name);
+                            });
+                            row.col(|ui| {
+                                ui.label(e.item_count.to_string());
+                            });
+                            row.col(|ui| {
+                                let cash = e.cash_amount_brl.unwrap_or(Decimal::ZERO);
+                                ui.label(if cash > Decimal::ZERO {
+                                    format!("{:.2}", cash)
+                                } else {
+                                    "—".to_string()
+                                });
+                            });
+                        });
+                    }
+                });
+        }
+
+        self.show_outbound_history(ui);
+    }
+
+    fn show_outbound_history(&self, ui: &mut egui::Ui) {
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Full outbound history").strong());
+        ui.weak("Every outbound donation ever recorded, oldest first — not affected by the date or recipient filters above.");
+        ui.add_space(6.0);
+
+        if self.outbound_rows.is_empty() {
+            ui.weak("No outbound donations recorded yet.");
             return;
         }
 
-        let mut by_recipient: BTreeMap<String, (i64, i64, Decimal)> = BTreeMap::new();
-        for e in &filtered {
-            let entry =
-                by_recipient
-                    .entry(e.recipient_name.clone())
-                    .or_insert((0, 0, Decimal::ZERO));
-            entry.0 += 1;
-            entry.1 += e.item_count;
-            entry.2 += e.cash_amount_brl.unwrap_or(Decimal::ZERO);
-        }
+        let mut events: Vec<&OutboundEventRow> = self.outbound_rows.iter().collect();
+        events.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
 
-        ui.label(egui::RichText::new("Per recipient project").italics());
         TableBuilder::new(ui)
-            .id_salt("outbound_by_recipient_table")
-            .striped(true)
-            .column(Column::auto().at_least(160.0))
-            .column(Column::auto().at_least(80.0))
-            .column(Column::auto().at_least(80.0))
-            .column(Column::remainder().at_least(100.0))
-            .header(20.0, |mut header| {
-                header.col(|ui| {
-                    ui.strong("Recipient");
-                });
-                header.col(|ui| {
-                    ui.strong("Events");
-                });
-                header.col(|ui| {
-                    ui.strong("Items");
-                });
-                header.col(|ui| {
-                    ui.strong("Cash (R$)");
-                });
-            })
-            .body(|mut body| {
-                for (name, (events, items, cash)) in &by_recipient {
-                    body.row(22.0, |mut row| {
-                        row.col(|ui| {
-                            ui.label(name);
-                        });
-                        row.col(|ui| {
-                            ui.label(events.to_string());
-                        });
-                        row.col(|ui| {
-                            ui.label(items.to_string());
-                        });
-                        row.col(|ui| {
-                            ui.label(format!("{:.2}", cash));
-                        });
-                    });
-                }
-            });
-
-        ui.add_space(12.0);
-        ui.label(egui::RichText::new("Events").italics());
-        TableBuilder::new(ui)
-            .id_salt("outbound_events_table")
+            .id_salt("outbound_history_table")
             .striped(true)
             .column(Column::auto().at_least(90.0))
             .column(Column::auto().at_least(140.0))
-            .column(Column::auto().at_least(60.0))
-            .column(Column::remainder().at_least(90.0))
+            .column(Column::auto().at_least(80.0))
+            .column(Column::remainder().at_least(160.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
                     ui.strong("Date");
@@ -1002,15 +1068,21 @@ impl ReportsView {
                     ui.strong("Recipient");
                 });
                 header.col(|ui| {
-                    ui.strong("Items");
+                    ui.strong("Cash (R$)");
                 });
                 header.col(|ui| {
-                    ui.strong("Cash (R$)");
+                    ui.strong("Items given");
                 });
             })
             .body(|mut body| {
-                for e in &filtered {
-                    body.row(22.0, |mut row| {
+                for e in events {
+                    let cash = e.cash_amount_brl.unwrap_or(Decimal::ZERO);
+                    let items = self
+                        .outbound_item_names
+                        .get(&e.id)
+                        .map(|names| names.join(", "))
+                        .unwrap_or_default();
+                    body.row(18.0, |mut row| {
                         row.col(|ui| {
                             ui.label(&e.date);
                         });
@@ -1018,15 +1090,12 @@ impl ReportsView {
                             ui.label(&e.recipient_name);
                         });
                         row.col(|ui| {
-                            ui.label(e.item_count.to_string());
+                            if cash > Decimal::ZERO {
+                                ui.label(format!("{:.2}", cash));
+                            }
                         });
                         row.col(|ui| {
-                            let cash = e.cash_amount_brl.unwrap_or(Decimal::ZERO);
-                            ui.label(if cash > Decimal::ZERO {
-                                format!("{:.2}", cash)
-                            } else {
-                                "—".to_string()
-                            });
+                            ui.label(items);
                         });
                     });
                 }

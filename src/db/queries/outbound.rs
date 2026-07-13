@@ -3,6 +3,7 @@ use crate::model::outbound::{
 };
 use rusqlite::{params, Connection, Result};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 pub fn list_recipient_projects(conn: &Connection) -> Result<Vec<RecipientProject>> {
@@ -87,6 +88,27 @@ pub fn item_ids_for_event(conn: &Connection, event_id: i64) -> Result<Vec<i64>> 
         .query_map([event_id], |row| row.get::<_, i64>(0))?
         .collect::<Result<Vec<_>>>()?;
     Ok(ids)
+}
+
+/// Item names given per outbound event, for reports — avoids an N+1 query
+/// per event compared to calling `item_ids_for_event` in a loop.
+pub fn item_names_by_event(conn: &Connection) -> Result<HashMap<i64, Vec<String>>> {
+    let mut stmt = conn.prepare(
+        "SELECT oei.outbound_event_id, i.name
+           FROM outbound_event_item oei
+           JOIN inventory_item i ON i.id = oei.inventory_item_id
+          ORDER BY oei.outbound_event_id, i.name COLLATE NOCASE",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    let mut map: HashMap<i64, Vec<String>> = HashMap::new();
+    for (event_id, name) in rows {
+        map.entry(event_id).or_default().push(name);
+    }
+    Ok(map)
 }
 
 pub fn insert(conn: &Connection, draft: &OutboundEventDraft, item_ids: &[i64]) -> Result<i64> {
