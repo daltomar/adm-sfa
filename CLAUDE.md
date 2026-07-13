@@ -28,10 +28,10 @@ there.
   source of truth for tech choices.
 - **Implementation: substantially complete.** All SPEC.md sections are
   implemented: Donors, EUR Ledger, BRL Ledger, Purchases (including the
-  `multiple_items` flag — see below), Transfers, Inventory, Outbound,
-  Reports (on-screen + CSV export + PDF export via `typst-as-lib`,
-  fallback path per `stack-plan.md` risk note — no `typst-bake`), Settings
-  (category + document label CRUD).
+  `multiple_items` flag and negotiation `status` — see below), Transfers,
+  Inventory, Outbound, Reports (on-screen + CSV export + PDF export via
+  `typst-as-lib`, fallback path per `stack-plan.md` risk note — no
+  `typst-bake`), Settings (category + document label CRUD).
 - **Known gap:** the manual "backup now" button required by `SPEC.md §2`
   is not wired up. `src/backup.rs::backup_to_zip` is fully implemented
   (zips the data dir to a dest path) but is currently `#[allow(dead_code)]`
@@ -54,85 +54,50 @@ purchase may be linked to more than one inventory item.
 - Added via `migrations/002_purchase_multiple_items.sql`; `schema.sql`'s
   `purchase` table is kept in sync with this column.
 
+## Purchase negotiation status (implemented)
+
+A purchase can be recorded as `negotiating` to capture an in-progress
+deal (e.g. an active Kleinanzeigen chat) without committing it to the
+EUR/BRL ledger until confirmed. Status lives on **`purchase`**, not
+`inventory_item` — `inventory_item.status` is a separate, unrelated
+closed enum (`available`/`reserved`/`donated`), and the ledger write was
+already atomic with `purchase` insert/update, so gating it on the
+purchase's own lifecycle was the smaller, more localized change.
+
+- `purchase.status` (`negotiating` | `bought`), CHECK-constrained TEXT,
+  default `bought` — preserves prior behavior for the common
+  buy-outright case. Added via
+  `migrations/003_purchase_negotiation_status.sql`; `schema.sql` kept in
+  sync. A "Start as negotiating" checkbox on the purchase form
+  (`src/ui/views/purchases.rs`) opts into the deferred flow.
+- `negotiating`: purchase row inserted, **no** ledger row written
+  (`purchases::insert`/`update` in `src/db/queries/purchases.rs` gate
+  the `eur_transaction`/`brl_transaction` insert on `status`). No
+  inventory item can be created against it — `show_purchase_source` in
+  `src/ui/views/inventory.rs` excludes negotiating purchases from the
+  source picker entirely, not just greys them out.
+- `negotiating → bought`: a dedicated "Mark as bought" button
+  (`src/ui/views/purchases.rs`) triggers the first-ever ledger write.
+  `bought` is terminal — `purchases::update` fetches the row's current
+  status and forces it to stay `bought` even if a stale draft claims
+  otherwise, so it can never revert.
+- Dropping a negotiating purchase hard-deletes the row —
+  `purchases::delete` scopes the `DELETE` to `status = 'negotiating'` in
+  the query itself, the codebase's only record-level hard-delete. Any
+  documents already attached are soft-deleted first
+  (`drop_negotiating_purchase` in `src/ui/views/purchases.rs`), never
+  orphaned or hard-deleted alongside the purchase row. Documented as the
+  explicit §2 exception in SPEC.md §3.6.
+- Ledger totals and per-donor reports need no query changes: a
+  negotiating purchase never has a ledger row, so it's excluded
+  automatically.
+- 8 DB-layer tests in `src/db/queries/purchases.rs` cover the full
+  status lifecycle (including a regression test for the pre-existing
+  bought-edit-recreates-ledger behavior); a migration-chain test in
+  `src/db/mod.rs` confirms the new column applies cleanly through the
+  real `rusqlite_migration` path.
+
 ## Pending features (approved, not yet implemented)
-
-Source: `NewFeature-PurchaseStatus.md`. Both reviewed for harmony against
-the current implementation before coding starts.
-
-### Purchase negotiation status
-
-Allows a purchase to be recorded at the moment a negotiation begins (e.g.
-a Kleinanzeigen chat) without committing it to the EUR/BRL ledger until
-the deal is confirmed.
-
-**Design deviates from the source doc**: the source doc puts the new
-status on the *item*. Reviewed against the current implementation and
-resolved: it belongs on **`purchase`**, not `inventory_item`. Reasons:
-(1) `inventory_item.status` is already a closed, unrelated enum
-(`available`/`reserved`/`donated`) — reusing it would collide; (2) the
-EUR/BRL ledger write is already atomic with `purchase` insert/update
-(`src/db/queries/purchases.rs`), not with item creation, so gating the
-ledger write on the *purchase's* lifecycle is the smaller, more localized
-change; (3) inventory item creation already requires a fully-persisted
-purchase to link to (`show_purchase_source` in
-`src/ui/views/inventory.rs`) — under this design that requirement is
-untouched, since inventory items are still only ever created once a
-purchase reaches `bought`.
-
-**Behaviour:**
-- New `purchase.status` (`negotiating` | `bought`). Default `bought`, to
-  preserve today's behavior for the common case of a purchase entered
-  after the fact. A "Start as negotiating" toggle on the purchase form
-  opts into the deferred flow for an in-progress deal.
-- `negotiating`: purchase row is inserted (channel, seller_info, cost,
-  etc. captured as today) but **no** `eur_transaction`/`brl_transaction`
-  row is written.
-- `negotiating → bought`: single status edit; this transition is what
-  triggers the ledger write (mirrors today's insert-time ledger write,
-  just moved to the transition).
-- `bought` is terminal: reverting `bought → negotiating` is out of scope
-  (would require reversing a ledger entry) — disallow in the UI.
-- Dropping a negotiating purchase: hard-delete the *purchase row only*.
-  Resolved — safe because a negotiating purchase never wrote a ledger
-  entry or created an inventory item, so there is no auditable
-  financial/inventory state to preserve. This is the codebase's first
-  and only record-level delete; keep it narrowly scoped to
-  `status = negotiating` (guard the query so a `bought` purchase can
-  never hit this path). Documented as the explicit §2 exception in
-  SPEC.md §3.6. **Documents attached to the purchase are a separate
-  concern**: they must go through the normal document soft-delete path
-  first, not be hard-deleted or left orphaned (`document.record_id` is a
-  bare `INTEGER`, not an FK — nothing at the DB level stops an orphan) —
-  the implementation must soft-delete or reject-if-any-attached before
-  hard-deleting the purchase row itself.
-
-**Ledger constraint (non-negotiable, inherited from the source doc):** a
-`negotiating` purchase must not appear in any EUR/BRL ledger total or
-per-donor breakdown. Satisfied for free by this design — no ledger row
-exists until `bought`, so no query changes are needed to keep negotiating
-purchases out of ledger totals or reports.
-
-**Implementation notes / harmony conflicts found:**
-- `purchases::insert` and `purchases::update`
-  (`src/db/queries/purchases.rs:43-116`) currently write the linked
-  ledger row unconditionally, and `update()` deletes+recreates it on
-  every edit. Both need to become conditional on `status`.
-- `show_purchase_source` in `src/ui/views/inventory.rs:491-538` lists
-  purchases from `purchases_qry::list` with no status filter today —
-  needs to exclude `negotiating` purchases from the source picker (you
-  can't create an inventory item against money that isn't committed
-  yet).
-- Resolved: `purchase.status` is CHECK-constrained TEXT
-  (`CHECK (status IN ('negotiating','bought'))`), matching
-  `purchase.currency` and `inventory_item.status` already on these
-  tables. The source doc's `item_status`/`purchase_status` lookup-table
-  suggestion is intentionally overridden — the set is closed and not
-  expected to grow, so the first-class-entity convention (which exists
-  to allow user-added rows: donors, projects, categories, labels) does
-  not apply here.
-- SPEC.md §3.6 updated to document `status` (and the previously-
-  undocumented `multiple_items`), with the negotiation lifecycle note
-  and the §2 hard-delete exception. In sync.
 
 ### Native screenshot capture & filing
 
