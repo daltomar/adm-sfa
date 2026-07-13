@@ -459,6 +459,91 @@ impl ReportsView {
         ui.label(format!("Starting balance: € {:.2}", starting_balance));
         ui.label(format!("Net for period: € {:.2}", net));
         ui.label(egui::RichText::new(format!("Ending balance: € {:.2}", ending_balance)).strong());
+
+        self.show_eur_running_ledger(ui);
+    }
+
+    fn show_eur_running_ledger(&self, ui: &mut egui::Ui) {
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Full transaction history").strong());
+        ui.weak("Every EUR transaction ever recorded, oldest first — not affected by the date filter above.");
+        ui.add_space(6.0);
+
+        let mut rows: Vec<&EurTxRow> = self.eur_rows.iter().collect();
+        rows.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
+
+        TableBuilder::new(ui)
+            .id_salt("eur_running_ledger_table")
+            .striped(true)
+            .column(Column::auto().at_least(90.0))
+            .column(Column::remainder().at_least(160.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::auto().at_least(90.0))
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong("Date");
+                });
+                header.col(|ui| {
+                    ui.strong("Description");
+                });
+                header.col(|ui| {
+                    ui.strong("Inbound (€)");
+                });
+                header.col(|ui| {
+                    ui.strong("Outbound (€)");
+                });
+                header.col(|ui| {
+                    ui.strong("Balance (€)");
+                });
+            })
+            .body(|mut body| {
+                let mut balance = Decimal::ZERO;
+                body.row(20.0, |mut row| {
+                    row.col(|_| {});
+                    row.col(|ui| {
+                        ui.weak("Initial balance");
+                    });
+                    row.col(|_| {});
+                    row.col(|_| {});
+                    row.col(|ui| {
+                        ui.label(format!("{:.2}", balance));
+                    });
+                });
+                for r in rows {
+                    let description = eur_tx_description(r);
+                    let (inbound, outbound) = if r.tx_type.is_inflow() {
+                        balance += r.amount;
+                        (Some(r.amount), None)
+                    } else {
+                        balance -= r.amount;
+                        (None, Some(r.amount))
+                    };
+                    body.row(18.0, |mut row| {
+                        row.col(|ui| {
+                            ui.label(&r.date);
+                        });
+                        row.col(|ui| {
+                            ui.label(&description);
+                        });
+                        row.col(|ui| {
+                            if let Some(v) = inbound {
+                                ui.label(format!("{:.2}", v));
+                            }
+                        });
+                        row.col(|ui| {
+                            if let Some(v) = outbound {
+                                ui.label(format!("{:.2}", v));
+                            }
+                        });
+                        row.col(|ui| {
+                            ui.label(format!("{:.2}", balance));
+                        });
+                    });
+                }
+            });
     }
 
     fn show_brl_summary(&self, ui: &mut egui::Ui) {
@@ -529,6 +614,91 @@ impl ReportsView {
         ui.label(format!("Starting balance: R$ {:.2}", starting_balance));
         ui.label(format!("Net for period: R$ {:.2}", net));
         ui.label(egui::RichText::new(format!("Ending balance: R$ {:.2}", ending_balance)).strong());
+
+        self.show_brl_running_ledger(ui);
+    }
+
+    fn show_brl_running_ledger(&self, ui: &mut egui::Ui) {
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Full transaction history").strong());
+        ui.weak("Every BRL transaction ever recorded, oldest first — not affected by the date filter above.");
+        ui.add_space(6.0);
+
+        let mut rows: Vec<&BrlTxRow> = self.brl_rows.iter().collect();
+        rows.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
+
+        TableBuilder::new(ui)
+            .id_salt("brl_running_ledger_table")
+            .striped(true)
+            .column(Column::auto().at_least(90.0))
+            .column(Column::remainder().at_least(160.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::auto().at_least(90.0))
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong("Date");
+                });
+                header.col(|ui| {
+                    ui.strong("Description");
+                });
+                header.col(|ui| {
+                    ui.strong("Inbound (R$)");
+                });
+                header.col(|ui| {
+                    ui.strong("Outbound (R$)");
+                });
+                header.col(|ui| {
+                    ui.strong("Balance (R$)");
+                });
+            })
+            .body(|mut body| {
+                let mut balance = Decimal::ZERO;
+                body.row(20.0, |mut row| {
+                    row.col(|_| {});
+                    row.col(|ui| {
+                        ui.weak("Initial balance");
+                    });
+                    row.col(|_| {});
+                    row.col(|_| {});
+                    row.col(|ui| {
+                        ui.label(format!("{:.2}", balance));
+                    });
+                });
+                for r in rows {
+                    let description = brl_tx_description(r);
+                    let (inbound, outbound) = if r.tx_type.is_inflow() {
+                        balance += r.amount;
+                        (Some(r.amount), None)
+                    } else {
+                        balance -= r.amount;
+                        (None, Some(r.amount))
+                    };
+                    body.row(18.0, |mut row| {
+                        row.col(|ui| {
+                            ui.label(&r.date);
+                        });
+                        row.col(|ui| {
+                            ui.label(&description);
+                        });
+                        row.col(|ui| {
+                            if let Some(v) = inbound {
+                                ui.label(format!("{:.2}", v));
+                            }
+                        });
+                        row.col(|ui| {
+                            if let Some(v) = outbound {
+                                ui.label(format!("{:.2}", v));
+                            }
+                        });
+                        row.col(|ui| {
+                            ui.label(format!("{:.2}", balance));
+                        });
+                    });
+                }
+            });
     }
 
     fn show_inventory_summary(&self, ui: &mut egui::Ui) {
@@ -897,15 +1067,7 @@ impl ReportsView {
             .iter()
             .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
             .map(|r| {
-                let description = match r.tx_type {
-                    EurTxType::DonationIn => r
-                        .donor_name
-                        .clone()
-                        .unwrap_or_else(|| "Anonymous".to_string()),
-                    EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
-                    EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-                    EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
-                };
+                let description = eur_tx_description(r);
                 let sign = if r.tx_type.is_inflow() { "" } else { "-" };
                 vec![
                     r.date.clone(),
@@ -928,11 +1090,7 @@ impl ReportsView {
             .iter()
             .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
             .map(|r| {
-                let description = match r.tx_type {
-                    BrlTxType::TransferIn => "EUR→BRL transfer".to_string(),
-                    BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-                    BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
-                };
+                let description = brl_tx_description(r);
                 let sign = if r.tx_type.is_inflow() { "" } else { "-" };
                 vec![
                     r.date.clone(),
@@ -1073,15 +1231,7 @@ impl ReportsView {
                     .unwrap_or(0),
                 _ => 0,
             };
-            let description = match r.tx_type {
-                EurTxType::DonationIn => r
-                    .donor_name
-                    .clone()
-                    .unwrap_or_else(|| "Anonymous".to_string()),
-                EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
-                EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-                EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
-            };
+            let description = eur_tx_description(r);
             let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
             entries.push(AuditEntry {
                 date: r.date.clone(),
@@ -1119,11 +1269,7 @@ impl ReportsView {
                     .unwrap_or(0),
                 BrlTxType::CashGiftOut => 0,
             };
-            let description = match r.tx_type {
-                BrlTxType::TransferIn => "EUR→BRL transfer".to_string(),
-                BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-                BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
-            };
+            let description = brl_tx_description(r);
             let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
             entries.push(AuditEntry {
                 date: r.date.clone(),
@@ -1167,4 +1313,24 @@ impl ReportsView {
 
 fn in_range(date: &str, from: &str, to: &str) -> bool {
     (from.is_empty() || date >= from) && (to.is_empty() || date <= to)
+}
+
+fn eur_tx_description(r: &EurTxRow) -> String {
+    match r.tx_type {
+        EurTxType::DonationIn => r
+            .donor_name
+            .clone()
+            .unwrap_or_else(|| "Anonymous".to_string()),
+        EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
+        EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
+        EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
+    }
+}
+
+fn brl_tx_description(r: &BrlTxRow) -> String {
+    match r.tx_type {
+        BrlTxType::TransferIn => "EUR→BRL transfer".to_string(),
+        BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
+        BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
+    }
 }
