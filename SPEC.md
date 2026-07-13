@@ -14,6 +14,7 @@ The application must support: full traceability of every euro and every real fro
 - File-on-disk storage for all documents and photos, referenced by path from the database — keeps the database small and the whole project backup-able as one folder.
 - Nothing is ever silently deleted. Document removal is a soft-delete (moved to an archive folder), preserving the audit trail — the sole exception is dropping a still-negotiating purchase, which has no ledger or inventory footprint (see §3.6).
 - Currency conversion happens at exactly one point: the annual EUR→BRL transfer, where the rate is entered manually. EUR and BRL are otherwise independent ledgers.
+- Money amounts are typed as free text and parsed leniently: either a comma or a period works as the decimal separator (not both together — an amount like "1.234,56" is rejected rather than guessed at), and a leading currency symbol (R$, €, $) is stripped if present — matching how amounts are naturally typed across this app's EUR/BRL, German/Brazilian context. Text that still doesn't parse as a number is rejected with a visible error, not a silently-disabled form.
 - No hardcoded purchase channels — Kleinanzeigen is the common case but the model supports any channel via a generic structured note field.
 - Recipient projects, donors, and item categories are first-class, reusable entities, not free text, so they can be reported on.
 
