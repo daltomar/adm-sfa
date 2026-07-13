@@ -341,45 +341,175 @@ impl ReportsView {
 
         if rows.is_empty() {
             ui.weak("No donor activity in the selected date range.");
+        } else {
+            TableBuilder::new(ui)
+                .id_salt("donor_breakdown_table")
+                .striped(true)
+                .column(Column::auto().at_least(160.0))
+                .column(Column::auto().at_least(110.0))
+                .column(Column::auto().at_least(110.0))
+                .column(Column::remainder().at_least(130.0))
+                .header(20.0, |mut header| {
+                    header.col(|ui| {
+                        ui.strong("Donor");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Cash donations");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Cash total (€)");
+                    });
+                    header.col(|ui| {
+                        ui.strong("Physical donations");
+                    });
+                })
+                .body(|mut body| {
+                    for r in &rows {
+                        body.row(22.0, |mut row| {
+                            row.col(|ui| {
+                                ui.label(&r.name);
+                            });
+                            row.col(|ui| {
+                                ui.label(r.cash_count.to_string());
+                            });
+                            row.col(|ui| {
+                                ui.label(format!("{:.2}", r.cash_total));
+                            });
+                            row.col(|ui| {
+                                ui.label(r.item_count.to_string());
+                            });
+                        });
+                    }
+                });
+        }
+
+        self.show_donor_activity_log(ui);
+    }
+
+    fn show_donor_activity_log(&self, ui: &mut egui::Ui) {
+        enum DonorLogRow {
+            Cash {
+                date: String,
+                donor: String,
+                amount: Decimal,
+            },
+            Physical {
+                date: String,
+                donor: String,
+                items: String,
+            },
+        }
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Full contribution history").strong());
+        ui.weak(
+            "Every donation ever recorded, oldest first — not affected by the date filter above.",
+        );
+        ui.add_space(6.0);
+
+        let mut log: Vec<DonorLogRow> = Vec::new();
+
+        for r in self
+            .eur_rows
+            .iter()
+            .filter(|r| r.tx_type == EurTxType::DonationIn)
+        {
+            log.push(DonorLogRow::Cash {
+                date: r.date.clone(),
+                donor: donor_or_anonymous(&r.donor_name),
+                amount: r.amount,
+            });
+        }
+
+        for d in &self.donations {
+            let items: Vec<String> = self
+                .inventory_rows
+                .iter()
+                .filter(|i| i.source_donation_id == Some(d.id))
+                .map(|i| i.name.clone())
+                .collect();
+            log.push(DonorLogRow::Physical {
+                date: d.date_received.clone(),
+                donor: donor_or_anonymous(&d.donor_name),
+                items: items.join(", "),
+            });
+        }
+
+        if log.is_empty() {
+            ui.weak("No donations recorded yet.");
             return;
         }
 
+        // No cross-table "registration order" tiebreak exists here (cash
+        // and physical rows come from separate tables with independent id
+        // sequences) — same-date ties just put cash rows first, a simple
+        // deterministic rule rather than a claimed ordering guarantee.
+        log.sort_by(|a, b| {
+            let (date_a, rank_a) = match a {
+                DonorLogRow::Cash { date, .. } => (date, 0),
+                DonorLogRow::Physical { date, .. } => (date, 1),
+            };
+            let (date_b, rank_b) = match b {
+                DonorLogRow::Cash { date, .. } => (date, 0),
+                DonorLogRow::Physical { date, .. } => (date, 1),
+            };
+            date_a.cmp(date_b).then(rank_a.cmp(&rank_b))
+        });
+
         TableBuilder::new(ui)
-            .id_salt("donor_breakdown_table")
+            .id_salt("donor_activity_log_table")
             .striped(true)
-            .column(Column::auto().at_least(160.0))
-            .column(Column::auto().at_least(110.0))
-            .column(Column::auto().at_least(110.0))
-            .column(Column::remainder().at_least(130.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::auto().at_least(140.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::remainder().at_least(160.0))
             .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong("Date");
+                });
                 header.col(|ui| {
                     ui.strong("Donor");
                 });
                 header.col(|ui| {
-                    ui.strong("Cash donations");
+                    ui.strong("Cash (€)");
                 });
                 header.col(|ui| {
-                    ui.strong("Cash total (€)");
-                });
-                header.col(|ui| {
-                    ui.strong("Physical donations");
+                    ui.strong("Physical items");
                 });
             })
             .body(|mut body| {
-                for r in &rows {
-                    body.row(22.0, |mut row| {
-                        row.col(|ui| {
-                            ui.label(&r.name);
-                        });
-                        row.col(|ui| {
-                            ui.label(r.cash_count.to_string());
-                        });
-                        row.col(|ui| {
-                            ui.label(format!("{:.2}", r.cash_total));
-                        });
-                        row.col(|ui| {
-                            ui.label(r.item_count.to_string());
-                        });
+                for entry in &log {
+                    body.row(18.0, |mut row| match entry {
+                        DonorLogRow::Cash {
+                            date,
+                            donor,
+                            amount,
+                        } => {
+                            row.col(|ui| {
+                                ui.label(date);
+                            });
+                            row.col(|ui| {
+                                ui.label(donor);
+                            });
+                            row.col(|ui| {
+                                ui.label(format!("{:.2}", amount));
+                            });
+                            row.col(|_| {});
+                        }
+                        DonorLogRow::Physical { date, donor, items } => {
+                            row.col(|ui| {
+                                ui.label(date);
+                            });
+                            row.col(|ui| {
+                                ui.label(donor);
+                            });
+                            row.col(|_| {});
+                            row.col(|ui| {
+                                ui.label(items);
+                            });
+                        }
                     });
                 }
             });
@@ -1313,6 +1443,10 @@ impl ReportsView {
 
 fn in_range(date: &str, from: &str, to: &str) -> bool {
     (from.is_empty() || date >= from) && (to.is_empty() || date <= to)
+}
+
+fn donor_or_anonymous(name: &Option<String>) -> String {
+    name.clone().unwrap_or_else(|| "Anonymous".to_string())
 }
 
 fn eur_tx_description(r: &EurTxRow) -> String {
