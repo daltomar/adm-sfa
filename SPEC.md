@@ -12,7 +12,7 @@ The application must support: full traceability of every euro and every real fro
 
 - Single user, single machine — no multi-user sync required.
 - File-on-disk storage for all documents and photos, referenced by path from the database — keeps the database small and the whole project backup-able as one folder.
-- Nothing is ever silently deleted. Document removal is a soft-delete (moved to an archive folder), preserving the audit trail.
+- Nothing is ever silently deleted. Document removal is a soft-delete (moved to an archive folder), preserving the audit trail — the sole exception is dropping a still-negotiating purchase, which has no ledger or inventory footprint (see §3.6).
 - Currency conversion happens at exactly one point: the annual EUR→BRL transfer, where the rate is entered manually. EUR and BRL are otherwise independent ledgers.
 - No hardcoded purchase channels — Kleinanzeigen is the common case but the model supports any channel via a generic structured note field.
 - Recipient projects, donors, and item categories are first-class, reusable entities, not free text, so they can be reported on.
@@ -99,7 +99,11 @@ A generic purchase event in either currency/channel. Always deducts from the rel
 | cost | decimal | In the listed currency |
 | channel | text | Free text, e.g. "Kleinanzeigen", "local supplier" — not a fixed enum |
 | seller_info | text | Generic structured note: name, address, contact, listing details, etc. Same field for all channels. |
+| status | text | `negotiating` \| `bought`. Default `bought`. A negotiating purchase is recorded but writes no ledger row and creates no inventory items until it transitions to `bought`. `bought` is terminal. |
+| multiple_items | boolean | When false (default), the purchase links to exactly one inventory item; when true, multiple items may share it (lot purchases). |
 | documents | Document[] | Ad screenshots, chat screenshots, receipts, nota fiscal — see Section 4 |
+
+**Negotiation status.** A purchase may be entered as `negotiating` to capture an in-progress deal (e.g. an active Kleinanzeigen chat) without committing it to the ledger. No EUR/BRL cash transaction is written and no inventory item may be created against it while negotiating. Confirming the deal is a single edit to `bought`, which triggers the ledger write. Reverting `bought → negotiating` is out of scope (it would require reversing a ledger entry). Dropping a negotiating purchase hard-deletes the *purchase row only* — safe only because a negotiating purchase has never touched the ledger or inventory; this is the single deliberate exception to §2's soft-delete principle, permitted precisely because no auditable financial or inventory state exists yet. Any documents already attached to the purchase (ad/chat screenshots) are **not** hard-deleted or orphaned alongside it: they go through the normal document soft-delete path (§4.5) first, same as removing a document from any other record.
 
 ### 3.7 Recipient project
 

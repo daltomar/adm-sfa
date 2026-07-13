@@ -92,10 +92,19 @@ purchase reaches `bought`.
   just moved to the transition).
 - `bought` is terminal: reverting `bought → negotiating` is out of scope
   (would require reversing a ledger entry) — disallow in the UI.
-- Dropping a negotiating purchase: no ledger effect (none was ever
-  written). Needs a deletion path — **purchases currently have no delete
-  function; confirm whether "dropped" means a hard delete of the row or
-  a new `dropped` status before implementing.**
+- Dropping a negotiating purchase: hard-delete the *purchase row only*.
+  Resolved — safe because a negotiating purchase never wrote a ledger
+  entry or created an inventory item, so there is no auditable
+  financial/inventory state to preserve. This is the codebase's first
+  and only record-level delete; keep it narrowly scoped to
+  `status = negotiating` (guard the query so a `bought` purchase can
+  never hit this path). Documented as the explicit §2 exception in
+  SPEC.md §3.6. **Documents attached to the purchase are a separate
+  concern**: they must go through the normal document soft-delete path
+  first, not be hard-deleted or left orphaned (`document.record_id` is a
+  bare `INTEGER`, not an FK — nothing at the DB level stops an orphan) —
+  the implementation must soft-delete or reject-if-any-attached before
+  hard-deleting the purchase row itself.
 
 **Ledger constraint (non-negotiable, inherited from the source doc):** a
 `negotiating` purchase must not appear in any EUR/BRL ledger total or
@@ -113,19 +122,17 @@ purchases out of ledger totals or reports.
   needs to exclude `negotiating` purchases from the source picker (you
   can't create an inventory item against money that isn't committed
   yet).
-- Open question: the source doc requests a lookup table
-  (`purchase_status`) "for consistency with the first-class-entity
-  convention," but its own text notes the set is closed and not expected
-  to grow — which matches how `purchase.currency` and
-  `inventory_item.status` are already modeled in this codebase (TEXT +
-  CHECK constraint, not a lookup table). Recommend following the
-  existing-codebase convention (CHECK-constrained TEXT) over the source
-  doc's suggestion, for consistency with `status`/`currency` already on
-  these same two tables — confirm before implementing.
-- SPEC.md §3.6 (Purchase) does not yet document this field — needs a
-  matching SPEC.md update once the design above is confirmed and before
-  implementation starts, per this file's "keep SPEC.md, stack-plan.md,
-  and code in sync" rule.
+- Resolved: `purchase.status` is CHECK-constrained TEXT
+  (`CHECK (status IN ('negotiating','bought'))`), matching
+  `purchase.currency` and `inventory_item.status` already on these
+  tables. The source doc's `item_status`/`purchase_status` lookup-table
+  suggestion is intentionally overridden — the set is closed and not
+  expected to grow, so the first-class-entity convention (which exists
+  to allow user-added rows: donors, projects, categories, labels) does
+  not apply here.
+- SPEC.md §3.6 updated to document `status` (and the previously-
+  undocumented `multiple_items`), with the negotiation lifecycle note
+  and the §2 hard-delete exception. In sync.
 
 ### Native screenshot capture & filing
 
