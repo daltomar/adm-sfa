@@ -262,10 +262,26 @@ impl OutboundView {
             );
         }
         let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
-        let form_ok = !self.draft.date.trim().is_empty()
-            && self.draft.recipient_project_id.is_some()
-            && cash_ok
-            && (has_cash || !self.selected_item_ids.is_empty());
+        let date_ok = !self.draft.date.trim().is_empty();
+        let recipient_ok = self.draft.recipient_project_id.is_some();
+        let gift_ok = has_cash || !self.selected_item_ids.is_empty();
+        let form_ok = date_ok && recipient_ok && cash_ok && gift_ok;
+
+        if !date_ok {
+            ui.colored_label(egui::Color32::RED, "Date is required");
+        }
+        if !recipient_ok {
+            ui.colored_label(
+                egui::Color32::RED,
+                "Select a recipient project above (or create one with \"+ New recipient project\")",
+            );
+        }
+        if cash_ok && !gift_ok {
+            ui.colored_label(
+                egui::Color32::RED,
+                "Enter a cash gift amount or select at least one item below",
+            );
+        }
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
