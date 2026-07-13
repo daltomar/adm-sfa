@@ -35,7 +35,8 @@ CREATE TABLE purchase (
     cost            TEXT    NOT NULL,
     channel         TEXT    NOT NULL,
     seller_info     TEXT,
-    multiple_items  INTEGER NOT NULL DEFAULT 0
+    multiple_items  INTEGER NOT NULL DEFAULT 0,
+    status          TEXT    NOT NULL DEFAULT 'bought' CHECK (status IN ('negotiating', 'bought'))
 );
 
 CREATE TABLE physical_donation (

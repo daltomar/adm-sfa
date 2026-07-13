@@ -13,7 +13,7 @@ use crate::model::donor::{PhysicalDonation, PhysicalDonationDraft};
 use crate::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
-use crate::model::purchase::Purchase;
+use crate::model::purchase::{Purchase, PurchaseStatus};
 
 enum Mode {
     List,
@@ -489,7 +489,17 @@ impl InventoryView {
     }
 
     fn show_purchase_source(&mut self, ui: &mut egui::Ui) {
-        if self.purchases.is_empty() {
+        // Negotiating purchases haven't committed any money yet, so no
+        // inventory item may be created against them — exclude entirely,
+        // not just grey out (see CLAUDE.md "Purchase negotiation status").
+        let purchases: Vec<Purchase> = self
+            .purchases
+            .iter()
+            .filter(|p| p.status == PurchaseStatus::Bought)
+            .cloned()
+            .collect();
+
+        if purchases.is_empty() {
             ui.weak("No purchases yet — add one in the Purchases section first.");
             return;
         }
@@ -502,14 +512,9 @@ impl InventoryView {
             .iter()
             .filter(|item| edit_id != Some(item.id))
             .filter_map(|item| item.source_purchase_id)
-            .filter(|&pid| {
-                self.purchases
-                    .iter()
-                    .any(|p| p.id == pid && !p.multiple_items)
-            })
+            .filter(|&pid| purchases.iter().any(|p| p.id == pid && !p.multiple_items))
             .collect();
 
-        let purchases = self.purchases.clone();
         let selected_label = self
             .draft
             .source_purchase_id

@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct Document {
     pub id: i64,
     pub filename: String,

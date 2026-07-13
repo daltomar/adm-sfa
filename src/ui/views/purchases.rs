@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::db::queries::{documents as docs_qry, purchases as qry};
 use crate::docs_fs;
 use crate::model::document::Document;
-use crate::model::purchase::{Currency, Purchase, PurchaseDraft};
+use crate::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
 
 enum Mode {
     List,
@@ -30,6 +30,7 @@ pub struct PurchasesView {
     docs_needs_reload: bool,
     pending_doc: Option<PendingAttachment>,
     path_input: Option<String>,
+    confirm_drop: bool,
 }
 
 impl Default for PurchasesView {
@@ -45,6 +46,7 @@ impl Default for PurchasesView {
             docs_needs_reload: false,
             pending_doc: None,
             path_input: None,
+            confirm_drop: false,
         }
     }
 }
@@ -98,7 +100,7 @@ impl PurchasesView {
                     ui.weak("Select a purchase, or add a new one.");
                 }
                 Mode::Adding | Mode::Editing(_) => {
-                    self.show_form(ui, db);
+                    self.show_form(ui, db, data_dir);
                     if matches!(self.mode, Mode::Editing(_)) {
                         ui.add_space(16.0);
                         ui.separator();
@@ -119,6 +121,7 @@ impl PurchasesView {
             self.docs = Vec::new();
             self.pending_doc = None;
             self.path_input = None;
+            self.confirm_drop = false;
         }
 
         ui.separator();
@@ -139,13 +142,18 @@ impl PurchasesView {
                     let p = &self.purchases[i];
                     let id = p.id;
                     let multi = if p.multiple_items { "  [multi]" } else { "" };
+                    let status_tag = match p.status {
+                        PurchaseStatus::Negotiating => "  [negotiating]",
+                        PurchaseStatus::Bought => "",
+                    };
                     let row = format!(
-                        "{}  {}  {} {:.2}{}",
+                        "{}  {}  {} {:.2}{}{}",
                         p.date,
                         p.channel,
                         p.currency.symbol(),
                         p.cost,
-                        multi
+                        multi,
+                        status_tag
                     );
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
                     if ui.selectable_label(selected, &row).clicked() {
@@ -156,18 +164,20 @@ impl PurchasesView {
                             channel: self.purchases[i].channel.clone(),
                             seller_info: self.purchases[i].seller_info.clone().unwrap_or_default(),
                             multiple_items: self.purchases[i].multiple_items,
+                            status: self.purchases[i].status,
                         };
                         self.mode = Mode::Editing(id);
                         self.error = None;
                         self.docs_needs_reload = true;
                         self.pending_doc = None;
                         self.path_input = None;
+                        self.confirm_drop = false;
                     }
                 }
             });
     }
 
-    fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection) {
+    fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         let is_adding = matches!(self.mode, Mode::Adding);
         let edit_id: Option<i64> = if let Mode::Editing(id) = self.mode {
             Some(id)
@@ -232,6 +242,26 @@ impl PurchasesView {
                     &mut self.draft.multiple_items,
                     "This purchase covers more than one inventory item",
                 );
+                ui.end_row();
+
+                ui.label("Status");
+                if is_adding {
+                    let mut negotiating = self.draft.status == PurchaseStatus::Negotiating;
+                    ui.checkbox(
+                        &mut negotiating,
+                        "Start as negotiating — no ledger entry until marked bought",
+                    );
+                    self.draft.status = if negotiating {
+                        PurchaseStatus::Negotiating
+                    } else {
+                        PurchaseStatus::Bought
+                    };
+                } else {
+                    ui.label(match self.draft.status {
+                        PurchaseStatus::Negotiating => "Negotiating",
+                        PurchaseStatus::Bought => "Bought",
+                    });
+                }
                 ui.end_row();
             });
 
@@ -307,8 +337,85 @@ impl PurchasesView {
                 self.error = None;
                 self.pending_doc = None;
                 self.path_input = None;
+                self.confirm_drop = false;
             }
         });
+
+        if !is_adding && self.draft.status == PurchaseStatus::Negotiating {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(form_ok, egui::Button::new("Mark as bought"))
+                    .clicked()
+                {
+                    if let Some(id) = edit_id {
+                        let mut bought_draft = self.draft.clone();
+                        bought_draft.status = PurchaseStatus::Bought;
+                        match qry::update(db, id, &bought_draft) {
+                            Ok(()) => {
+                                self.draft.status = PurchaseStatus::Bought;
+                                self.needs_reload = true;
+                                self.error = None;
+                            }
+                            Err(e) => self.error = Some(e.to_string()),
+                        }
+                    }
+                }
+
+                if self.confirm_drop {
+                    ui.colored_label(egui::Color32::RED, "Delete permanently?");
+                    if ui.button("Yes, delete").clicked() {
+                        if let Some(id) = edit_id {
+                            self.drop_negotiating_purchase(db, id, data_dir);
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_drop = false;
+                    }
+                } else if ui.button("Drop negotiating purchase").clicked() {
+                    self.confirm_drop = true;
+                }
+            });
+        }
+    }
+
+    /// Hard-deletes a negotiating purchase. Soft-deletes any documents
+    /// already attached to it first — they follow the normal document
+    /// soft-delete path, never orphaned or hard-deleted alongside the
+    /// purchase row (see CLAUDE.md / SPEC.md §3.6).
+    fn drop_negotiating_purchase(&mut self, db: &Connection, id: i64, data_dir: &Path) {
+        let documents_dir = data_dir.join("documents");
+        for doc in self.docs.clone() {
+            if let Err(e) = docs_qry::soft_delete(db, doc.id) {
+                self.error = Some(format!("DB update failed: {e}"));
+                self.confirm_drop = false;
+                // Reload so a retry only re-attempts docs not yet soft-deleted
+                // (list_for_record excludes deleted=1 rows) instead of
+                // re-running fs::rename on a file that's already moved.
+                self.docs_needs_reload = true;
+                return;
+            }
+            if let Err(e) = docs_fs::soft_delete(&documents_dir, &doc.filename) {
+                self.error = Some(format!("File move failed: {e}"));
+                self.confirm_drop = false;
+                self.docs_needs_reload = true;
+                return;
+            }
+        }
+        match qry::delete(db, id) {
+            Ok(()) => {
+                self.mode = Mode::List;
+                self.needs_reload = true;
+                self.docs = Vec::new();
+                self.confirm_drop = false;
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                self.confirm_drop = false;
+                self.docs_needs_reload = true;
+            }
+        }
     }
 
     fn show_documents(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {

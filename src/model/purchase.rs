@@ -30,6 +30,29 @@ impl Currency {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurchaseStatus {
+    Negotiating,
+    Bought,
+}
+
+impl PurchaseStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PurchaseStatus::Negotiating => "negotiating",
+            PurchaseStatus::Bought => "bought",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "negotiating" => Some(PurchaseStatus::Negotiating),
+            "bought" => Some(PurchaseStatus::Bought),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Purchase {
     pub id: i64,
@@ -39,6 +62,7 @@ pub struct Purchase {
     pub channel: String,
     pub seller_info: Option<String>,
     pub multiple_items: bool,
+    pub status: PurchaseStatus,
 }
 
 #[derive(Clone)]
@@ -49,6 +73,7 @@ pub struct PurchaseDraft {
     pub channel: String,
     pub seller_info: String,
     pub multiple_items: bool,
+    pub status: PurchaseStatus,
 }
 
 impl Default for PurchaseDraft {
@@ -60,6 +85,7 @@ impl Default for PurchaseDraft {
             channel: String::new(),
             seller_info: String::new(),
             multiple_items: false,
+            status: PurchaseStatus::Bought,
         }
     }
 }
