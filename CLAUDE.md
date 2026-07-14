@@ -31,13 +31,19 @@ there.
   `multiple_items` flag and negotiation `status` — see below), Transfers,
   Inventory, Outbound, Reports (on-screen + CSV export + PDF export via
   `typst-as-lib`, fallback path per `stack-plan.md` risk note — no
-  `typst-bake`), Settings (category + document label CRUD).
+  `typst-bake`), Settings (category + document label CRUD, screenshot
+  capture command).
 - **Backup:** the manual "backup now" button required by `SPEC.md §2` is
   wired up — `SettingsView::show_backup_panel` (`src/ui/views/settings.rs`)
   calls `crate::backup::backup_to_zip`, same path-text-input + Save/Cancel
   pattern as CSV/PDF export in Reports.
 - **Dashboard:** currently an empty placeholder. Suggested content is
   documented in `SPEC.md §5.5` — not yet prioritised.
+- **No pending features remain approved-but-unimplemented** as of this
+  writing — the five sections below (Purchase `multiple_items`, purchase
+  negotiation status, inline "+ New donor", permanent itemized inventory
+  table, native screenshot capture) are all shipped. Next candidates are
+  Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
 
 ## Purchase `multiple_items` flag (implemented)
 
@@ -169,42 +175,55 @@ called at the end of `show_inventory_summary`.
 - Reviewed by `rust-code-reviewer`: no 🔴 findings; the two 🟡s (missing
   test coverage, `None`-sort ordering) were addressed above.
 
-## Pending features (approved, not yet implemented)
+## Native screenshot capture & filing (implemented)
 
-### Native screenshot capture & filing
+Source: `NewFeature-PurchaseStatus.md` §3.y. A "Capture screenshot"
+button on Inventory items, Purchases, and Transfers invokes an
+OS region-select tool and files the result as a labeled document —
+same naming convention (SPEC.md §4.2) as drag-and-drop, just sourced
+from a screenshot instead of the filesystem.
 
-Source: `NewFeature-PurchaseStatus.md` §3.y. Additive, no design
-conflicts found — mostly new capability, not a change to existing
-behavior.
-
-**Behaviour:** a "Capture screenshot" button on an item/purchase/transfer
-record invokes the OS's native region-select screenshot tool
-(config-driven command per OS, seeded default per detected OS), receives
-the resulting PNG at a controlled temp path, and files it as a labeled
-document via the existing naming convention (SPEC.md §4.2) — same as a
-drag-and-dropped file, just sourced from a screenshot instead of the
-filesystem. Cancel / non-zero exit → no document, no orphan record, a
-neutral "capture cancelled" state.
-
-**Implementation notes / harmony gaps found:**
-- No shared "file an already-on-disk path as a document" helper exists
-  yet — the drag-and-drop flow (commit `28f1c87`) duplicates the
-  generate-filename → copy-to-documents → insert-document-row sequence
-  inline in `purchases.rs`, `transfers.rs`, and `inventory.rs`. This
-  feature would be a 4th call site — worth extracting a shared helper
-  (e.g. in `docs_fs.rs`) at that point rather than duplicating a 4th
-  time.
-- No generic settings/config table exists (only `category` and
-  `document_label` are DB-backed config today). Per-OS capture command
-  strings and a default label need new schema — not yet in SPEC.md.
-- `std::process::Command` is not used anywhere in this codebase yet —
-  this is a new capability with no established error-handling/platform-
-  dispatch pattern to follow; needs one designed (missing-tool vs.
-  non-zero-exit vs. user-cancel all need distinct, clear handling per the
-  source doc's constraints).
-- `src/ui/widgets/document_panel.rs` is currently a dead stub (never
-  called) — worth checking whether this feature should finally use or
-  replace it, or whether it should be deleted as unused.
+- New `app_setting` key-value table (`migrations/004_app_setting.sql`)
+  — the first generic settings schema in this codebase (previously
+  only `category`/`document_label` were DB-backed config). Holds
+  `screenshot_command`, a `{path}`-templated command string, seeded
+  with an OS-appropriate default (`cfg!(target_os)`, Linux/macOS only
+  — no reliable Windows CLI default) on first run via
+  `db::seed_default_settings`, only if unset so a user edit is never
+  clobbered. Editable in a new Settings panel
+  (`SettingsView::show_screenshot_panel`); an explicit blank save is
+  allowed (clears/disables capture), a non-blank save without the
+  placeholder is rejected.
+- `src/screenshot.rs`: `capture()` substitutes `{path}` (quoted, so a
+  temp dir containing a space — routine on Windows — doesn't split
+  into multiple shell args) into the command and runs it via `sh -c` /
+  `cmd /C`. Result classification: shell exit 127 → real error ("tool
+  not found"); any other non-zero exit, or the expected file missing,
+  → neutral `Cancelled` (not an error — most region-select tools like
+  maim/grim+slurp/screencapture -i signal Escape via non-zero exit,
+  and the source doc's own two sections disagreed on whether that's
+  "cancel" or "failure"; resolved in favor of the source doc's
+  Result-handling section, which explicitly calls it cancel).
+- `docs_fs::file_document` — the shared "generate filename → copy →
+  insert document row" helper this feature was the 4th call site for,
+  extracted from three near-identical inline copies in
+  `inventory.rs`/`purchases.rs`/`transfers.rs`. On a DB-insert failure
+  after the copy already succeeded, it deletes the copied file rather
+  than leaving an orphan with no document row.
+- `PendingAttachment` gained an `is_temp` flag (true only for
+  screenshot-sourced files) so the temp capture gets deleted on
+  cancel, on successful attach, and at every form-reset point
+  (including `purchases.rs`'s negotiating-purchase drop flow) — not
+  left to accumulate in the OS temp dir.
+- Deleted `src/ui/widgets/document_panel.rs` (and the now-empty
+  `ui/widgets/` module) — a dead, never-called stub confirmed via grep
+  before removal; superseded by the inline per-view document panels
+  this feature also touched.
+- Reviewed by `rust-code-reviewer`: no 🔴 findings; three 🟡s (orphaned
+  file on insert failure, unquoted `{path}`, negotiating-drop not
+  discarding a pending capture) fixed before commit. Also caught by
+  self-review: a flaky test from temp-filename collisions under
+  parallel test execution (fixed with an atomic counter).
 
 ## How to work in this repo
 
@@ -253,10 +272,13 @@ neutral "capture cancelled" state.
   `rusqlite` access and query modules per entity group, `model/` for plain
   structs mirroring DB rows (including `category` and `document_label` as
   first-class models, not enums), `ui/views/` for one file per section
-  (including `settings.rs` for category/label management), `ui/widgets/` for
-  shared components (`document_panel.rs`, `amount_field.rs`), `reports/` for
-  PDF/CSV generation, `docs_fs.rs` for filename generation and soft-delete,
-  `backup.rs` for the zip-based backup.
+  (including `settings.rs` for category/label/screenshot-command
+  management), `reports/` for PDF/CSV generation, `docs_fs.rs` for filename
+  generation, the shared document-filing helper, and soft-delete,
+  `screenshot.rs` for OS screenshot-tool invocation, `backup.rs` for the
+  zip-based backup. No `ui/widgets/` — the one stub it ever held
+  (`document_panel.rs`) was deleted unused; add it back only if a second
+  shared widget actually materializes.
 - **Migrations**: `rusqlite_migration`, tracked via `schema.sql` (canonical,
   hand-maintained) kept in sync with `migrations/NNN_name.sql` (applied,
   incremental). New tables/columns get a new migration file, not edits to
