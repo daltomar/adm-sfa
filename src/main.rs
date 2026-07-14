@@ -5,6 +5,7 @@ mod docs_fs;
 mod model;
 mod money;
 mod reports;
+mod screenshot;
 mod ui;
 
 use std::path::{Path, PathBuf};

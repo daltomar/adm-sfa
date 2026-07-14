@@ -3,7 +3,7 @@ use std::path::Path;
 use eframe::egui;
 use rusqlite::Connection;
 
-use crate::db::queries::{categories as cat_qry, documents as docs_qry};
+use crate::db::queries::{categories as cat_qry, documents as docs_qry, settings as settings_qry};
 use crate::model::category::Category;
 
 pub struct SettingsView {
@@ -21,6 +21,10 @@ pub struct SettingsView {
 
     backup_path_input: Option<String>,
     backup_status: Option<Result<String, String>>,
+
+    screenshot_command: String,
+    screenshot_error: Option<String>,
+    screenshot_status: Option<Result<String, String>>,
 }
 
 impl Default for SettingsView {
@@ -37,6 +41,9 @@ impl Default for SettingsView {
             lbl_error: None,
             backup_path_input: None,
             backup_status: None,
+            screenshot_command: String::new(),
+            screenshot_error: None,
+            screenshot_status: None,
         }
     }
 }
@@ -48,16 +55,22 @@ impl SettingsView {
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         if self.needs_reload {
-            match (cat_qry::list(db), docs_qry::list_labels(db)) {
-                (Ok(cats), Ok(lbls)) => {
+            match (
+                cat_qry::list(db),
+                docs_qry::list_labels(db),
+                settings_qry::get(db, "screenshot_command"),
+            ) {
+                (Ok(cats), Ok(lbls), Ok(cmd)) => {
                     self.categories = cats;
                     self.labels = lbls;
+                    self.screenshot_command = cmd.unwrap_or_default();
                     self.needs_reload = false;
                     self.cat_editing = None;
                     self.lbl_editing = None;
                 }
-                (Err(e), _) => self.cat_error = Some(e.to_string()),
-                (_, Err(e)) => self.lbl_error = Some(e.to_string()),
+                (Err(e), _, _) => self.cat_error = Some(e.to_string()),
+                (_, Err(e), _) => self.lbl_error = Some(e.to_string()),
+                (_, _, Err(e)) => self.screenshot_error = Some(e.to_string()),
             }
         }
 
@@ -72,6 +85,10 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
                 self.show_labels_panel(ui, db);
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
+                self.show_screenshot_panel(ui, db);
                 ui.add_space(16.0);
                 ui.separator();
                 ui.add_space(8.0);
@@ -362,6 +379,60 @@ impl SettingsView {
             if let Some((_, ref mut d)) = self.lbl_editing {
                 *d = edit_draft;
             }
+        }
+    }
+
+    fn show_screenshot_panel(&mut self, ui: &mut egui::Ui, db: &Connection) {
+        ui.label(egui::RichText::new("Screenshot Capture").strong());
+        ui.add_space(4.0);
+        ui.weak(
+            "Command run by \"Capture screenshot\" on items, purchases, and transfers. \
+             Must contain a {path} placeholder — the app substitutes it with the temp \
+             file it wants the region-select tool to save to.",
+        );
+        ui.add_space(6.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Command:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.screenshot_command)
+                    .hint_text("maim -s {path}")
+                    .desired_width(400.0),
+            );
+        });
+
+        let is_empty = self.screenshot_command.trim().is_empty();
+        let has_placeholder = self.screenshot_command.contains("{path}");
+        if !is_empty && !has_placeholder {
+            ui.colored_label(egui::Color32::RED, "Must contain a {path} placeholder.");
+        }
+
+        // Blank is allowed to save (clears/disables capture) — only a
+        // non-empty command without the placeholder is rejected.
+        if ui
+            .add_enabled(is_empty || has_placeholder, egui::Button::new("Save"))
+            .clicked()
+        {
+            match settings_qry::set(db, "screenshot_command", self.screenshot_command.trim()) {
+                Ok(()) => self.screenshot_status = Some(Ok("Saved.".to_string())),
+                Err(e) => self.screenshot_status = Some(Err(e.to_string())),
+            }
+        }
+
+        if let Some(err) = &self.screenshot_error {
+            ui.add_space(4.0);
+            ui.colored_label(egui::Color32::RED, err);
+        }
+        if let Some(status) = &self.screenshot_status {
+            ui.add_space(4.0);
+            match status {
+                Ok(msg) => {
+                    ui.colored_label(egui::Color32::DARK_GREEN, msg);
+                }
+                Err(msg) => {
+                    ui.colored_label(egui::Color32::RED, format!("Save failed: {msg}"));
+                }
+            };
         }
     }
 

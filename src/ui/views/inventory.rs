@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::queries::{
     categories as cat_qry, documents as docs_qry, donors as donors_qry, inventory as qry,
-    purchases as purchases_qry,
+    purchases as purchases_qry, settings as settings_qry,
 };
 use crate::docs_fs;
 use crate::model::category::Category;
@@ -25,6 +25,10 @@ struct PendingAttachment {
     path: PathBuf,
     label: String,
     error: Option<String>,
+    /// True if `path` is a temp file this app created (a screenshot capture)
+    /// rather than a user's own file — deleted once no longer needed instead
+    /// of left in the OS temp dir.
+    is_temp: bool,
 }
 
 pub struct InventoryView {
@@ -54,6 +58,7 @@ pub struct InventoryView {
     docs_needs_reload: bool,
     pending_doc: Option<PendingAttachment>,
     path_input: Option<String>,
+    capture_note: Option<String>,
 }
 
 impl Default for InventoryView {
@@ -79,11 +84,24 @@ impl Default for InventoryView {
             docs_needs_reload: false,
             pending_doc: None,
             path_input: None,
+            capture_note: None,
         }
     }
 }
 
 impl InventoryView {
+    /// Clears any in-progress attachment, deleting the source file first if
+    /// it was a screenshot capture (a temp file this app made) rather than
+    /// a file the user picked — otherwise capture temp files pile up in the
+    /// OS temp dir every time a form is reset before confirming the attach.
+    fn discard_pending_doc(&mut self) {
+        if let Some(p) = self.pending_doc.take() {
+            if p.is_temp {
+                let _ = std::fs::remove_file(&p.path);
+            }
+        }
+    }
+
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
         self.purchases_loaded = false;
@@ -194,8 +212,9 @@ impl InventoryView {
             self.mode = Mode::Adding;
             self.error = None;
             self.docs = Vec::new();
-            self.pending_doc = None;
+            self.discard_pending_doc();
             self.path_input = None;
+            self.capture_note = None;
             self.new_donation = None;
             self.new_donor = None;
             self.purchases_loaded = false;
@@ -244,8 +263,9 @@ impl InventoryView {
                         self.mode = Mode::Editing(id);
                         self.error = None;
                         self.docs_needs_reload = true;
-                        self.pending_doc = None;
+                        self.discard_pending_doc();
                         self.path_input = None;
+                        self.capture_note = None;
                         self.new_donation = None;
                         self.new_donor = None;
                     }
@@ -381,8 +401,9 @@ impl InventoryView {
             if ui.button("Cancel").clicked() {
                 self.mode = Mode::List;
                 self.error = None;
-                self.pending_doc = None;
+                self.discard_pending_doc();
                 self.path_input = None;
+                self.capture_note = None;
                 self.new_donation = None;
                 self.new_donor = None;
             }
@@ -702,6 +723,7 @@ impl InventoryView {
                             path: path.clone(),
                             label: default_label,
                             error: None,
+                            is_temp: false,
                         });
                     }
                 }
@@ -778,11 +800,40 @@ impl InventoryView {
             } else if ui.button("Attach file…").clicked() {
                 self.path_input = Some(String::new());
             }
+            if self.path_input.is_none() && ui.button("Capture screenshot").clicked() {
+                self.capture_note = None;
+                self.error = None;
+                match settings_qry::get(db, "screenshot_command") {
+                    Err(e) => self.error = Some(e.to_string()),
+                    Ok(cmd) => match crate::screenshot::capture(cmd.as_deref().unwrap_or("")) {
+                        Ok(crate::screenshot::CaptureOutcome::Success(path)) => {
+                            let default_label = self
+                                .labels
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "other".to_string());
+                            self.pending_doc = Some(PendingAttachment {
+                                path,
+                                label: default_label,
+                                error: None,
+                                is_temp: true,
+                            });
+                        }
+                        Ok(crate::screenshot::CaptureOutcome::Cancelled) => {
+                            self.capture_note = Some("Capture cancelled.".to_string());
+                        }
+                        Err(e) => self.error = Some(e),
+                    },
+                }
+            }
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             if hovering {
                 ui.colored_label(egui::Color32::from_rgb(80, 160, 230), "↓ Drop file to attach");
             } else {
                 ui.weak("or drag a file onto this window");
+            }
+            if let Some(note) = &self.capture_note {
+                ui.weak(note);
             }
             if let Some(path) = confirmed_path {
                 let default_label = self
@@ -794,6 +845,7 @@ impl InventoryView {
                     path,
                     label: default_label,
                     error: None,
+                    is_temp: false,
                 });
                 self.path_input = None;
             } else if path_cancelled {
@@ -802,41 +854,37 @@ impl InventoryView {
         }
 
         match doc_action {
-            DocAction::Cancel => self.pending_doc = None,
+            DocAction::Cancel => self.discard_pending_doc(),
             DocAction::Confirm => {
                 if let Some(p) = self.pending_doc.as_ref() {
-                    let (path, label) = (p.path.clone(), p.label.clone());
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("bin")
-                        .to_lowercase();
+                    let (path, label, is_temp) = (p.path.clone(), p.label.clone(), p.is_temp);
                     let existing: Vec<String> =
                         self.docs.iter().map(|d| d.filename.clone()).collect();
                     // Items have no single "date" field of their own; use today's date
                     // so filenames stay chronologically sortable at attach time.
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    let filename = docs_fs::generate_filename(
-                        &today, "item", edit_id, &label, &existing, &ext,
-                    );
-                    match docs_fs::copy_to_documents(&path, &documents_dir, &filename) {
+                    match docs_fs::file_document(
+                        db,
+                        &documents_dir,
+                        &path,
+                        &today,
+                        ("item", edit_id),
+                        &label,
+                        &existing,
+                    ) {
+                        Ok(_) => {
+                            if is_temp {
+                                let _ = std::fs::remove_file(&path);
+                            }
+                            self.pending_doc = None;
+                            self.docs_needs_reload = true;
+                            self.error = None;
+                        }
                         Err(e) => {
                             if let Some(p) = &mut self.pending_doc {
-                                p.error = Some(format!("Copy failed: {e}"));
+                                p.error = Some(e);
                             }
                         }
-                        Ok(()) => match docs_qry::insert(db, "item", edit_id, &filename, &label) {
-                            Ok(()) => {
-                                self.pending_doc = None;
-                                self.docs_needs_reload = true;
-                                self.error = None;
-                            }
-                            Err(e) => {
-                                if let Some(p) = &mut self.pending_doc {
-                                    p.error = Some(format!("DB insert failed: {e}"));
-                                }
-                            }
-                        },
                     }
                 } // if let Some(p)
             }

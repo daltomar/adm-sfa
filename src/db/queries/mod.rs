@@ -6,6 +6,7 @@ pub mod eur_ledger;
 pub mod inventory;
 pub mod outbound;
 pub mod purchases;
+pub mod settings;
 pub mod transfers;
 
 /// Converts an empty-or-whitespace string to `None`; non-empty to `Some`.

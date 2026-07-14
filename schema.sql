@@ -122,6 +122,14 @@ CREATE TABLE document (
     deleted     INTEGER NOT NULL DEFAULT 0
 );
 
+-- Generic key-value app config, for settings that (unlike category /
+-- document_label) aren't a list of user-managed entities — just single
+-- scalar values. First consumer: the screenshot capture command.
+CREATE TABLE app_setting (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE INDEX idx_eur_tx_date    ON eur_transaction(date);
 CREATE INDEX idx_eur_tx_donor   ON eur_transaction(donor_id);
 CREATE INDEX idx_brl_tx_date    ON brl_transaction(date);
