@@ -9,7 +9,7 @@ use crate::db::queries::{
 use crate::docs_fs;
 use crate::model::category::Category;
 use crate::model::document::Document;
-use crate::model::donor::{PhysicalDonation, PhysicalDonationDraft};
+use crate::model::donor::{DonorDraft, PhysicalDonation, PhysicalDonationDraft};
 use crate::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
@@ -47,6 +47,7 @@ pub struct InventoryView {
     donors_loaded: bool,
 
     new_donation: Option<PhysicalDonationDraft>,
+    new_donor: Option<DonorDraft>,
 
     docs: Vec<Document>,
     labels: Vec<String>,
@@ -72,6 +73,7 @@ impl Default for InventoryView {
             donors: Vec::new(),
             donors_loaded: false,
             new_donation: None,
+            new_donor: None,
             docs: Vec::new(),
             labels: Vec::new(),
             docs_needs_reload: false,
@@ -195,6 +197,7 @@ impl InventoryView {
             self.pending_doc = None;
             self.path_input = None;
             self.new_donation = None;
+            self.new_donor = None;
             self.purchases_loaded = false;
             self.donations_loaded = false;
             self.donors_loaded = false;
@@ -244,6 +247,7 @@ impl InventoryView {
                         self.pending_doc = None;
                         self.path_input = None;
                         self.new_donation = None;
+                        self.new_donor = None;
                     }
                 }
             });
@@ -380,6 +384,7 @@ impl InventoryView {
                 self.pending_doc = None;
                 self.path_input = None;
                 self.new_donation = None;
+                self.new_donor = None;
             }
         });
     }
@@ -416,6 +421,13 @@ impl InventoryView {
         }
         let mut action = Action::None;
 
+        enum DonorAction {
+            None,
+            Create,
+            Cancel,
+        }
+        let mut donor_action = DonorAction::None;
+
         if let Some(nd) = &mut self.new_donation {
             let donors = self.donors.clone();
             ui.add_space(6.0);
@@ -434,19 +446,24 @@ impl InventoryView {
                         ui.end_row();
 
                         ui.label("Donor");
-                        let name = nd
-                            .donor_id
-                            .and_then(|did| donors.iter().find(|(id, _)| *id == did))
-                            .map(|(_, n)| n.clone())
-                            .unwrap_or_else(|| "(anonymous)".to_string());
-                        egui::ComboBox::from_id_salt("new_donation_donor_combo")
-                            .selected_text(name)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut nd.donor_id, None, "(anonymous)");
-                                for (did, dname) in &donors {
-                                    ui.selectable_value(&mut nd.donor_id, Some(*did), dname);
-                                }
-                            });
+                        ui.horizontal(|ui| {
+                            let name = nd
+                                .donor_id
+                                .and_then(|did| donors.iter().find(|(id, _)| *id == did))
+                                .map(|(_, n)| n.clone())
+                                .unwrap_or_else(|| "(anonymous)".to_string());
+                            egui::ComboBox::from_id_salt("new_donation_donor_combo")
+                                .selected_text(name)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut nd.donor_id, None, "(anonymous)");
+                                    for (did, dname) in &donors {
+                                        ui.selectable_value(&mut nd.donor_id, Some(*did), dname);
+                                    }
+                                });
+                            if ui.button("+ New donor").clicked() {
+                                self.new_donor = Some(DonorDraft::default());
+                            }
+                        });
                         ui.end_row();
 
                         ui.label("Notes");
@@ -457,6 +474,48 @@ impl InventoryView {
                         );
                         ui.end_row();
                     });
+
+                if let Some(newd) = &mut self.new_donor {
+                    ui.add_space(6.0);
+                    ui.group(|ui| {
+                        egui::Grid::new("new_donor_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 6.0])
+                            .min_col_width(80.0)
+                            .show(ui, |ui| {
+                                ui.label("Name *");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut newd.name).desired_width(220.0),
+                                );
+                                ui.end_row();
+
+                                ui.label("Contact info");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut newd.contact_info)
+                                        .desired_width(220.0),
+                                );
+                                ui.end_row();
+
+                                ui.label("Notes");
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut newd.notes)
+                                        .desired_width(220.0)
+                                        .desired_rows(2),
+                                );
+                                ui.end_row();
+                            });
+
+                        let ok = !newd.name.trim().is_empty();
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
+                                donor_action = DonorAction::Create;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                donor_action = DonorAction::Cancel;
+                            }
+                        });
+                    });
+                }
 
                 let ok = !nd.date_received.trim().is_empty();
                 ui.horizontal(|ui| {
@@ -470,14 +529,37 @@ impl InventoryView {
             });
         }
 
+        match donor_action {
+            DonorAction::Cancel => self.new_donor = None,
+            DonorAction::Create => {
+                let draft = self.new_donor.clone().unwrap();
+                match donors_qry::insert(db, &draft) {
+                    Ok(new_id) => {
+                        if let Some(nd) = &mut self.new_donation {
+                            nd.donor_id = Some(new_id);
+                        }
+                        self.new_donor = None;
+                        self.donors_loaded = false;
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(e.to_string()),
+                }
+            }
+            DonorAction::None => {}
+        }
+
         match action {
-            Action::Cancel => self.new_donation = None,
+            Action::Cancel => {
+                self.new_donation = None;
+                self.new_donor = None;
+            }
             Action::Create => {
                 let draft = self.new_donation.clone().unwrap();
                 match donors_qry::insert_donation(db, &draft) {
                     Ok(new_id) => {
                         self.draft.source_donation_id = Some(new_id);
                         self.new_donation = None;
+                        self.new_donor = None;
                         self.donations_loaded = false;
                         self.error = None;
                     }
