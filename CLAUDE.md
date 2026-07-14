@@ -97,60 +97,46 @@ purchase's own lifecycle was the smaller, more localized change.
   `src/db/mod.rs` confirms the new column applies cleanly through the
   real `rusqlite_migration` path.
 
-## Pending features (approved, not yet implemented)
+## Inline "+ New donor" from Inventory's donation sub-form (implemented)
 
-### Inline "+ New donor" when creating a physical donation from Inventory
+Add item → source = Donation → "+ New donation" (`show_donation_source`
+in `src/ui/views/inventory.rs`) now has a "+ New donor" escape hatch
+next to its Donor `ComboBox`, so "add item → new donation → new donor"
+is one pass without leaving Inventory.
 
-When adding a new inventory item with source = Donation, the "+ New
-donation" inline sub-form (`show_donation_source` in
-`src/ui/views/inventory.rs:387-486`) already lets you pick an existing
-donor or leave it anonymous, but there's no way to add a donor that
-doesn't exist yet without leaving Inventory, creating them in Donors,
-and coming back. Add a "+ New donor" escape hatch inside that donor
-picker so "add item → new donation → new donor" is one pass.
+Same shape as the two precedents it sits alongside: `outbound.rs`'s
+"+ New recipient project" and `inventory.rs`'s own "+ New donation"
+(the very sub-form this extends one level deeper) — a `ComboBox` + a
+button setting a local `Option<SomeDraft>` field, an inline
+`egui::Group` shown when that field is `Some`, a deferred local `enum`
+applying Create/Cancel after the borrow split, then an `insert` query
+whose new id gets wired straight back into the parent draft.
 
-Not a new UI pattern — same shape as two things that already ship:
-`outbound.rs`'s "+ New recipient project" next to the recipient picker,
-and `inventory.rs`'s own "+ New donation" next to the donation picker
-(the very sub-form this extends one level deeper). Both are: a
-`ComboBox` + a button setting a local `Option<SomeDraft>` field, an
-inline `egui::Group` shown when that field is `Some`, a deferred local
-`enum Action` applying Create/Cancel after the borrow split, then an
-`insert` query whose new id gets wired straight back into the parent
-draft.
-
-**Behaviour:**
 - New `InventoryView` field `new_donor: Option<DonorDraft>`, reset
-  alongside `new_donation` (same lifecycle: cleared on Cancel/Create of
-  the donation sub-form and whenever the outer item form resets).
-- Inside the existing `if let Some(nd) = &mut self.new_donation` block,
-  a "+ New donor" button next to the Donor `ComboBox` sets `self.new_donor
-  = Some(DonorDraft::default())`. Below it, an inline group with Name* /
-  Contact info / Notes (matching `DonorsView`'s own form and the "+ New
-  recipient project" precedent's full field set, not name-only),
-  Create gated on a non-empty name.
-- On Create: `donors_qry::insert(db, &draft)` (already exists,
-  `src/db/queries/donors.rs:23-33` — no new query needed), set
-  `nd.donor_id = Some(new_id)`, clear `self.new_donor`, and set
-  `self.donors_loaded = false` so the donor cache — and the main Donors
-  section next time it's opened — picks up the new row. Mirrors exactly
-  what "+ New donation"'s own Create handler already does for
-  `self.donations_loaded`.
-
-**Implementation notes:**
+  alongside `new_donation` at every one of its existing reset points
+  (Add item button, list-row click, form Cancel, and the donation
+  sub-form's own Create/Cancel).
+- Inline group below the Donor `ComboBox`: Name* / Contact info / Notes
+  (matching `DonorsView`'s own form and the "+ New recipient project"
+  precedent's full field set), Create gated on a non-empty name.
+- On Create: `donors_qry::insert` (no new query needed), sets
+  `nd.donor_id = Some(new_id)` on the in-progress donation draft,
+  clears `new_donor`, sets `donors_loaded = false` to invalidate the
+  donor cache — mirrors what "+ New donation"'s own Create handler
+  already does for `donations_loaded`.
 - `new_donation` and `new_donor` are different `InventoryView` fields,
   so accessing both in the same method is a disjoint-field borrow and
-  compiles fine as direct field access — same as how the existing code
-  already clones `self.donors` out from inside the `if let Some(nd) =
-  &mut self.new_donation` block. Don't route this through a helper
-  method taking `&mut self` as a whole; that would fail to split.
-- This would be the third copy of the "combo + inline create/cancel
-  sub-form" shape in this codebase (recipient project, donation, now
-  donor). Not proposing extraction — the three call sites are entangled
-  with each view's own fields in a way a generic shared widget would
-  need real design work to abstract cleanly, and three instances of a
-  UI shape is still fine on its own. Reconsider only if a fourth shows
-  up.
+  compiles fine as direct field access — this is not routed through a
+  helper method taking `&mut self` as a whole, which would fail to
+  split.
+- This is the third copy of the "combo + inline create/cancel sub-form"
+  shape in this codebase (recipient project, donation, donor). Not
+  extracted — the three call sites are entangled with each view's own
+  fields in a way a generic shared widget would need real design work
+  to abstract cleanly. Reconsider only if a fourth shows up.
+- Reviewed by `rust-code-reviewer`: no correctness/lifecycle findings.
+
+## Pending features (approved, not yet implemented)
 
 ### Permanent itemized inventory table in Reports
 
