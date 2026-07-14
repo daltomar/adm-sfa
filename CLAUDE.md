@@ -136,45 +136,40 @@ whose new id gets wired straight back into the parent draft.
   to abstract cleanly. Reconsider only if a fourth shows up.
 - Reviewed by `rust-code-reviewer`: no correctness/lifecycle findings.
 
+## Permanent itemized inventory table in Reports (implemented)
+
+Extends the "aggregate summary above, permanent unfiltered line-by-line
+detail table below" pattern already shipped for the EUR ledger, BRL
+ledger, Donor Breakdown, and Outbound summary tabs
+(`show_eur_running_ledger`, `show_brl_running_ledger`,
+`show_donor_activity_log`, `show_outbound_history`) to the Inventory
+summary tab — `show_inventory_item_log` in `src/ui/views/reports.rs`,
+called at the end of `show_inventory_summary`.
+
+- Sorted chronologically by acquisition date, oldest first, per the
+  owner's choice (the alternative — sort by category/name with no join
+  — was offered and declined). `InventoryItemRow` had no date field of
+  its own, so `InventoryItemRow.acquired_date: Option<String>` was
+  added, computed in `inventory::list` from
+  `physical_donation.date_received` or `purchase.date` depending on
+  `source_type` (both already `LEFT JOIN`ed for the pre-existing
+  `source_desc` field — the query just gained `pu.date`).
+- Columns: Name / Category / Status / Location / Source, per the
+  owner's choice — no visible Date column, even though the sort key
+  itself isn't shown. `source_desc` is reused as-is for Source.
+- `None` (missing source join — shouldn't happen given the `NOT NULL`
+  FK, `PRAGMA foreign_keys = ON` in `src/db/mod.rs`) sorts *before*
+  `Some`, surfacing a data-integrity problem at the top of the list
+  rather than hiding it at the bottom; commented at the sort site.
+- `db::queries::inventory` had no tests before this; added one
+  (`acquired_date_comes_from_the_matching_source_table`) covering both
+  the donation and purchase date-selection paths, since the query's
+  column-index tuple grew from 11 to 14 positions and had nothing
+  guarding a mismatch.
+- Reviewed by `rust-code-reviewer`: no 🔴 findings; the two 🟡s (missing
+  test coverage, `None`-sort ordering) were addressed above.
+
 ## Pending features (approved, not yet implemented)
-
-### Permanent itemized inventory table in Reports
-
-Same "aggregate summary above, permanent unfiltered line-by-line detail
-table below" pattern already shipped this session for the EUR ledger,
-BRL ledger, Donor Breakdown, and Outbound summary tabs
-(`src/ui/views/reports.rs`: `show_eur_running_ledger`,
-`show_brl_running_ledger`, `show_donor_activity_log`,
-`show_outbound_history`) — not yet applied to the Inventory summary tab
-(`show_inventory_summary`, `reports.rs:837+`).
-
-**Behaviour:** below the existing "By category & status" / "By location"
-aggregate tables, add a table listing every individual inventory item
-(not aggregated), e.g. Name / Category / Status / Location / Source.
-Already a snapshot of *all* current inventory (the tab's own caption
-says "not affected by the date/recipient filters"), so — unlike the
-other three tables — there's no filtered-vs-permanent distinction to
-resolve here; this is purely "also show it unaggregated, one row per
-item," reusing `self.inventory_rows` (`InventoryItemRow`, already loaded
-in full) directly.
-
-**Implementation notes / open questions for whoever picks this up:**
-- `InventoryItemRow` has no acquisition-date field, unlike `EurTxRow`/
-  `BrlTxRow`/`PhysicalDonation`/`OutboundEventRow` — the other three
-  tables all sort chronologically by a real date column; this one
-  doesn't have one to sort by without a join (`source_donation_id` →
-  `physical_donation.date_received`, or `source_purchase_id` →
-  `purchase.date`). Decide before implementing: sort by name/category
-  instead (no join needed), or add the join for a date column and sort
-  chronologically like the other three.
-- `source_desc` (already computed per-row in
-  `src/db/queries/inventory.rs:58-74`) already gives a human-readable
-  "where this came from" string — reuse it directly for the Source
-  column rather than re-deriving it.
-- Ask the user to confirm the exact column set before implementing —
-  this note only captures the shape of the request, not a finalized
-  design, unlike the other three tables which went through an explicit
-  diagram + clarifying-questions pass before being built.
 
 ### Native screenshot capture & filing
 
