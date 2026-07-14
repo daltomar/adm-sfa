@@ -7,7 +7,7 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
     let mut stmt = conn.prepare(
         "SELECT i.id, i.name, i.category_id, c.name,
                 i.source_type, i.source_donation_id, i.source_purchase_id,
-                dnr.name, pd.date_received, pu.channel,
+                dnr.name, pd.date_received, pu.channel, pu.date,
                 i.location, i.status, i.notes
            FROM inventory_item i
            JOIN category c            ON c.id = i.category_id
@@ -29,9 +29,10 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
-                row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(10)?,
                 row.get::<_, String>(11)?,
-                row.get::<_, Option<String>>(12)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, Option<String>>(13)?,
             ))
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -48,6 +49,7 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
         donor_name,
         date_received,
         purchase_channel,
+        purchase_date,
         location_str,
         status_str,
         notes,
@@ -55,6 +57,10 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
     {
         let source_type = SourceType::from_str(&source_type_str)
             .ok_or_else(|| invalid_enum(4, &source_type_str))?;
+        let acquired_date = match source_type {
+            SourceType::Donation => date_received.clone(),
+            SourceType::Purchase => purchase_date,
+        };
         let source_desc = match source_type {
             SourceType::Donation => match (donor_name, date_received) {
                 (Some(n), _) => n,
@@ -72,6 +78,7 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
             source_donation_id,
             source_purchase_id,
             source_desc,
+            acquired_date,
             location: Location::from_str(&location_str)
                 .ok_or_else(|| invalid_enum(10, &location_str))?,
             status: ItemStatus::from_str(&status_str)
@@ -130,4 +137,86 @@ fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {
         rusqlite::types::Type::Text,
         format!("unknown discriminant: {val:?}").into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::queries::{categories, donors, purchases};
+    use crate::model::donor::PhysicalDonationDraft;
+    use crate::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../../schema.sql"))
+            .unwrap();
+        conn
+    }
+
+    #[test]
+    fn acquired_date_comes_from_the_matching_source_table() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+
+        let donation_id = donors::insert_donation(
+            &conn,
+            &PhysicalDonationDraft {
+                donor_id: None,
+                date_received: "2026-01-05".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+
+        let purchase_id = purchases::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-02-10".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+
+        let donated_id = insert(
+            &conn,
+            &InventoryItemDraft {
+                name: "Donated deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Donation,
+                source_donation_id: Some(donation_id),
+                source_purchase_id: None,
+                location: Location::Germany,
+                status: ItemStatus::Available,
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+
+        let bought_id = insert(
+            &conn,
+            &InventoryItemDraft {
+                name: "Bought deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Purchase,
+                source_donation_id: None,
+                source_purchase_id: Some(purchase_id),
+                location: Location::Germany,
+                status: ItemStatus::Available,
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+
+        let rows = list(&conn).unwrap();
+        let donated = rows.iter().find(|r| r.id == donated_id).unwrap();
+        let bought = rows.iter().find(|r| r.id == bought_id).unwrap();
+
+        assert_eq!(donated.acquired_date.as_deref(), Some("2026-01-05"));
+        assert_eq!(bought.acquired_date.as_deref(), Some("2026-02-10"));
+    }
 }

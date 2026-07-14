@@ -99,6 +99,11 @@ pub struct InventoryItemRow {
     pub source_donation_id: Option<i64>,
     pub source_purchase_id: Option<i64>,
     pub source_desc: String,
+    /// Date the item was acquired: `physical_donation.date_received` for
+    /// donations, `purchase.date` for purchases. `None` only if the source
+    /// row itself is missing (shouldn't happen given the FK, but the join
+    /// is LEFT so it's not guaranteed at the type level).
+    pub acquired_date: Option<String>,
     pub location: Location,
     pub status: ItemStatus,
     pub notes: Option<String>,

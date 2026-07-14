@@ -915,6 +915,71 @@ impl ReportsView {
                     });
                 }
             });
+
+        self.show_inventory_item_log(ui);
+    }
+
+    fn show_inventory_item_log(&self, ui: &mut egui::Ui) {
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Full inventory list").strong());
+        ui.weak("Every inventory item, oldest acquired first — not affected by the date/recipient filters above.");
+        ui.add_space(6.0);
+
+        let mut rows: Vec<&InventoryItemRow> = self.inventory_rows.iter().collect();
+        // None sorts before Some, so an item with a missing source join (shouldn't
+        // happen given the FK, see InventoryItemRow::acquired_date) would land first
+        // rather than last — an intentional "surface it, don't hide it" choice, not
+        // an oversight.
+        rows.sort_by(|a, b| a.acquired_date.cmp(&b.acquired_date).then(a.id.cmp(&b.id)));
+
+        TableBuilder::new(ui)
+            .id_salt("inventory_item_log_table")
+            .striped(true)
+            .column(Column::auto().at_least(140.0))
+            .column(Column::auto().at_least(120.0))
+            .column(Column::auto().at_least(90.0))
+            .column(Column::auto().at_least(80.0))
+            .column(Column::remainder().at_least(160.0))
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong("Name");
+                });
+                header.col(|ui| {
+                    ui.strong("Category");
+                });
+                header.col(|ui| {
+                    ui.strong("Status");
+                });
+                header.col(|ui| {
+                    ui.strong("Location");
+                });
+                header.col(|ui| {
+                    ui.strong("Source");
+                });
+            })
+            .body(|mut body| {
+                for item in rows {
+                    body.row(18.0, |mut row| {
+                        row.col(|ui| {
+                            ui.label(&item.name);
+                        });
+                        row.col(|ui| {
+                            ui.label(&item.category_name);
+                        });
+                        row.col(|ui| {
+                            ui.label(item.status.label());
+                        });
+                        row.col(|ui| {
+                            ui.label(item.location.label());
+                        });
+                        row.col(|ui| {
+                            ui.label(&item.source_desc);
+                        });
+                    });
+                }
+            });
     }
 
     fn show_outbound_summary(&self, ui: &mut egui::Ui) {
