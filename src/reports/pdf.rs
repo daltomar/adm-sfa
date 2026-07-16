@@ -2,8 +2,8 @@ use std::path::Path;
 
 use ecow::EcoString;
 use typst::foundations::{Array, Dict, IntoValue, Str, Value};
-use typst_as_lib::TypstEngine;
 use typst_as_lib::typst_kit_options::TypstKitFontOptions;
+use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
 
@@ -14,7 +14,7 @@ static TEMPLATE: &str = include_str!("../../templates/report.typ");
 /// All rows must have exactly `headers.len()` cells; mismatched lengths
 /// will silently misalign table columns in the Typst output.
 pub struct PdfSection {
-    pub title: &'static str,
+    pub title: String,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
@@ -63,8 +63,12 @@ fn run_export(
 
     let doc = result.output.map_err(|e| e.to_string())?;
 
-    let pdf_bytes = typst_pdf::pdf(&doc, &PdfOptions::default())
-        .map_err(|errs| errs.iter().map(|d| d.message.to_string()).collect::<Vec<_>>().join("; "))?;
+    let pdf_bytes = typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|errs| {
+        errs.iter()
+            .map(|d| d.message.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
 
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
@@ -80,17 +84,12 @@ fn s(text: &str) -> Value {
     Str::from(text).into_value()
 }
 
-fn build_inputs(
-    generated: &str,
-    date_from: &str,
-    date_to: &str,
-    sections: &[PdfSection],
-) -> Dict {
+fn build_inputs(generated: &str, date_from: &str, date_to: &str, sections: &[PdfSection]) -> Dict {
     let section_values: Array = sections
         .iter()
         .map(|sec| {
             let mut d = Dict::new();
-            d.insert(EcoString::from("title").into(), s(sec.title));
+            d.insert(EcoString::from("title").into(), s(&sec.title));
 
             let headers: Array = sec.headers.iter().map(|h| s(h)).collect();
             d.insert(EcoString::from("headers").into(), headers.into_value());
@@ -113,6 +112,9 @@ fn build_inputs(
     inputs.insert(EcoString::from("generated").into(), s(generated));
     inputs.insert(EcoString::from("date_from").into(), s(date_from));
     inputs.insert(EcoString::from("date_to").into(), s(date_to));
-    inputs.insert(EcoString::from("sections").into(), section_values.into_value());
+    inputs.insert(
+        EcoString::from("sections").into(),
+        section_values.into_value(),
+    );
     inputs
 }

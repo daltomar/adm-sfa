@@ -1,5 +1,6 @@
 use eframe::egui;
 use rusqlite::Connection;
+use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::db::queries::{inventory as inventory_qry, outbound as qry};
@@ -112,17 +113,17 @@ impl OutboundView {
             .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
-                    ui.weak("Select an outbound donation, or add a new one.");
+                    ui.weak(t!("outbound.hint.select_or_add").as_ref());
                 }
                 Mode::Adding | Mode::Editing(_) => self.show_form(ui, db),
             });
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Outbound Donations");
+        ui.heading(t!("outbound.heading").as_ref());
         ui.add_space(4.0);
 
-        if ui.button("+ Add outbound donation").clicked() {
+        if ui.button(t!("outbound.button.add").as_ref()).clicked() {
             self.draft = OutboundEventDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
@@ -143,19 +144,34 @@ impl OutboundView {
             .id_salt("outbound_list_scroll")
             .show(ui, |ui| {
                 if self.events.is_empty() {
-                    ui.weak("No outbound donations yet.");
+                    ui.weak(t!("outbound.empty").as_ref());
                     return;
                 }
                 for i in 0..self.events.len() {
                     let ev = &self.events[i];
                     let id = ev.id;
-                    let mut row = format!(
-                        "{}  {}  {} item(s)",
-                        ev.date, ev.recipient_name, ev.item_count
-                    );
+                    let mut row = if ev.item_count == 1 {
+                        t!(
+                            "outbound.row.summary_one",
+                            date = ev.date,
+                            recipient = ev.recipient_name
+                        )
+                        .into_owned()
+                    } else {
+                        t!(
+                            "outbound.row.summary_other",
+                            date = ev.date,
+                            recipient = ev.recipient_name,
+                            count = ev.item_count
+                        )
+                        .into_owned()
+                    };
                     if let Some(cash) = ev.cash_amount_brl {
                         if cash > Decimal::ZERO {
-                            row.push_str(&format!("  R$ {cash:.2}"));
+                            row.push_str(&t!(
+                                "outbound.row.cash_suffix",
+                                cash = format!("{cash:.2}")
+                            ));
                         }
                     }
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
@@ -188,11 +204,12 @@ impl OutboundView {
             None
         };
 
-        ui.heading(if is_adding {
-            "New Outbound Donation"
+        let heading = if is_adding {
+            t!("outbound.heading.new")
         } else {
-            "Edit Outbound Donation"
-        });
+            t!("outbound.heading.edit")
+        };
+        ui.heading(heading.as_ref());
         ui.add_space(8.0);
 
         egui::Grid::new("outbound_form_grid")
@@ -200,15 +217,15 @@ impl OutboundView {
             .spacing([12.0, 8.0])
             .min_col_width(120.0)
             .show(ui, |ui| {
-                ui.label("Date *");
+                ui.label(t!("common.field.date").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.date)
-                        .hint_text("YYYY-MM-DD")
+                        .hint_text(t!("common.field.date_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("Recipient project *");
+                ui.label(t!("outbound.field.recipient").as_ref());
                 ui.end_row();
             });
 
@@ -219,15 +236,15 @@ impl OutboundView {
             .spacing([12.0, 8.0])
             .min_col_width(120.0)
             .show(ui, |ui| {
-                ui.label("Cash gift (BRL)");
+                ui.label(t!("outbound.field.cash").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.cash_amount_brl_str)
-                        .hint_text("0.00 (leave blank if items-only)")
+                        .hint_text(t!("outbound.field.cash_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("Notes");
+                ui.label(t!("common.field.notes").as_ref());
                 ui.add(
                     egui::TextEdit::multiline(&mut self.draft.notes)
                         .desired_width(280.0)
@@ -258,7 +275,7 @@ impl OutboundView {
         if !cash_ok {
             ui.colored_label(
                 egui::Color32::RED,
-                "Not a valid amount — use e.g. 12.34 or 12,34",
+                t!("common.error.invalid_amount").as_ref(),
             );
         }
         let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
@@ -268,24 +285,30 @@ impl OutboundView {
         let form_ok = date_ok && recipient_ok && cash_ok && gift_ok;
 
         if !date_ok {
-            ui.colored_label(egui::Color32::RED, "Date is required");
+            ui.colored_label(
+                egui::Color32::RED,
+                t!("outbound.error.date_required").as_ref(),
+            );
         }
         if !recipient_ok {
             ui.colored_label(
                 egui::Color32::RED,
-                "Select a recipient project above (or create one with \"+ New recipient project\")",
+                t!("outbound.error.recipient_required").as_ref(),
             );
         }
         if cash_ok && !gift_ok {
             ui.colored_label(
                 egui::Color32::RED,
-                "Enter a cash gift amount or select at least one item below",
+                t!("outbound.error.gift_required").as_ref(),
             );
         }
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(form_ok, egui::Button::new("Save")).clicked() {
+            if ui
+                .add_enabled(form_ok, egui::Button::new(t!("common.save").as_ref()))
+                .clicked()
+            {
                 let item_ids: Vec<i64> = self.selected_item_ids.iter().copied().collect();
                 if is_adding {
                     match qry::insert(db, &self.draft, &item_ids) {
@@ -309,7 +332,7 @@ impl OutboundView {
                 }
             }
 
-            if ui.button("Cancel").clicked() {
+            if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
                 self.new_recipient_project = None;
@@ -323,7 +346,7 @@ impl OutboundView {
             .recipient_project_id
             .and_then(|rid| self.recipient_projects.iter().find(|p| p.id == rid))
             .map(|p| p.name.clone())
-            .unwrap_or_else(|| "(choose one)".to_string());
+            .unwrap_or_else(|| t!("common.combo.choose_one").into_owned());
 
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("outbound_recipient_combo")
@@ -340,7 +363,10 @@ impl OutboundView {
                         );
                     }
                 });
-            if ui.button("+ New recipient project").clicked() {
+            if ui
+                .button(t!("outbound.button.new_recipient").as_ref())
+                .clicked()
+            {
                 self.new_recipient_project = Some(RecipientProjectDraft::default());
             }
         });
@@ -360,27 +386,30 @@ impl OutboundView {
                     .spacing([12.0, 6.0])
                     .min_col_width(80.0)
                     .show(ui, |ui| {
-                        ui.label("Name *");
+                        ui.label(t!("common.field.name").as_ref());
                         ui.add(egui::TextEdit::singleline(&mut np.name).desired_width(220.0));
                         ui.end_row();
 
-                        ui.label("Contact info");
+                        ui.label(t!("common.field.contact_info").as_ref());
                         ui.add(
                             egui::TextEdit::singleline(&mut np.contact_info).desired_width(220.0),
                         );
                         ui.end_row();
 
-                        ui.label("Location");
+                        ui.label(t!("common.field.location").as_ref());
                         ui.add(egui::TextEdit::singleline(&mut np.location).desired_width(220.0));
                         ui.end_row();
                     });
 
                 let ok = !np.name.trim().is_empty();
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
+                    if ui
+                        .add_enabled(ok, egui::Button::new(t!("common.create").as_ref()))
+                        .clicked()
+                    {
                         action = Action::Create;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t!("common.cancel").as_ref()).clicked() {
                         action = Action::Cancel;
                     }
                 });
@@ -406,7 +435,7 @@ impl OutboundView {
     }
 
     fn show_item_picker(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Items given").strong());
+        ui.label(egui::RichText::new(t!("outbound.items.heading").as_ref()).strong());
         ui.add_space(4.0);
 
         let eligible: Vec<&InventoryItemRow> = self
@@ -419,7 +448,7 @@ impl OutboundView {
             .collect();
 
         if eligible.is_empty() {
-            ui.weak("No available inventory items — add some in the Inventory section first.");
+            ui.weak(t!("outbound.items.none_available").as_ref());
             return;
         }
 
@@ -429,13 +458,14 @@ impl OutboundView {
             .show(ui, |ui| {
                 for item in eligible {
                     let mut checked = self.selected_item_ids.contains(&item.id);
-                    let label = format!(
-                        "{}  [{}] · {}  ({})",
-                        item.name,
-                        item.category_name,
-                        item.location.label(),
-                        item.source_desc,
-                    );
+                    let label = t!(
+                        "outbound.items.row",
+                        name = item.name,
+                        category = item.category_name,
+                        location = item.location.label(),
+                        source = item.source_desc
+                    )
+                    .into_owned();
                     if ui.checkbox(&mut checked, label).changed() {
                         if checked {
                             self.selected_item_ids.insert(item.id);
@@ -447,6 +477,14 @@ impl OutboundView {
             });
 
         ui.add_space(4.0);
-        ui.weak(format!("{} item(s) selected", self.selected_item_ids.len()));
+        let selected_label = if self.selected_item_ids.len() == 1 {
+            t!("outbound.items.selected_one")
+        } else {
+            t!(
+                "outbound.items.selected_other",
+                count = self.selected_item_ids.len()
+            )
+        };
+        ui.weak(selected_label.as_ref());
     }
 }

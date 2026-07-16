@@ -2,6 +2,7 @@ use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use rusqlite::Connection;
 use rust_decimal::Decimal;
+use rust_i18n::t;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::db::queries::{
@@ -23,13 +24,17 @@ enum Tab {
     AuditTrail,
 }
 
-const TABS: &[(Tab, &str)] = &[
-    (Tab::Donors, "Donor breakdown"),
-    (Tab::Eur, "EUR ledger summary"),
-    (Tab::Brl, "BRL ledger summary"),
-    (Tab::Inventory, "Inventory summary"),
-    (Tab::Outbound, "Outbound summary"),
-    (Tab::AuditTrail, "Audit trail"),
+// (tab, i18n key for the on-screen/tab label, fixed English slug for the CSV
+// export filename — kept separate from the translated label so the exported
+// filename doesn't change based on the active UI language, in the same
+// spirit as T4's filename locale-independence).
+const TABS: &[(Tab, &str, &str)] = &[
+    (Tab::Donors, "reports.tab.donors", "donor-breakdown"),
+    (Tab::Eur, "reports.tab.eur", "eur-ledger-summary"),
+    (Tab::Brl, "reports.tab.brl", "brl-ledger-summary"),
+    (Tab::Inventory, "reports.tab.inventory", "inventory-summary"),
+    (Tab::Outbound, "reports.tab.outbound", "outbound-summary"),
+    (Tab::AuditTrail, "reports.tab.audit_trail", "audit-trail"),
 ];
 
 pub struct ReportsView {
@@ -93,8 +98,8 @@ struct DonorRow {
 
 struct AuditEntry {
     date: String,
-    ledger: &'static str,
-    kind: &'static str,
+    ledger: String,
+    kind: String,
     description: String,
     amount: String,
     docs: i64,
@@ -117,7 +122,7 @@ impl ReportsView {
             }
         }
 
-        ui.heading("Reports");
+        ui.heading(t!("sidebar.reports").as_ref());
         ui.add_space(4.0);
 
         if let Some(err) = &self.error {
@@ -158,57 +163,67 @@ impl ReportsView {
 
     fn show_filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("From");
+            ui.label(t!("reports.filter.from").as_ref());
             ui.add(
                 egui::TextEdit::singleline(&mut self.date_from)
-                    .hint_text("YYYY-MM-DD")
+                    .hint_text(t!("common.field.date_hint").as_ref())
                     .desired_width(110.0),
             );
-            ui.label("To");
+            ui.label(t!("reports.filter.to").as_ref());
             ui.add(
                 egui::TextEdit::singleline(&mut self.date_to)
-                    .hint_text("YYYY-MM-DD")
+                    .hint_text(t!("common.field.date_hint").as_ref())
                     .desired_width(110.0),
             );
 
             ui.add_space(12.0);
-            ui.label("Recipient project");
+            ui.label(t!("reports.filter.recipient").as_ref());
             let selected_label = self
                 .recipient_filter
                 .and_then(|id| self.recipient_projects.iter().find(|p| p.id == id))
                 .map(|p| p.name.clone())
-                .unwrap_or_else(|| "All".to_string());
+                .unwrap_or_else(|| t!("reports.combo.all").into_owned());
             egui::ComboBox::from_id_salt("reports_recipient_filter")
                 .selected_text(selected_label)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.recipient_filter, None, "All");
+                    ui.selectable_value(
+                        &mut self.recipient_filter,
+                        None,
+                        t!("reports.combo.all").as_ref(),
+                    );
                     for p in &self.recipient_projects {
                         ui.selectable_value(&mut self.recipient_filter, Some(p.id), &p.name);
                     }
                 });
 
             ui.add_space(12.0);
-            if ui.button("Clear filters").clicked() {
+            if ui
+                .button(t!("reports.button.clear_filters").as_ref())
+                .clicked()
+            {
                 self.date_from.clear();
                 self.date_to.clear();
                 self.recipient_filter = None;
             }
-            if ui.button("⟳ Refresh").clicked() {
+            if ui.button(t!("reports.button.refresh").as_ref()).clicked() {
                 self.loaded = false;
                 ui.ctx().request_repaint();
             }
             if let Some(ts) = &self.last_refreshed {
-                ui.weak(format!("↑ {ts}"));
+                ui.weak(t!("reports.refreshed_at", time = ts).into_owned());
             }
             ui.add_space(8.0);
-            if ui.button("Export CSV").clicked() {
+            if ui
+                .button(t!("reports.button.export_csv").as_ref())
+                .clicked()
+            {
                 self.export_status = None;
-                let tab_label = TABS
+                let tab_slug = TABS
                     .iter()
-                    .find(|(t, _)| *t == self.tab)
-                    .map(|(_, l)| *l)
+                    .find(|(t, _, _)| *t == self.tab)
+                    .map(|(_, _, slug)| *slug)
                     .unwrap_or("report");
-                let filename = format!("{}.csv", tab_label.to_lowercase().replace(' ', "-"));
+                let filename = format!("{tab_slug}.csv");
                 let (headers, rows) = match self.tab {
                     Tab::Donors => self.csv_data_donors(),
                     Tab::Eur => self.csv_data_eur(),
@@ -218,17 +233,24 @@ impl ReportsView {
                     Tab::AuditTrail => self.csv_data_audit_trail(),
                 };
                 let default_path = dirs::download_dir()
-                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
+                    .unwrap_or_else(|| {
+                        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+                    })
                     .join(&filename)
                     .to_string_lossy()
                     .into_owned();
                 self.csv_path_input = Some(default_path);
                 self.csv_pending_data = Some((headers, rows));
             }
-            if ui.button("Export PDF").clicked() {
+            if ui
+                .button(t!("reports.button.export_pdf").as_ref())
+                .clicked()
+            {
                 self.export_status = None;
                 let default_path = dirs::download_dir()
-                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
+                    .unwrap_or_else(|| {
+                        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+                    })
                     .join("adm-sfa-report.pdf")
                     .to_string_lossy()
                     .into_owned();
@@ -240,16 +262,13 @@ impl ReportsView {
         let mut csv_cancel = false;
         if let Some(ref mut path_str) = self.csv_path_input {
             ui.group(|ui| {
-                ui.label("Save CSV to:");
-                ui.add(
-                    egui::TextEdit::singleline(path_str)
-                        .desired_width(500.0),
-                );
+                ui.label(t!("reports.csv.save_to").as_ref());
+                ui.add(egui::TextEdit::singleline(path_str).desired_width(500.0));
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button(t!("common.save").as_ref()).clicked() {
                         csv_save = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t!("common.cancel").as_ref()).clicked() {
                         csv_cancel = true;
                     }
                 });
@@ -262,7 +281,7 @@ impl ReportsView {
                 let path = std::path::PathBuf::from(path_str.trim());
                 self.export_status = Some(
                     crate::reports::csv::write(&path, &headers, &rows)
-                        .map(|()| format!("Saved to {}", path.display()))
+                        .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
                         .map_err(|e| e.to_string()),
                 );
             }
@@ -275,13 +294,13 @@ impl ReportsView {
         let mut pdf_cancel = false;
         if let Some(ref mut path_str) = self.pdf_path_input {
             ui.group(|ui| {
-                ui.label("Save PDF to (full report, all sections):");
+                ui.label(t!("reports.pdf.save_to").as_ref());
                 ui.add(egui::TextEdit::singleline(path_str).desired_width(500.0));
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button(t!("common.save").as_ref()).clicked() {
                         pdf_save = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t!("common.cancel").as_ref()).clicked() {
                         pdf_cancel = true;
                     }
                 });
@@ -296,7 +315,7 @@ impl ReportsView {
                 .to_string();
             let path = std::path::PathBuf::from(&path_str);
             if path.as_os_str().is_empty() {
-                self.export_status = Some(Err("Please enter a file path.".to_string()));
+                self.export_status = Some(Err(t!("common.error.path_required").into_owned()));
             } else {
                 self.pdf_path_input = None;
                 let generated = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -309,7 +328,7 @@ impl ReportsView {
                         &self.date_to,
                         &sections,
                     )
-                    .map(|()| format!("Saved to {}", path.display()))
+                    .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
                     .map_err(|e| e.to_string()),
                 );
             }
@@ -320,16 +339,23 @@ impl ReportsView {
         if let Some(status) = &self.export_status {
             match status {
                 Ok(msg) => ui.colored_label(egui::Color32::DARK_GREEN, msg),
-                Err(msg) => ui.colored_label(egui::Color32::RED, format!("Export failed: {msg}")),
+                Err(msg) => ui.colored_label(
+                    egui::Color32::RED,
+                    t!("reports.error.export_failed", msg = msg).into_owned(),
+                ),
             };
         }
-        ui.weak("Date range applies to all tabs except Inventory. Recipient project filters Outbound and Audit trail.");
+        ui.weak(t!("reports.hint.filters").as_ref());
     }
 
     fn show_tabs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            for &(tab, label) in TABS {
-                if ui.selectable_label(self.tab == tab, label).clicked() {
+            for &(tab, key, _) in TABS {
+                let label = t!(key);
+                if ui
+                    .selectable_label(self.tab == tab, label.as_ref())
+                    .clicked()
+                {
                     self.tab = tab;
                 }
             }
@@ -337,13 +363,13 @@ impl ReportsView {
     }
 
     fn show_donor_breakdown(&self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Contributions per donor").strong());
+        ui.label(egui::RichText::new(t!("reports.donor.heading").as_ref()).strong());
         ui.add_space(6.0);
 
         let rows = self.build_donor_rows();
 
         if rows.is_empty() {
-            ui.weak("No donor activity in the selected date range.");
+            ui.weak(t!("reports.donor.empty").as_ref());
         } else {
             TableBuilder::new(ui)
                 .id_salt("donor_breakdown_table")
@@ -354,16 +380,16 @@ impl ReportsView {
                 .column(Column::remainder().at_least(130.0))
                 .header(20.0, |mut header| {
                     header.col(|ui| {
-                        ui.strong("Donor");
+                        ui.strong(t!("common.field.donor").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Cash donations");
+                        ui.strong(t!("reports.donor.col.cash_count").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Cash total (€)");
+                        ui.strong(t!("reports.donor.col.cash_total").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Physical donations");
+                        ui.strong(t!("reports.donor.col.items").as_ref());
                     });
                 })
                 .body(|mut body| {
@@ -406,10 +432,8 @@ impl ReportsView {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Full contribution history").strong());
-        ui.weak(
-            "Every donation ever recorded, oldest first — not affected by the date filter above.",
-        );
+        ui.label(egui::RichText::new(t!("reports.donor.log.heading").as_ref()).strong());
+        ui.weak(t!("reports.donor.log.hint").as_ref());
         ui.add_space(6.0);
 
         let mut log: Vec<DonorLogRow> = Vec::new();
@@ -441,7 +465,7 @@ impl ReportsView {
         }
 
         if log.is_empty() {
-            ui.weak("No donations recorded yet.");
+            ui.weak(t!("reports.donor.log.empty").as_ref());
             return;
         }
 
@@ -470,16 +494,16 @@ impl ReportsView {
             .column(Column::remainder().at_least(160.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Date");
+                    ui.strong(t!("common.col.date").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Donor");
+                    ui.strong(t!("common.field.donor").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Cash (€)");
+                    ui.strong(t!("reports.donor.log.col.cash").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Physical items");
+                    ui.strong(t!("reports.donor.log.col.items").as_ref());
                 });
             })
             .body(|mut body| {
@@ -519,7 +543,7 @@ impl ReportsView {
     }
 
     fn show_eur_summary(&self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("EUR ledger summary").strong());
+        ui.label(egui::RichText::new(t!("reports.tab.eur").as_ref()).strong());
         ui.add_space(6.0);
 
         let starting_balance: Decimal = self
@@ -561,26 +585,26 @@ impl ReportsView {
             .spacing([16.0, 6.0])
             .show(ui, |ui| {
                 ui.label("");
-                ui.label(egui::RichText::new("Count").strong());
-                ui.label(egui::RichText::new("Total (€)").strong());
+                ui.label(egui::RichText::new(t!("reports.grid.col.count").as_ref()).strong());
+                ui.label(egui::RichText::new(t!("reports.eur.col.total").as_ref()).strong());
                 ui.end_row();
 
-                ui.label("Donations in");
+                ui.label(t!("reports.eur.row.donations_in").as_ref());
                 ui.label(don_count.to_string());
                 ui.label(format!("{:.2}", don_total));
                 ui.end_row();
 
-                ui.label("Self-funding in");
+                ui.label(t!("reports.eur.row.self_funding_in").as_ref());
                 ui.label(sf_count.to_string());
                 ui.label(format!("{:.2}", sf_total));
                 ui.end_row();
 
-                ui.label("Purchases out");
+                ui.label(t!("reports.eur.row.purchases_out").as_ref());
                 ui.label(pur_count.to_string());
                 ui.label(format!("{:.2}", pur_total));
                 ui.end_row();
 
-                ui.label("Transfers out");
+                ui.label(t!("reports.eur.row.transfers_out").as_ref());
                 ui.label(tr_count.to_string());
                 ui.label(format!("{:.2}", tr_total));
                 ui.end_row();
@@ -589,9 +613,24 @@ impl ReportsView {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
-        ui.label(format!("Starting balance: € {:.2}", starting_balance));
-        ui.label(format!("Net for period: € {:.2}", net));
-        ui.label(egui::RichText::new(format!("Ending balance: € {:.2}", ending_balance)).strong());
+        ui.label(
+            t!(
+                "reports.eur.starting_balance",
+                amount = format!("{:.2}", starting_balance)
+            )
+            .into_owned(),
+        );
+        ui.label(t!("reports.eur.net_for_period", amount = format!("{:.2}", net)).into_owned());
+        ui.label(
+            egui::RichText::new(
+                t!(
+                    "reports.eur.ending_balance",
+                    amount = format!("{:.2}", ending_balance)
+                )
+                .into_owned(),
+            )
+            .strong(),
+        );
 
         self.show_eur_running_ledger(ui);
     }
@@ -600,8 +639,8 @@ impl ReportsView {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Full transaction history").strong());
-        ui.weak("Every EUR transaction ever recorded, oldest first — not affected by the date filter above.");
+        ui.label(egui::RichText::new(t!("reports.running_ledger.heading").as_ref()).strong());
+        ui.weak(t!("reports.eur.running_ledger.hint").as_ref());
         ui.add_space(6.0);
 
         let mut rows: Vec<&EurTxRow> = self.eur_rows.iter().collect();
@@ -617,19 +656,19 @@ impl ReportsView {
             .column(Column::auto().at_least(90.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Date");
+                    ui.strong(t!("common.col.date").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Description");
+                    ui.strong(t!("common.col.description").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Inbound (€)");
+                    ui.strong(t!("reports.running_ledger.col.inbound", symbol = "€").into_owned());
                 });
                 header.col(|ui| {
-                    ui.strong("Outbound (€)");
+                    ui.strong(t!("reports.running_ledger.col.outbound", symbol = "€").into_owned());
                 });
                 header.col(|ui| {
-                    ui.strong("Balance (€)");
+                    ui.strong(t!("reports.running_ledger.col.balance", symbol = "€").into_owned());
                 });
             })
             .body(|mut body| {
@@ -637,7 +676,7 @@ impl ReportsView {
                 body.row(20.0, |mut row| {
                     row.col(|_| {});
                     row.col(|ui| {
-                        ui.weak("Initial balance");
+                        ui.weak(t!("reports.running_ledger.initial_balance").as_ref());
                     });
                     row.col(|_| {});
                     row.col(|_| {});
@@ -680,7 +719,7 @@ impl ReportsView {
     }
 
     fn show_brl_summary(&self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("BRL ledger summary").strong());
+        ui.label(egui::RichText::new(t!("reports.tab.brl").as_ref()).strong());
         ui.add_space(6.0);
 
         let starting_balance: Decimal = self
@@ -721,21 +760,21 @@ impl ReportsView {
             .spacing([16.0, 6.0])
             .show(ui, |ui| {
                 ui.label("");
-                ui.label(egui::RichText::new("Count").strong());
-                ui.label(egui::RichText::new("Total (R$)").strong());
+                ui.label(egui::RichText::new(t!("reports.grid.col.count").as_ref()).strong());
+                ui.label(egui::RichText::new(t!("reports.brl.col.total").as_ref()).strong());
                 ui.end_row();
 
-                ui.label("Transfer in");
+                ui.label(t!("reports.brl.row.transfer_in").as_ref());
                 ui.label(tr_count.to_string());
                 ui.label(format!("{:.2}", tr_total));
                 ui.end_row();
 
-                ui.label("Brazil purchases out");
+                ui.label(t!("reports.brl.row.purchases_out").as_ref());
                 ui.label(pur_count.to_string());
                 ui.label(format!("{:.2}", pur_total));
                 ui.end_row();
 
-                ui.label("Cash gifts out");
+                ui.label(t!("reports.brl.row.gifts_out").as_ref());
                 ui.label(gift_count.to_string());
                 ui.label(format!("{:.2}", gift_total));
                 ui.end_row();
@@ -744,9 +783,24 @@ impl ReportsView {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
-        ui.label(format!("Starting balance: R$ {:.2}", starting_balance));
-        ui.label(format!("Net for period: R$ {:.2}", net));
-        ui.label(egui::RichText::new(format!("Ending balance: R$ {:.2}", ending_balance)).strong());
+        ui.label(
+            t!(
+                "reports.brl.starting_balance",
+                amount = format!("{:.2}", starting_balance)
+            )
+            .into_owned(),
+        );
+        ui.label(t!("reports.brl.net_for_period", amount = format!("{:.2}", net)).into_owned());
+        ui.label(
+            egui::RichText::new(
+                t!(
+                    "reports.brl.ending_balance",
+                    amount = format!("{:.2}", ending_balance)
+                )
+                .into_owned(),
+            )
+            .strong(),
+        );
 
         self.show_brl_running_ledger(ui);
     }
@@ -755,8 +809,8 @@ impl ReportsView {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Full transaction history").strong());
-        ui.weak("Every BRL transaction ever recorded, oldest first — not affected by the date filter above.");
+        ui.label(egui::RichText::new(t!("reports.running_ledger.heading").as_ref()).strong());
+        ui.weak(t!("reports.brl.running_ledger.hint").as_ref());
         ui.add_space(6.0);
 
         let mut rows: Vec<&BrlTxRow> = self.brl_rows.iter().collect();
@@ -772,19 +826,21 @@ impl ReportsView {
             .column(Column::auto().at_least(90.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Date");
+                    ui.strong(t!("common.col.date").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Description");
+                    ui.strong(t!("common.col.description").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Inbound (R$)");
+                    ui.strong(t!("reports.running_ledger.col.inbound", symbol = "R$").into_owned());
                 });
                 header.col(|ui| {
-                    ui.strong("Outbound (R$)");
+                    ui.strong(
+                        t!("reports.running_ledger.col.outbound", symbol = "R$").into_owned(),
+                    );
                 });
                 header.col(|ui| {
-                    ui.strong("Balance (R$)");
+                    ui.strong(t!("reports.running_ledger.col.balance", symbol = "R$").into_owned());
                 });
             })
             .body(|mut body| {
@@ -792,7 +848,7 @@ impl ReportsView {
                 body.row(20.0, |mut row| {
                     row.col(|_| {});
                     row.col(|ui| {
-                        ui.weak("Initial balance");
+                        ui.weak(t!("reports.running_ledger.initial_balance").as_ref());
                     });
                     row.col(|_| {});
                     row.col(|_| {});
@@ -835,8 +891,8 @@ impl ReportsView {
     }
 
     fn show_inventory_summary(&self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Inventory summary").strong());
-        ui.weak("Snapshot of current inventory — not affected by the date/recipient filters.");
+        ui.label(egui::RichText::new(t!("reports.tab.inventory").as_ref()).strong());
+        ui.weak(t!("reports.inventory.hint").as_ref());
         ui.add_space(6.0);
 
         let mut by_cat_status: BTreeMap<(String, &'static str), i64> = BTreeMap::new();
@@ -850,11 +906,13 @@ impl ReportsView {
         }
 
         if self.inventory_rows.is_empty() {
-            ui.weak("No inventory items yet.");
+            ui.weak(t!("reports.inventory.empty").as_ref());
             return;
         }
 
-        ui.label(egui::RichText::new("By category & status").italics());
+        ui.label(
+            egui::RichText::new(t!("reports.inventory.by_cat_status.heading").as_ref()).italics(),
+        );
         TableBuilder::new(ui)
             .id_salt("inv_cat_status_table")
             .striped(true)
@@ -863,13 +921,13 @@ impl ReportsView {
             .column(Column::remainder().at_least(80.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Category");
+                    ui.strong(t!("common.col.category").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Status");
+                    ui.strong(t!("common.field.status").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Count");
+                    ui.strong(t!("common.col.count").as_ref());
                 });
             })
             .body(|mut body| {
@@ -889,7 +947,9 @@ impl ReportsView {
             });
 
         ui.add_space(12.0);
-        ui.label(egui::RichText::new("By location").italics());
+        ui.label(
+            egui::RichText::new(t!("reports.inventory.by_location.heading").as_ref()).italics(),
+        );
         TableBuilder::new(ui)
             .id_salt("inv_location_table")
             .striped(true)
@@ -897,10 +957,10 @@ impl ReportsView {
             .column(Column::remainder().at_least(80.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Location");
+                    ui.strong(t!("common.field.location").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Count");
+                    ui.strong(t!("common.col.count").as_ref());
                 });
             })
             .body(|mut body| {
@@ -923,8 +983,8 @@ impl ReportsView {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Full inventory list").strong());
-        ui.weak("Every inventory item, oldest acquired first — not affected by the date/recipient filters above.");
+        ui.label(egui::RichText::new(t!("reports.inventory.log.heading").as_ref()).strong());
+        ui.weak(t!("reports.inventory.log.hint").as_ref());
         ui.add_space(6.0);
 
         let mut rows: Vec<&InventoryItemRow> = self.inventory_rows.iter().collect();
@@ -944,19 +1004,19 @@ impl ReportsView {
             .column(Column::remainder().at_least(160.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Name");
+                    ui.strong(t!("common.col.name").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Category");
+                    ui.strong(t!("common.col.category").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Status");
+                    ui.strong(t!("common.field.status").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Location");
+                    ui.strong(t!("common.field.location").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Source");
+                    ui.strong(t!("common.field.source").as_ref());
                 });
             })
             .body(|mut body| {
@@ -983,7 +1043,7 @@ impl ReportsView {
     }
 
     fn show_outbound_summary(&self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Outbound summary").strong());
+        ui.label(egui::RichText::new(t!("reports.tab.outbound").as_ref()).strong());
         ui.add_space(6.0);
 
         let filtered: Vec<&OutboundEventRow> = self
@@ -997,7 +1057,7 @@ impl ReportsView {
             .collect();
 
         if filtered.is_empty() {
-            ui.weak("No outbound donations in the selected range.");
+            ui.weak(t!("reports.outbound.empty").as_ref());
         } else {
             let mut by_recipient: BTreeMap<String, (i64, i64, Decimal)> = BTreeMap::new();
             for e in &filtered {
@@ -1010,7 +1070,9 @@ impl ReportsView {
                 entry.2 += e.cash_amount_brl.unwrap_or(Decimal::ZERO);
             }
 
-            ui.label(egui::RichText::new("Per recipient project").italics());
+            ui.label(
+                egui::RichText::new(t!("reports.outbound.by_recipient.heading").as_ref()).italics(),
+            );
             TableBuilder::new(ui)
                 .id_salt("outbound_by_recipient_table")
                 .striped(true)
@@ -1020,16 +1082,16 @@ impl ReportsView {
                 .column(Column::remainder().at_least(100.0))
                 .header(20.0, |mut header| {
                     header.col(|ui| {
-                        ui.strong("Recipient");
+                        ui.strong(t!("reports.col.recipient").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Events");
+                        ui.strong(t!("reports.col.events").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Items");
+                        ui.strong(t!("reports.col.items").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Cash (R$)");
+                        ui.strong(t!("reports.outbound.col.cash").as_ref());
                     });
                 })
                 .body(|mut body| {
@@ -1052,7 +1114,7 @@ impl ReportsView {
                 });
 
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Events").italics());
+            ui.label(egui::RichText::new(t!("reports.col.events").as_ref()).italics());
             TableBuilder::new(ui)
                 .id_salt("outbound_events_table")
                 .striped(true)
@@ -1062,16 +1124,16 @@ impl ReportsView {
                 .column(Column::remainder().at_least(90.0))
                 .header(20.0, |mut header| {
                     header.col(|ui| {
-                        ui.strong("Date");
+                        ui.strong(t!("common.col.date").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Recipient");
+                        ui.strong(t!("reports.col.recipient").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Items");
+                        ui.strong(t!("reports.col.items").as_ref());
                     });
                     header.col(|ui| {
-                        ui.strong("Cash (R$)");
+                        ui.strong(t!("reports.outbound.col.cash").as_ref());
                     });
                 })
                 .body(|mut body| {
@@ -1106,12 +1168,12 @@ impl ReportsView {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Full outbound history").strong());
-        ui.weak("Every outbound donation ever recorded, oldest first — not affected by the date or recipient filters above.");
+        ui.label(egui::RichText::new(t!("reports.outbound.history.heading").as_ref()).strong());
+        ui.weak(t!("reports.outbound.history.hint").as_ref());
         ui.add_space(6.0);
 
         if self.outbound_rows.is_empty() {
-            ui.weak("No outbound donations recorded yet.");
+            ui.weak(t!("reports.outbound.history.empty").as_ref());
             return;
         }
 
@@ -1127,16 +1189,16 @@ impl ReportsView {
             .column(Column::remainder().at_least(160.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Date");
+                    ui.strong(t!("common.col.date").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Recipient");
+                    ui.strong(t!("reports.col.recipient").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Cash (R$)");
+                    ui.strong(t!("reports.outbound.col.cash").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Items given");
+                    ui.strong(t!("reports.outbound.history.col.items_given").as_ref());
                 });
             })
             .body(|mut body| {
@@ -1168,14 +1230,14 @@ impl ReportsView {
     }
 
     fn show_audit_trail(&self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Full audit trail").strong());
-        ui.weak("Every transaction and outbound event in the selected range, with a count of attached documents.");
+        ui.label(egui::RichText::new(t!("reports.audit.heading").as_ref()).strong());
+        ui.weak(t!("reports.audit.hint").as_ref());
         ui.add_space(6.0);
 
         let entries = self.build_audit_entries();
 
         if entries.is_empty() {
-            ui.weak("No activity in the selected range.");
+            ui.weak(t!("reports.audit.empty").as_ref());
             return;
         }
 
@@ -1190,22 +1252,22 @@ impl ReportsView {
             .column(Column::remainder().at_least(60.0))
             .header(20.0, |mut header| {
                 header.col(|ui| {
-                    ui.strong("Date");
+                    ui.strong(t!("common.col.date").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Ledger");
+                    ui.strong(t!("reports.audit.col.ledger").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Type");
+                    ui.strong(t!("reports.col.type").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Description");
+                    ui.strong(t!("common.col.description").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Amount");
+                    ui.strong(t!("common.col.amount").as_ref());
                 });
                 header.col(|ui| {
-                    ui.strong("Docs");
+                    ui.strong(t!("reports.audit.col.docs").as_ref());
                 });
             })
             .body(|mut body| {
@@ -1215,10 +1277,10 @@ impl ReportsView {
                             ui.label(&e.date);
                         });
                         row.col(|ui| {
-                            ui.label(e.ledger);
+                            ui.label(&e.ledger);
                         });
                         row.col(|ui| {
-                            ui.label(e.kind);
+                            ui.label(&e.kind);
                         });
                         row.col(|ui| {
                             ui.label(&e.description);
@@ -1238,15 +1300,12 @@ impl ReportsView {
             });
     }
     fn csv_data_donors(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = [
-            "Donor",
-            "Cash donations",
-            "Cash total (EUR)",
-            "Physical donations",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let headers = vec![
+            t!("common.field.donor").into_owned(),
+            t!("reports.donor.col.cash_count").into_owned(),
+            t!("reports.donor.csv.col.cash_total").into_owned(),
+            t!("reports.donor.col.items").into_owned(),
+        ];
         let rows = self
             .build_donor_rows()
             .into_iter()
@@ -1312,7 +1371,7 @@ impl ReportsView {
         if !anon_cash.is_empty() || anon_items > 0 {
             let cash_total: Decimal = anon_cash.iter().map(|r| r.amount).sum();
             rows.push(DonorRow {
-                name: "Anonymous".to_string(),
+                name: t!("common.anonymous").into_owned(),
                 cash_count: anon_cash.len() as i64,
                 cash_total,
                 item_count: anon_items,
@@ -1322,10 +1381,12 @@ impl ReportsView {
     }
 
     fn csv_data_eur(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = ["Date", "Type", "Description", "Amount (EUR)"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let headers = vec![
+            t!("common.col.date").into_owned(),
+            t!("reports.col.type").into_owned(),
+            t!("common.col.description").into_owned(),
+            t!("reports.eur.csv.col.amount").into_owned(),
+        ];
         let rows = self
             .eur_rows
             .iter()
@@ -1345,10 +1406,12 @@ impl ReportsView {
     }
 
     fn csv_data_brl(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = ["Date", "Type", "Description", "Amount (BRL)"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let headers = vec![
+            t!("common.col.date").into_owned(),
+            t!("reports.col.type").into_owned(),
+            t!("common.col.description").into_owned(),
+            t!("reports.brl.csv.col.amount").into_owned(),
+        ];
         let rows = self
             .brl_rows
             .iter()
@@ -1368,31 +1431,28 @@ impl ReportsView {
     }
 
     fn csv_data_inventory(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = [
-            "Name",
-            "Category",
-            "Status",
-            "Location",
-            "Source type",
-            "Source",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let headers = vec![
+            t!("common.col.name").into_owned(),
+            t!("common.col.category").into_owned(),
+            t!("common.field.status").into_owned(),
+            t!("common.field.location").into_owned(),
+            t!("reports.inventory.csv.col.source_type").into_owned(),
+            t!("common.field.source").into_owned(),
+        ];
         let rows = self
             .inventory_rows
             .iter()
             .map(|item| {
                 let source_type = match item.source_type {
-                    SourceType::Donation => "Donation",
-                    SourceType::Purchase => "Purchase",
+                    SourceType::Donation => t!("status.source_type.donation"),
+                    SourceType::Purchase => t!("status.source_type.purchase"),
                 };
                 vec![
                     item.name.clone(),
                     item.category_name.clone(),
                     item.status.label().to_string(),
                     item.location.label().to_string(),
-                    source_type.to_string(),
+                    source_type.into_owned(),
                     item.source_desc.clone(),
                 ]
             })
@@ -1401,10 +1461,12 @@ impl ReportsView {
     }
 
     fn csv_data_outbound(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = ["Date", "Recipient", "Items", "Cash (BRL)"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let headers = vec![
+            t!("common.col.date").into_owned(),
+            t!("reports.col.recipient").into_owned(),
+            t!("reports.col.items").into_owned(),
+            t!("reports.outbound.csv.col.cash").into_owned(),
+        ];
         let rows = self
             .outbound_rows
             .iter()
@@ -1428,25 +1490,22 @@ impl ReportsView {
     }
 
     fn csv_data_audit_trail(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let headers = [
-            "Date",
-            "Ledger",
-            "Type",
-            "Description",
-            "Amount",
-            "Documents",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let headers = vec![
+            t!("common.col.date").into_owned(),
+            t!("reports.audit.col.ledger").into_owned(),
+            t!("reports.col.type").into_owned(),
+            t!("common.col.description").into_owned(),
+            t!("common.col.amount").into_owned(),
+            t!("reports.audit.csv.col.documents").into_owned(),
+        ];
         let rows = self
             .build_audit_entries()
             .into_iter()
             .map(|e| {
                 vec![
                     e.date,
-                    e.ledger.to_string(),
-                    e.kind.to_string(),
+                    e.ledger,
+                    e.kind,
                     e.description,
                     e.amount,
                     if e.docs > 0 {
@@ -1468,12 +1527,36 @@ impl ReportsView {
         let (oh, or_) = self.csv_data_outbound();
         let (ah, ar) = self.csv_data_audit_trail();
         vec![
-            crate::reports::pdf::PdfSection { title: "Donor Breakdown",     headers: dh,  rows: dr  },
-            crate::reports::pdf::PdfSection { title: "EUR Ledger",           headers: eh,  rows: er  },
-            crate::reports::pdf::PdfSection { title: "BRL Ledger",           headers: bh,  rows: br  },
-            crate::reports::pdf::PdfSection { title: "Inventory",            headers: ih,  rows: ir  },
-            crate::reports::pdf::PdfSection { title: "Outbound Donations",   headers: oh,  rows: or_ },
-            crate::reports::pdf::PdfSection { title: "Full Audit Trail",     headers: ah,  rows: ar  },
+            crate::reports::pdf::PdfSection {
+                title: t!("reports.pdf.section.donor").into_owned(),
+                headers: dh,
+                rows: dr,
+            },
+            crate::reports::pdf::PdfSection {
+                title: t!("reports.pdf.section.eur").into_owned(),
+                headers: eh,
+                rows: er,
+            },
+            crate::reports::pdf::PdfSection {
+                title: t!("reports.pdf.section.brl").into_owned(),
+                headers: bh,
+                rows: br,
+            },
+            crate::reports::pdf::PdfSection {
+                title: t!("sidebar.inventory").into_owned(),
+                headers: ih,
+                rows: ir,
+            },
+            crate::reports::pdf::PdfSection {
+                title: t!("reports.pdf.section.outbound").into_owned(),
+                headers: oh,
+                rows: or_,
+            },
+            crate::reports::pdf::PdfSection {
+                title: t!("reports.pdf.section.audit").into_owned(),
+                headers: ah,
+                rows: ar,
+            },
         ]
     }
 
@@ -1499,8 +1582,8 @@ impl ReportsView {
             let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
             entries.push(AuditEntry {
                 date: r.date.clone(),
-                ledger: "EUR",
-                kind: r.tx_type.label(),
+                ledger: "EUR".to_string(),
+                kind: r.tx_type.label().to_string(),
                 description,
                 amount: format!("{sign}€{:.2}", r.amount),
                 docs,
@@ -1537,8 +1620,8 @@ impl ReportsView {
             let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
             entries.push(AuditEntry {
                 date: r.date.clone(),
-                ledger: "BRL",
-                kind: r.tx_type.label(),
+                ledger: "BRL".to_string(),
+                kind: r.tx_type.label().to_string(),
                 description,
                 amount: format!("{sign}R${:.2}", r.amount),
                 docs,
@@ -1554,16 +1637,32 @@ impl ReportsView {
                     continue;
                 }
             }
-            let mut desc = format!("{} item(s) to {}", e.item_count, e.recipient_name);
+            let mut desc = if e.item_count == 1 {
+                t!(
+                    "reports.audit.outbound_desc_one",
+                    recipient = e.recipient_name
+                )
+                .into_owned()
+            } else {
+                t!(
+                    "reports.audit.outbound_desc_other",
+                    count = e.item_count,
+                    recipient = e.recipient_name
+                )
+                .into_owned()
+            };
             if let Some(cash) = e.cash_amount_brl {
                 if cash > Decimal::ZERO {
-                    desc.push_str(&format!(" + R$ {cash:.2} cash gift"));
+                    desc.push_str(&t!(
+                        "reports.audit.outbound_cash_suffix",
+                        cash = format!("{cash:.2}")
+                    ));
                 }
             }
             entries.push(AuditEntry {
                 date: e.date.clone(),
-                ledger: "Outbound",
-                kind: "Donation",
+                ledger: t!("sidebar.outbound").into_owned(),
+                kind: t!("status.source_type.donation").into_owned(),
                 description: desc,
                 amount: String::new(),
                 docs: 0,
@@ -1580,7 +1679,8 @@ fn in_range(date: &str, from: &str, to: &str) -> bool {
 }
 
 fn donor_or_anonymous(name: &Option<String>) -> String {
-    name.clone().unwrap_or_else(|| "Anonymous".to_string())
+    name.clone()
+        .unwrap_or_else(|| t!("common.anonymous").into_owned())
 }
 
 fn eur_tx_description(r: &EurTxRow) -> String {
@@ -1588,16 +1688,16 @@ fn eur_tx_description(r: &EurTxRow) -> String {
         EurTxType::DonationIn => r
             .donor_name
             .clone()
-            .unwrap_or_else(|| "Anonymous".to_string()),
+            .unwrap_or_else(|| t!("common.anonymous").into_owned()),
         EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
         EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-        EurTxType::TransferToBrlOut => "EUR→BRL transfer".to_string(),
+        EurTxType::TransferToBrlOut => t!("reports.tx.eur_to_brl_transfer").into_owned(),
     }
 }
 
 fn brl_tx_description(r: &BrlTxRow) -> String {
     match r.tx_type {
-        BrlTxType::TransferIn => "EUR→BRL transfer".to_string(),
+        BrlTxType::TransferIn => t!("reports.tx.eur_to_brl_transfer").into_owned(),
         BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
         BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
     }

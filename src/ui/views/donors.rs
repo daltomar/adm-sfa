@@ -1,5 +1,6 @@
 use eframe::egui;
 use rusqlite::Connection;
+use rust_i18n::t;
 
 use crate::db::queries::donors as qry;
 use crate::model::donor::{Donor, DonorDraft};
@@ -56,17 +57,17 @@ impl DonorsView {
             .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
-                    ui.weak("Select a donor from the list, or add a new one.");
+                    ui.weak(t!("donors.hint.select_or_add").as_ref());
                 }
                 Mode::Adding | Mode::Editing(_) => self.show_form(ui, db),
             });
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Donors");
+        ui.heading(t!("donors.heading").as_ref());
         ui.add_space(4.0);
 
-        if ui.button("+ Add donor").clicked() {
+        if ui.button(t!("donors.button.add").as_ref()).clicked() {
             self.draft = DonorDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
@@ -83,7 +84,7 @@ impl DonorsView {
             .id_salt("donors_list_scroll")
             .show(ui, |ui| {
                 if self.donors.is_empty() {
-                    ui.weak("No donors yet.");
+                    ui.weak(t!("donors.empty").as_ref());
                 }
                 let mut pending_edit: Option<(i64, DonorDraft)> = None;
                 for donor in &self.donors {
@@ -114,7 +115,12 @@ impl DonorsView {
             _ => None,
         };
 
-        ui.heading(if is_adding { "New Donor" } else { "Edit Donor" });
+        let heading = if is_adding {
+            t!("donors.heading.new")
+        } else {
+            t!("donors.heading.edit")
+        };
+        ui.heading(heading.as_ref());
         ui.add_space(8.0);
 
         egui::Grid::new("donor_form_grid")
@@ -122,19 +128,19 @@ impl DonorsView {
             .spacing([12.0, 8.0])
             .min_col_width(80.0)
             .show(ui, |ui| {
-                ui.label("Name *");
+                ui.label(t!("common.field.name").as_ref());
                 ui.add(egui::TextEdit::singleline(&mut self.draft.name).desired_width(280.0));
                 ui.end_row();
 
-                ui.label("Contact");
+                ui.label(t!("donors.field.contact").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.contact_info)
-                        .hint_text("email, phone, …")
+                        .hint_text(t!("donors.field.contact_hint").as_ref())
                         .desired_width(280.0),
                 );
                 ui.end_row();
 
-                ui.label("Notes");
+                ui.label(t!("common.field.notes").as_ref());
                 ui.add(
                     egui::TextEdit::multiline(&mut self.draft.notes)
                         .desired_width(280.0)
@@ -151,7 +157,10 @@ impl DonorsView {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             let name_ok = !self.draft.name.trim().is_empty();
-            if ui.add_enabled(name_ok, egui::Button::new("Save")).clicked() {
+            if ui
+                .add_enabled(name_ok, egui::Button::new(t!("common.save").as_ref()))
+                .clicked()
+            {
                 let result = if is_adding {
                     qry::insert(db, &self.draft).map(|_| ())
                 } else if let Some(id) = edit_id {
@@ -170,7 +179,7 @@ impl DonorsView {
                 }
             }
 
-            if ui.button("Cancel").clicked() {
+            if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
             }
