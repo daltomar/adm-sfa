@@ -195,6 +195,8 @@ Example: a Kleinanzeigen purchase (id 42) with an ad screenshot and two chat scr
 2026-06-30_purchase-42_chat-2.jpg
 ```
 
+Filenames are locale-independent: none of `date`, `record-type`, or `label` is ever a UI-language-translated or display-formatted value — the filename generated for a given record is the same no matter which UI language was active when the file was attached (see §6.1).
+
 ### 4.3 Upload flow
 
 The user drags a file onto a purchase, item, or transfer record. A small dialog shows the filename already filled in (date, record type, and ID are pre-populated and not editable) with only the label left to choose from a dropdown. No free typing is required.
@@ -223,6 +225,8 @@ Reports must serve three audiences with different needs: personal record-keeping
 - PDF export — clean, printable, suitable for sharing with donors or authorities
 - CSV export — for further analysis or import into spreadsheets
 
+Every report is generated in an explicit target language, independent of the active UI language (§6.3). CSV export additionally always uses a fixed German-style number/delimiter format regardless of the active UI language (§6.4).
+
 ### 5.3 Required report content
 
 - Donor breakdown — contributions per individual donor over a date range (not just aggregate totals), to support donor transparency
@@ -247,7 +251,47 @@ The Dashboard section is currently an empty placeholder. Suggested content for a
 
 None of these require new schema or entities. Implementation can reuse the existing `list()` queries from the ledger, inventory, and outbound modules and aggregate in Rust, exactly as the Reports section does.
 
-## 6. Open decisions for the implementation phase
+## 6. Localisation
+
+The desktop UI supports three languages: English (`en`, the source and fallback language), German (`de`), and Brazilian Portuguese (`pt-BR`) — not European Portuguese, since the recipient projects are Brazilian and the vocabulary differs.
+
+### 6.1 Scope
+
+In scope: all UI chrome (labels, buttons, menus, table headers, dialogs, validation/error messages), locale-aware date/number/currency *display* formatting, and a persisted language selection that can be changed live, without restarting the application.
+
+Out of scope, deliberately:
+
+- Translating user-entered entity data (donor names, recipient project names, item category names, document labels) — each is entered once by the operator and displayed verbatim in every language, per §2's treatment of these as first-class reusable entities rather than translatable content.
+- Translating DB-stored enum/status values (`purchase.status`, `inventory_item.status`, `inventory_item.location`, transaction types) — these remain English identifiers in the database and are mapped to a translated display string only at the point of rendering.
+- Translating generated document filenames (§4.2) — filenames are, and remain, locale-independent.
+- CSV report export formatting — see §6.4, which is fixed regardless of the active UI language.
+
+### 6.2 Language setting
+
+The active UI language is a single persisted setting (`en` \| `de` \| `pt-BR`, default `en`), stored using the same generic settings mechanism already used for other single-value configuration (e.g. the screenshot capture command) — no new data-model entity is introduced for it.
+
+### 6.3 Report language is independent of UI language
+
+Every report-generation entry point (on-screen, PDF, CSV — §5.2) takes an explicit target-language argument. It is never read implicitly from the active UI language setting. The UI language may be offered as the *default* choice in the report/export dialog, but the operator can generate, for example, a German-language report while the UI itself is set to English — the two are different questions ("what language is the report in" vs. "what language is the operator using the app in") and must stay answerable independently. A report that needs a fixed, non-translatable terminology set (e.g. legally-shaped official-language terms) may pin its own language outside the general translation catalogue; any such report specifies this for itself if and when it is scoped.
+
+### 6.4 CSV export format is fixed, not language-dependent
+
+CSV export (§5.2) always uses a German-style number and delimiter format — `;` field delimiter, `,` decimal separator, `.` thousands separator (e.g. `1.000,00`) — regardless of the active UI language. This is a deliberate exception to the general locale system: CSV output has one real-world consumer profile (German/Brazilian spreadsheet software, which both expect this format, and for which a comma decimal separator would make a comma field delimiter unusable), so there is no need for it to vary.
+
+### 6.5 Formatting is separate from translation
+
+Locale affects *presentation*, never stored data or computation:
+
+- Monetary values are stored and computed exactly as described in §2, regardless of UI language.
+- Amount *input* parsing (§2's comma-or-period leniency) is independent of the active UI language — a `de`-language user and an `en`-language user can each type either decimal-separator style; input leniency and display formatting are separate concerns.
+- The currency symbol shown for an amount (€ or R$) is a property of which ledger the amount belongs to, not of the active UI language — a EUR amount always shows `€`, in every language.
+- Date and number *display* formatting follows the active UI language (e.g. a date renders as `2026-07-16` in English, `16.07.2026` in German, `16/07/2026` in Portuguese); this affects on-screen and PDF display only, not CSV (§6.4) or stored values.
+
+### 6.6 Fallback
+
+If a display string has no translation in the active language, English is shown rather than a blank or placeholder value, and this never causes an error.
+
+## 7. Open decisions for the implementation phase
 
 > **Status:** resolved — see `stack-plan.md` for the chosen stack and schema.
 > This section is left as-is for historical context on what was intentionally
