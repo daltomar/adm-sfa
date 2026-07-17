@@ -105,25 +105,77 @@ struct DonorRow {
 
 struct AuditEntry {
     date: String,
-    ledger: String,
-    kind: String,
-    // Base description text, never including the outbound cash-gift figure
-    // (see `outbound_cash` below) — kept as raw pieces, not a pre-formatted
-    // string, since this entry feeds both the on-screen table (locale-aware
-    // display) and CSV export (always fixed-format, SPEC.md §6.4/T6), which
-    // need different number formatting from the same underlying value.
+    /// EUR/BRL rows only: pre-resolved at the ambient UI locale (via
+    /// `r.tx_type.label()` for `kind`; `ledger` is always the fixed
+    /// currency code "EUR"/"BRL", never translated). A disclosed, minor
+    /// limitation — unlike everything else in this struct, this doesn't
+    /// follow an export's explicit chosen locale. `None` for outbound rows,
+    /// which use `outbound` below instead: those needed a real fix (not
+    /// just a disclosed limitation) since Ledger/Type/Description are full
+    /// locale-sensitive prose there, not a single enum label.
+    ledger_kind: Option<(String, String)>,
+    /// EUR/BRL only (donor name / purchase channel / note — mostly DB user
+    /// data, not translated prose, see `eur_tx_description`/
+    /// `brl_tx_description`). Empty for outbound rows.
     description: String,
-    /// Set only for outbound rows with a nonzero cash gift; each consumer
-    /// appends its own formatted "+ cash gift" suffix to `description`.
-    outbound_cash: Option<Decimal>,
+    /// Outbound rows only — raw pieces, not pre-formatted text, so each
+    /// consumer (on-screen table vs CSV vs PDF) can build Ledger/Type/
+    /// Description in its own target locale via `outbound_audit_text()`
+    /// instead of a value baked once at whichever locale was ambient when
+    /// `build_audit_entries` ran.
+    outbound: Option<OutboundAuditInfo>,
     amount: Option<AuditAmount>,
     docs: i64,
+}
+
+struct OutboundAuditInfo {
+    item_count: i64,
+    recipient_name: String,
+    cash: Option<Decimal>,
 }
 
 struct AuditAmount {
     sign: &'static str,
     symbol: &'static str,
     value: Decimal,
+}
+
+/// Builds an outbound audit row's Ledger/Type/Description text in an
+/// explicit `locale` — fixes a bug where this used to be baked once inside
+/// `build_audit_entries` at the ambient UI locale, so a CSV/PDF export
+/// chosen in a different language still showed these three columns in
+/// whatever language happened to be active in the UI at the time.
+fn outbound_audit_text(
+    info: &OutboundAuditInfo,
+    locale: &str,
+    fmt_cash: impl Fn(Decimal) -> String,
+) -> (String, String, String) {
+    let ledger = t!("sidebar.outbound", locale = locale).into_owned();
+    let kind = t!("status.source_type.donation", locale = locale).into_owned();
+    let mut description = if info.item_count == 1 {
+        t!(
+            "reports.audit.outbound_desc_one",
+            locale = locale,
+            recipient = info.recipient_name.as_str()
+        )
+        .into_owned()
+    } else {
+        t!(
+            "reports.audit.outbound_desc_other",
+            locale = locale,
+            count = info.item_count,
+            recipient = info.recipient_name.as_str()
+        )
+        .into_owned()
+    };
+    if let Some(cash) = info.cash {
+        description.push_str(&t!(
+            "reports.audit.outbound_cash_suffix",
+            locale = locale,
+            cash = fmt_cash(cash)
+        ));
+    }
+    (ledger, kind, description)
 }
 
 impl ReportsView {
@@ -1297,26 +1349,27 @@ impl ReportsView {
                 });
             })
             .body(|mut body| {
+                let locale = rust_i18n::locale().to_string();
                 for e in &entries {
+                    let (ledger, kind, description) = match &e.outbound {
+                        Some(info) => outbound_audit_text(info, &locale, format::amount),
+                        None => {
+                            let (ledger, kind) = e.ledger_kind.clone().unwrap_or_default();
+                            (ledger, kind, e.description.clone())
+                        }
+                    };
                     body.row(22.0, |mut row| {
                         row.col(|ui| {
                             ui.label(format::date(&e.date));
                         });
                         row.col(|ui| {
-                            ui.label(&e.ledger);
+                            ui.label(&ledger);
                         });
                         row.col(|ui| {
-                            ui.label(&e.kind);
+                            ui.label(&kind);
                         });
                         row.col(|ui| {
-                            let mut desc = e.description.clone();
-                            if let Some(cash) = e.outbound_cash {
-                                desc.push_str(&t!(
-                                    "reports.audit.outbound_cash_suffix",
-                                    cash = format::amount(cash)
-                                ));
-                            }
-                            ui.label(desc);
+                            ui.label(&description);
                         });
                         row.col(|ui| {
                             if let Some(a) = &e.amount {
@@ -1602,17 +1655,17 @@ impl ReportsView {
                 } else {
                     format::date_in(&e.date, locale)
                 };
-                let mut description = e.description;
-                if let Some(cash) = e.outbound_cash {
-                    description.push_str(&t!(
-                        "reports.audit.outbound_cash_suffix",
-                        cash = fmt_amount(cash)
-                    ));
-                }
+                let (ledger, kind, description) = match &e.outbound {
+                    Some(info) => outbound_audit_text(info, locale, fmt_amount),
+                    None => {
+                        let (ledger, kind) = e.ledger_kind.unwrap_or_default();
+                        (ledger, kind, e.description)
+                    }
+                };
                 vec![
                     date,
-                    e.ledger,
-                    e.kind,
+                    ledger,
+                    kind,
                     description,
                     e.amount
                         .map(|a| format!("{}{}{}", a.sign, a.symbol, fmt_amount(a.value)))
@@ -1695,10 +1748,9 @@ impl ReportsView {
             let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
             entries.push(AuditEntry {
                 date: r.date.clone(),
-                ledger: "EUR".to_string(),
-                kind: r.tx_type.label(),
+                ledger_kind: Some(("EUR".to_string(), r.tx_type.label())),
                 description,
-                outbound_cash: None,
+                outbound: None,
                 amount: Some(AuditAmount {
                     sign,
                     symbol: "€",
@@ -1738,10 +1790,9 @@ impl ReportsView {
             let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
             entries.push(AuditEntry {
                 date: r.date.clone(),
-                ledger: "BRL".to_string(),
-                kind: r.tx_type.label(),
+                ledger_kind: Some(("BRL".to_string(), r.tx_type.label())),
                 description,
-                outbound_cash: None,
+                outbound: None,
                 amount: Some(AuditAmount {
                     sign,
                     symbol: "R$",
@@ -1760,27 +1811,16 @@ impl ReportsView {
                     continue;
                 }
             }
-            let desc = if e.item_count == 1 {
-                t!(
-                    "reports.audit.outbound_desc_one",
-                    recipient = e.recipient_name
-                )
-                .into_owned()
-            } else {
-                t!(
-                    "reports.audit.outbound_desc_other",
-                    count = e.item_count,
-                    recipient = e.recipient_name
-                )
-                .into_owned()
-            };
             let outbound_cash = e.cash_amount_brl.filter(|&cash| cash > Decimal::ZERO);
             entries.push(AuditEntry {
                 date: e.date.clone(),
-                ledger: t!("sidebar.outbound").into_owned(),
-                kind: t!("status.source_type.donation").into_owned(),
-                description: desc,
-                outbound_cash,
+                ledger_kind: None,
+                description: String::new(),
+                outbound: Some(OutboundAuditInfo {
+                    item_count: e.item_count,
+                    recipient_name: e.recipient_name.clone(),
+                    cash: outbound_cash,
+                }),
                 amount: None,
                 docs: 0,
             });
@@ -1843,5 +1883,75 @@ fn brl_tx_description(r: &BrlTxRow) -> String {
         BrlTxType::TransferIn => t!("reports.tx.eur_to_brl_transfer").into_owned(),
         BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
         BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::outbound::OutboundEventRow;
+
+    fn outbound_fixture() -> ReportsView {
+        ReportsView {
+            outbound_rows: vec![OutboundEventRow {
+                id: 1,
+                date: "2026-01-15".to_string(),
+                recipient_project_id: 1,
+                recipient_name: "Projeto Teste".to_string(),
+                cash_amount_brl: Some(Decimal::new(500, 2)),
+                notes: None,
+                item_count: 2,
+            }],
+            ..Default::default()
+        }
+    }
+
+    // Regression test for a bug caught in code review: an outbound row's
+    // Ledger/Type/Description text used to be baked once, at whichever UI
+    // locale happened to be ambient when build_audit_entries ran, instead
+    // of following the export's explicitly chosen locale like every other
+    // field. Deliberately does not touch rust_i18n::set_locale (global,
+    // shared across parallel test threads) — csv_data_audit_trail must
+    // produce correct output from the `locale` argument alone.
+    #[test]
+    fn csv_audit_trail_outbound_row_follows_the_explicit_export_locale() {
+        let view = outbound_fixture();
+
+        let (_headers, rows) = view.csv_data_audit_trail("de", true);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+
+        assert_eq!(row[1], "Ausgehend", "ledger column must be German");
+        assert_eq!(row[2], "Spende", "type column must be German");
+        assert!(row[3].contains("Projeto Teste"));
+        assert!(row[3].contains("2 Artikel"), "description: {}", row[3]);
+        assert!(row[3].contains("Geldspende"), "cash suffix: {}", row[3]);
+        assert!(
+            !row[3].contains("items"),
+            "must not leak English: {}",
+            row[3]
+        );
+        assert!(
+            !row[3].contains("cash gift"),
+            "must not leak English: {}",
+            row[3]
+        );
+    }
+
+    #[test]
+    fn pdf_audit_trail_outbound_row_also_follows_the_explicit_export_locale() {
+        let view = outbound_fixture();
+
+        // for_csv = false is the PDF path — same shared function, must not
+        // silently fall back to CSV's fixed formatting or the ambient locale.
+        let (_headers, rows) = view.csv_data_audit_trail("pt-BR", false);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+
+        assert_eq!(row[1], "Saídas", "ledger column must be Portuguese");
+        assert_eq!(row[2], "Doação", "type column must be Portuguese");
+        assert!(row[3].contains("Projeto Teste"));
+        assert!(row[3].contains("2 itens"), "description: {}", row[3]);
+        assert!(row[3].contains("em doação"), "cash suffix: {}", row[3]);
     }
 }
