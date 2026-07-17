@@ -15,7 +15,10 @@ pub fn list(conn: &Connection) -> Result<Vec<Category>> {
 }
 
 pub fn insert(conn: &Connection, name: &str) -> Result<i64> {
-    conn.execute("INSERT INTO category (name) VALUES (?1)", params![name.trim()])?;
+    conn.execute(
+        "INSERT INTO category (name) VALUES (?1)",
+        params![name.trim()],
+    )?;
     Ok(conn.last_insert_rowid())
 }
 

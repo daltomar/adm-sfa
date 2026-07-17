@@ -28,13 +28,16 @@ impl EurTxType {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// Display-layer only (SPEC.md §5.1) — `as_str()`'s stored value stays
+    /// an English identifier regardless of UI locale.
+    pub fn label(self) -> String {
         match self {
-            Self::DonationIn => "Donation",
-            Self::SelfFundingIn => "Self-funding",
-            Self::PurchaseOut => "Purchase",
-            Self::TransferToBrlOut => "→ BRL",
+            Self::DonationIn => rust_i18n::t!("status.source_type.donation"),
+            Self::SelfFundingIn => rust_i18n::t!("status.eur_tx.self_funding_in"),
+            Self::PurchaseOut => rust_i18n::t!("status.source_type.purchase"),
+            Self::TransferToBrlOut => rust_i18n::t!("status.eur_tx.transfer_to_brl_out"),
         }
+        .into_owned()
     }
 
     pub fn is_inflow(self) -> bool {
@@ -130,12 +133,15 @@ impl BrlTxType {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// Display-layer only (SPEC.md §5.1) — `as_str()`'s stored value stays
+    /// an English identifier regardless of UI locale.
+    pub fn label(self) -> String {
         match self {
-            Self::TransferIn => "EUR→BRL",
-            Self::BrazilPurchaseOut => "Purchase",
-            Self::CashGiftOut => "Cash gift",
+            Self::TransferIn => rust_i18n::t!("status.brl_tx.transfer_in"),
+            Self::BrazilPurchaseOut => rust_i18n::t!("status.source_type.purchase"),
+            Self::CashGiftOut => rust_i18n::t!("status.brl_tx.cash_gift_out"),
         }
+        .into_owned()
     }
 
     pub fn is_inflow(self) -> bool {

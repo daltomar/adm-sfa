@@ -1,8 +1,10 @@
 use eframe::egui;
 use rusqlite::Connection;
 use rust_decimal::Decimal;
+use rust_i18n::t;
 
 use crate::db::queries::brl_ledger as qry;
+use crate::format;
 use crate::model::transaction::{BrlTxRow, BrlTxType};
 
 enum Mode {
@@ -57,14 +59,14 @@ impl BrlLedgerView {
             .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
-                    ui.weak("BRL entries are created automatically by the Purchases, Transfers, and Outbound sections.");
+                    ui.weak(t!("brl_ledger.hint.auto_created").as_ref());
                 }
                 Mode::Viewing(id) => self.show_detail(ui, id),
             });
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("BRL Ledger");
+        ui.heading(t!("brl_ledger.heading").as_ref());
         ui.add_space(4.0);
 
         let bal_color = if self.balance >= Decimal::ZERO {
@@ -73,13 +75,20 @@ impl BrlLedgerView {
             egui::Color32::from_rgb(220, 60, 60)
         };
         ui.label(
-            egui::RichText::new(format!("Balance: R$ {:.2}", self.balance))
-                .strong()
-                .color(bal_color),
+            egui::RichText::new(
+                t!(
+                    "common.balance",
+                    symbol = "R$",
+                    amount = format::amount(self.balance)
+                )
+                .into_owned(),
+            )
+            .strong()
+            .color(bal_color),
         );
         ui.add_space(4.0);
 
-        ui.weak("Read-only — entries are created by other sections.");
+        ui.weak(t!("brl_ledger.hint.read_only").as_ref());
         ui.separator();
 
         if let Some(err) = &self.error {
@@ -91,7 +100,7 @@ impl BrlLedgerView {
             .id_salt("brl_ledger_list_scroll")
             .show(ui, |ui| {
                 if self.rows.is_empty() {
-                    ui.weak("No entries yet.");
+                    ui.weak(t!("common.no_entries").as_ref());
                     return;
                 }
                 for i in 0..self.rows.len() {
@@ -99,20 +108,30 @@ impl BrlLedgerView {
                     let tx_type = self.rows[i].tx_type;
                     let sign = if tx_type.is_inflow() { "+" } else { "-" };
                     let amount = self.rows[i].amount;
-                    let date = self.rows[i].date.clone();
+                    let date = format::date(&self.rows[i].date);
                     let desc = row_desc(&self.rows[i]);
 
                     let row_label = if desc.is_empty() {
-                        format!("{}  {}  {}R${:.2}", date, tx_type.label(), sign, amount)
-                    } else {
-                        format!(
-                            "{}  {}  {}R${:.2}  {}",
-                            date,
-                            tx_type.label(),
-                            sign,
-                            amount,
-                            desc
+                        t!(
+                            "common.ledger_row.no_desc",
+                            date = date,
+                            kind = tx_type.label(),
+                            sign = sign,
+                            symbol = "R$",
+                            amount = format::amount(amount)
                         )
+                        .into_owned()
+                    } else {
+                        t!(
+                            "common.ledger_row.with_desc",
+                            date = date,
+                            kind = tx_type.label(),
+                            sign = sign,
+                            symbol = "R$",
+                            amount = format::amount(amount),
+                            desc = desc
+                        )
+                        .into_owned()
                     };
 
                     let selected = matches!(self.mode, Mode::Viewing(vid) if vid == id);
@@ -130,49 +149,87 @@ impl BrlLedgerView {
 
         match row.tx_type {
             BrlTxType::TransferIn => {
-                ui.heading("EUR → BRL Transfer");
+                ui.heading(t!("brl_ledger.detail.transfer_in.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(format!("Date: {}", row.date));
-                ui.label(format!("Amount received: R$ {:.2}", row.amount));
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
+                ui.label(
+                    t!(
+                        "brl_ledger.detail.amount_received",
+                        amount = format::amount(row.amount)
+                    )
+                    .into_owned(),
+                );
                 if let Some(n) = &row.note {
                     if !n.is_empty() {
-                        ui.label(format!("Note: {n}"));
+                        ui.label(t!("common.detail.note", note = n).into_owned());
                     }
                 }
                 ui.add_space(8.0);
-                ui.weak("Created by the Transfers section.");
+                ui.weak(
+                    t!(
+                        "brl_ledger.detail.created_by",
+                        section = t!("sidebar.transfers")
+                    )
+                    .into_owned(),
+                );
             }
             BrlTxType::BrazilPurchaseOut => {
-                ui.heading("Purchase (BRL)");
+                ui.heading(t!("brl_ledger.detail.purchase.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(format!("Date: {}", row.date));
-                ui.label(format!("Amount: R$ {:.2}", row.amount));
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
+                ui.label(
+                    t!(
+                        "common.detail.amount",
+                        symbol = "R$",
+                        amount = format::amount(row.amount)
+                    )
+                    .into_owned(),
+                );
                 if let Some(ch) = &row.purchase_channel {
-                    ui.label(format!("Channel: {ch}"));
+                    ui.label(t!("common.detail.channel", channel = ch).into_owned());
                 }
                 if let Some(n) = &row.note {
                     if !n.is_empty() {
-                        ui.label(format!("Note: {n}"));
+                        ui.label(t!("common.detail.note", note = n).into_owned());
                     }
                 }
                 ui.add_space(8.0);
-                ui.weak("Created by the Purchases section.");
+                ui.weak(
+                    t!(
+                        "brl_ledger.detail.created_by",
+                        section = t!("sidebar.purchases")
+                    )
+                    .into_owned(),
+                );
             }
             BrlTxType::CashGiftOut => {
-                ui.heading("Cash Gift");
+                ui.heading(t!("brl_ledger.detail.cash_gift.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(format!("Date: {}", row.date));
-                ui.label(format!("Amount: R$ {:.2}", row.amount));
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
+                ui.label(
+                    t!(
+                        "common.detail.amount",
+                        symbol = "R$",
+                        amount = format::amount(row.amount)
+                    )
+                    .into_owned(),
+                );
                 if let Some(rp) = &row.recipient_name {
-                    ui.label(format!("Recipient: {rp}"));
+                    ui.label(t!("brl_ledger.detail.recipient", recipient = rp).into_owned());
                 }
                 if let Some(n) = &row.note {
                     if !n.is_empty() {
-                        ui.label(format!("Note: {n}"));
+                        ui.label(t!("common.detail.note", note = n).into_owned());
                     }
                 }
                 ui.add_space(8.0);
-                ui.weak("Created by the Outbound section.");
+                ui.weak(
+                    t!(
+                        "brl_ledger.detail.created_by",
+                        section = t!("sidebar.outbound")
+                    )
+                    .into_owned(),
+                );
             }
         }
     }

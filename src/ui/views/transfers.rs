@@ -1,9 +1,11 @@
 use eframe::egui;
 use rusqlite::Connection;
+use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
 use crate::db::queries::{documents as docs_qry, settings as settings_qry, transfers as qry};
 use crate::docs_fs;
+use crate::format;
 use crate::model::document::Document;
 use crate::model::transfer::{AnnualTransfer, TransferDraft};
 
@@ -113,7 +115,7 @@ impl TransfersView {
             .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
-                    ui.weak("Select a transfer, or add a new one.");
+                    ui.weak(t!("transfers.hint.select_or_add").as_ref());
                 }
                 Mode::Adding | Mode::Editing(_) => {
                     self.show_form(ui, db);
@@ -127,10 +129,10 @@ impl TransfersView {
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Transfers");
+        ui.heading(t!("sidebar.transfers").as_ref());
         ui.add_space(4.0);
 
-        if ui.button("+ Add transfer").clicked() {
+        if ui.button(t!("transfers.button.add").as_ref()).clicked() {
             self.draft = TransferDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
@@ -151,16 +153,20 @@ impl TransfersView {
             .id_salt("transfers_list_scroll")
             .show(ui, |ui| {
                 if self.transfers.is_empty() {
-                    ui.weak("No transfers yet.");
+                    ui.weak(t!("transfers.empty").as_ref());
                     return;
                 }
                 for i in 0..self.transfers.len() {
-                    let t = &self.transfers[i];
-                    let id = t.id;
-                    let row = format!(
-                        "{}  €{:.2} → R${:.2}  (rate {:.4})",
-                        t.date, t.eur_amount_sent, t.brl_amount_received, t.exchange_rate
-                    );
+                    let tr = &self.transfers[i];
+                    let id = tr.id;
+                    let row = t!(
+                        "transfers.row",
+                        date = format::date(&tr.date),
+                        eur = format::amount(tr.eur_amount_sent),
+                        brl = format::amount(tr.brl_amount_received),
+                        rate = format::number(tr.exchange_rate, 4)
+                    )
+                    .into_owned();
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
                     if ui.selectable_label(selected, &row).clicked() {
                         self.draft = TransferDraft {
@@ -188,11 +194,12 @@ impl TransfersView {
             None
         };
 
-        ui.heading(if is_adding {
-            "New Transfer"
+        let heading = if is_adding {
+            t!("transfers.heading.new")
         } else {
-            "Edit Transfer"
-        });
+            t!("transfers.heading.edit")
+        };
+        ui.heading(heading.as_ref());
         ui.add_space(8.0);
 
         egui::Grid::new("transfer_form_grid")
@@ -200,31 +207,31 @@ impl TransfersView {
             .spacing([12.0, 8.0])
             .min_col_width(120.0)
             .show(ui, |ui| {
-                ui.label("Date *");
+                ui.label(t!("common.field.date").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.date)
-                        .hint_text("YYYY-MM-DD")
+                        .hint_text(t!("common.field.date_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("EUR amount sent *");
+                ui.label(t!("transfers.field.eur_amount").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.eur_amount_sent_str)
-                        .hint_text("0.00")
+                        .hint_text(t!("common.field.amount_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("Exchange rate (EUR→BRL) *");
+                ui.label(t!("transfers.field.exchange_rate").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.exchange_rate_str)
-                        .hint_text("0.0000")
+                        .hint_text(t!("transfers.field.exchange_rate_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("Notes");
+                ui.label(t!("common.field.notes").as_ref());
                 ui.add(
                     egui::TextEdit::multiline(&mut self.draft.notes)
                         .desired_width(280.0)
@@ -238,7 +245,13 @@ impl TransfersView {
             crate::money::parse_amount_input(self.draft.exchange_rate_str.trim()),
         ) {
             ui.add_space(4.0);
-            ui.label(format!("BRL amount received: R$ {:.2}", eur * rate));
+            ui.label(
+                t!(
+                    "transfers.field.brl_received",
+                    amount = format::amount(eur * rate)
+                )
+                .into_owned(),
+            );
         }
 
         if let Some(err) = &self.error {
@@ -255,10 +268,10 @@ impl TransfersView {
             if eur_parsed.is_none() {
                 ui.colored_label(
                     egui::Color32::RED,
-                    "EUR amount sent isn't a valid amount — use e.g. 12.34 or 12,34",
+                    t!("transfers.error.eur_invalid").as_ref(),
                 );
             } else if !eur_ok {
-                ui.colored_label(egui::Color32::RED, "EUR amount sent must be greater than zero");
+                ui.colored_label(egui::Color32::RED, t!("transfers.error.eur_zero").as_ref());
             }
         }
         let rate_text = self.draft.exchange_rate_str.trim();
@@ -270,17 +283,20 @@ impl TransfersView {
             if rate_parsed.is_none() {
                 ui.colored_label(
                     egui::Color32::RED,
-                    "Exchange rate isn't a valid amount — use e.g. 5.4321 or 5,4321",
+                    t!("transfers.error.rate_invalid").as_ref(),
                 );
             } else if !rate_ok {
-                ui.colored_label(egui::Color32::RED, "Exchange rate must be greater than zero");
+                ui.colored_label(egui::Color32::RED, t!("transfers.error.rate_zero").as_ref());
             }
         }
         let form_ok = !self.draft.date.trim().is_empty() && eur_ok && rate_ok;
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(form_ok, egui::Button::new("Save")).clicked() {
+            if ui
+                .add_enabled(form_ok, egui::Button::new(t!("common.save").as_ref()))
+                .clicked()
+            {
                 if is_adding {
                     match qry::insert(db, &self.draft) {
                         Ok(new_id) => {
@@ -302,7 +318,7 @@ impl TransfersView {
                 }
             }
 
-            if ui.button("Cancel").clicked() {
+            if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
                 self.discard_pending_doc();
@@ -319,18 +335,18 @@ impl TransfersView {
         };
         let documents_dir = data_dir.join("documents");
 
-        ui.heading("Documents");
+        ui.heading(t!("common.doc.heading").as_ref());
         ui.add_space(4.0);
 
         let mut remove_doc: Option<(i64, String)> = None;
         if self.docs.is_empty() {
-            ui.weak("No documents attached yet.");
+            ui.weak(t!("common.doc.none_attached").as_ref());
         } else {
             for doc in &self.docs {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&doc.label).strong());
                     ui.label(&doc.filename);
-                    if ui.small_button("Remove").clicked() {
+                    if ui.small_button(t!("common.doc.remove").as_ref()).clicked() {
                         remove_doc = Some((doc.id, doc.filename.clone()));
                     }
                 });
@@ -339,9 +355,15 @@ impl TransfersView {
 
         if let Some((doc_id, filename)) = remove_doc {
             match docs_qry::soft_delete(db, doc_id) {
-                Err(e) => self.error = Some(format!("DB update failed: {e}")),
+                Err(e) => {
+                    self.error =
+                        Some(t!("common.doc.error.db_update_failed", error = e).into_owned())
+                }
                 Ok(()) => match docs_fs::soft_delete(&documents_dir, &filename) {
-                    Err(e) => self.error = Some(format!("File move failed: {e}")),
+                    Err(e) => {
+                        self.error =
+                            Some(t!("common.doc.error.file_move_failed", error = e).into_owned())
+                    }
                     Ok(()) => {
                         self.docs_needs_reload = true;
                         self.error = None;
@@ -384,16 +406,19 @@ impl TransfersView {
             let labels = self.labels.clone();
             if let Some(pending) = &mut self.pending_doc {
                 ui.group(|ui| {
-                    ui.label(format!(
-                        "File: {}",
-                        pending
-                            .path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    ));
+                    ui.label(
+                        t!(
+                            "common.doc.file_name",
+                            name = pending
+                                .path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        )
+                        .into_owned(),
+                    );
                     ui.horizontal(|ui| {
-                        ui.label("Label:");
+                        ui.label(t!("common.doc.field.label").as_ref());
                         egui::ComboBox::from_id_salt("transfer_doc_label_combo")
                             .selected_text(&pending.label)
                             .show_ui(ui, |ui| {
@@ -406,10 +431,10 @@ impl TransfersView {
                         ui.colored_label(egui::Color32::RED, err);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Attach").clicked() {
+                        if ui.button(t!("common.doc.button.attach").as_ref()).clicked() {
                             doc_action = DocAction::Confirm;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel").as_ref()).clicked() {
                             doc_action = DocAction::Cancel;
                         }
                     });
@@ -420,30 +445,43 @@ impl TransfersView {
             let mut path_cancelled = false;
             if let Some(ref mut path_str) = self.path_input {
                 ui.group(|ui| {
-                    ui.label("File path:");
+                    ui.label(t!("common.doc.field.path").as_ref());
                     ui.add(
                         egui::TextEdit::singleline(path_str)
-                            .hint_text("/home/user/scan.pdf")
+                            .hint_text(t!("common.doc.field.path_hint").as_ref())
                             .desired_width(380.0),
                     );
                     let path = PathBuf::from(path_str.trim());
                     let is_file = path.is_file();
                     if !path_str.trim().is_empty() && !is_file {
-                        ui.weak("File not found.");
+                        ui.weak(t!("common.doc.error.file_not_found").as_ref());
                     }
                     ui.horizontal(|ui| {
-                        if ui.add_enabled(is_file, egui::Button::new("Next →")).clicked() {
+                        if ui
+                            .add_enabled(
+                                is_file,
+                                egui::Button::new(t!("common.doc.button.next").as_ref()),
+                            )
+                            .clicked()
+                        {
                             confirmed_path = Some(path);
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel").as_ref()).clicked() {
                             path_cancelled = true;
                         }
                     });
                 });
-            } else if ui.button("Attach file…").clicked() {
+            } else if ui
+                .button(t!("common.doc.button.attach_file").as_ref())
+                .clicked()
+            {
                 self.path_input = Some(String::new());
             }
-            if self.path_input.is_none() && ui.button("Capture screenshot").clicked() {
+            if self.path_input.is_none()
+                && ui
+                    .button(t!("common.doc.button.capture_screenshot").as_ref())
+                    .clicked()
+            {
                 self.capture_note = None;
                 self.error = None;
                 match settings_qry::get(db, "screenshot_command") {
@@ -463,7 +501,8 @@ impl TransfersView {
                             });
                         }
                         Ok(crate::screenshot::CaptureOutcome::Cancelled) => {
-                            self.capture_note = Some("Capture cancelled.".to_string());
+                            self.capture_note =
+                                Some(t!("common.doc.capture_cancelled").into_owned());
                         }
                         Err(e) => self.error = Some(e),
                     },
@@ -471,9 +510,12 @@ impl TransfersView {
             }
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             if hovering {
-                ui.colored_label(egui::Color32::from_rgb(80, 160, 230), "↓ Drop file to attach");
+                ui.colored_label(
+                    egui::Color32::from_rgb(80, 160, 230),
+                    t!("common.doc.drop_hint").as_ref(),
+                );
             } else {
-                ui.weak("or drag a file onto this window");
+                ui.weak(t!("common.doc.drag_hint").as_ref());
             }
             if let Some(note) = &self.capture_note {
                 ui.weak(note);

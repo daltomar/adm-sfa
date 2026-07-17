@@ -1,5 +1,6 @@
 use eframe::egui;
 use rusqlite::Connection;
+use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
 use crate::db::queries::{
@@ -7,6 +8,7 @@ use crate::db::queries::{
     purchases as purchases_qry, settings as settings_qry,
 };
 use crate::docs_fs;
+use crate::format;
 use crate::model::category::Category;
 use crate::model::document::Document;
 use crate::model::donor::{DonorDraft, PhysicalDonation, PhysicalDonationDraft};
@@ -190,7 +192,7 @@ impl InventoryView {
             .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
-                    ui.weak("Select an item, or add a new one.");
+                    ui.weak(t!("inventory.hint.select_or_add").as_ref());
                 }
                 Mode::Adding | Mode::Editing(_) => {
                     self.show_form(ui, db);
@@ -204,10 +206,10 @@ impl InventoryView {
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Inventory");
+        ui.heading(t!("sidebar.inventory").as_ref());
         ui.add_space(4.0);
 
-        if ui.button("+ Add item").clicked() {
+        if ui.button(t!("inventory.button.add").as_ref()).clicked() {
             self.draft = InventoryItemDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
@@ -233,20 +235,21 @@ impl InventoryView {
             .id_salt("inventory_list_scroll")
             .show(ui, |ui| {
                 if self.items.is_empty() {
-                    ui.weak("No items yet.");
+                    ui.weak(t!("inventory.empty").as_ref());
                     return;
                 }
                 for i in 0..self.items.len() {
                     let item = &self.items[i];
                     let id = item.id;
-                    let row = format!(
-                        "{}  [{}]  {} · {}  ({})",
-                        item.name,
-                        item.category_name,
-                        item.location.label(),
-                        item.status.label(),
-                        item.source_desc,
-                    );
+                    let row = t!(
+                        "inventory.row",
+                        name = item.name,
+                        category = item.category_name,
+                        location = item.location.label(),
+                        status = item.status.label(),
+                        source = item.source_desc
+                    )
+                    .into_owned();
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
                     if ui.selectable_label(selected, &row).clicked() {
                         let item = &self.items[i];
@@ -281,7 +284,12 @@ impl InventoryView {
             None
         };
 
-        ui.heading(if is_adding { "New Item" } else { "Edit Item" });
+        let heading = if is_adding {
+            t!("inventory.heading.new")
+        } else {
+            t!("inventory.heading.edit")
+        };
+        ui.heading(heading.as_ref());
         ui.add_space(8.0);
 
         egui::Grid::new("inventory_form_grid")
@@ -289,21 +297,21 @@ impl InventoryView {
             .spacing([12.0, 8.0])
             .min_col_width(90.0)
             .show(ui, |ui| {
-                ui.label("Name *");
+                ui.label(t!("common.field.name").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.name)
-                        .hint_text("Complete skateboard, Helmet size M, …")
+                        .hint_text(t!("inventory.field.name_hint").as_ref())
                         .desired_width(280.0),
                 );
                 ui.end_row();
 
-                ui.label("Category *");
+                ui.label(t!("inventory.field.category").as_ref());
                 let selected_name = self
                     .draft
                     .category_id
                     .and_then(|cid| self.categories.iter().find(|c| c.id == cid))
                     .map(|c| c.name.clone())
-                    .unwrap_or_else(|| "(choose one)".to_string());
+                    .unwrap_or_else(|| t!("common.combo.choose_one").into_owned());
                 egui::ComboBox::from_id_salt("inventory_category_combo")
                     .selected_text(selected_name)
                     .show_ui(ui, |ui| {
@@ -313,22 +321,42 @@ impl InventoryView {
                     });
                 ui.end_row();
 
-                ui.label("Location");
+                ui.label(t!("common.field.location").as_ref());
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.draft.location, Location::Germany, "Germany");
-                    ui.radio_value(&mut self.draft.location, Location::Brazil, "Brazil");
+                    ui.radio_value(
+                        &mut self.draft.location,
+                        Location::Germany,
+                        t!("status.location.germany").as_ref(),
+                    );
+                    ui.radio_value(
+                        &mut self.draft.location,
+                        Location::Brazil,
+                        t!("status.location.brazil").as_ref(),
+                    );
                 });
                 ui.end_row();
 
-                ui.label("Status");
+                ui.label(t!("common.field.status").as_ref());
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.draft.status, ItemStatus::Available, "Available");
-                    ui.radio_value(&mut self.draft.status, ItemStatus::Reserved, "Reserved");
-                    ui.radio_value(&mut self.draft.status, ItemStatus::Donated, "Donated");
+                    ui.radio_value(
+                        &mut self.draft.status,
+                        ItemStatus::Available,
+                        t!("status.item.available").as_ref(),
+                    );
+                    ui.radio_value(
+                        &mut self.draft.status,
+                        ItemStatus::Reserved,
+                        t!("status.item.reserved").as_ref(),
+                    );
+                    ui.radio_value(
+                        &mut self.draft.status,
+                        ItemStatus::Donated,
+                        t!("status.item.donated").as_ref(),
+                    );
                 });
                 ui.end_row();
 
-                ui.label("Notes");
+                ui.label(t!("common.field.notes").as_ref());
                 ui.add(
                     egui::TextEdit::multiline(&mut self.draft.notes)
                         .desired_width(280.0)
@@ -340,17 +368,17 @@ impl InventoryView {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("Source").strong());
+        ui.label(egui::RichText::new(t!("common.field.source").as_ref()).strong());
         ui.horizontal(|ui| {
             ui.radio_value(
                 &mut self.draft.source_type,
                 SourceType::Donation,
-                "Donation",
+                t!("status.source_type.donation").as_ref(),
             );
             ui.radio_value(
                 &mut self.draft.source_type,
                 SourceType::Purchase,
-                "Purchase",
+                t!("status.source_type.purchase").as_ref(),
             );
         });
         ui.add_space(4.0);
@@ -374,7 +402,10 @@ impl InventoryView {
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(form_ok, egui::Button::new("Save")).clicked() {
+            if ui
+                .add_enabled(form_ok, egui::Button::new(t!("common.save").as_ref()))
+                .clicked()
+            {
                 if let Some(msg) = self.purchase_source_conflict(edit_id) {
                     self.error = Some(msg);
                 } else if is_adding {
@@ -398,7 +429,7 @@ impl InventoryView {
                 }
             }
 
-            if ui.button("Cancel").clicked() {
+            if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
                 self.discard_pending_doc();
@@ -416,7 +447,7 @@ impl InventoryView {
             .source_donation_id
             .and_then(|did| self.donations.iter().find(|d| d.id == did))
             .map(donation_label)
-            .unwrap_or_else(|| "(choose one)".to_string());
+            .unwrap_or_else(|| t!("common.combo.choose_one").into_owned());
 
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("inventory_donation_combo")
@@ -430,7 +461,10 @@ impl InventoryView {
                         );
                     }
                 });
-            if ui.button("+ New donation").clicked() {
+            if ui
+                .button(t!("inventory.button.new_donation").as_ref())
+                .clicked()
+            {
                 self.new_donation = Some(PhysicalDonationDraft::default());
             }
         });
@@ -458,36 +492,43 @@ impl InventoryView {
                     .spacing([12.0, 6.0])
                     .min_col_width(80.0)
                     .show(ui, |ui| {
-                        ui.label("Date received *");
+                        ui.label(t!("inventory.donation.field.date_received").as_ref());
                         ui.add(
                             egui::TextEdit::singleline(&mut nd.date_received)
-                                .hint_text("YYYY-MM-DD")
+                                .hint_text(t!("common.field.date_hint").as_ref())
                                 .desired_width(140.0),
                         );
                         ui.end_row();
 
-                        ui.label("Donor");
+                        ui.label(t!("common.field.donor").as_ref());
                         ui.horizontal(|ui| {
                             let name = nd
                                 .donor_id
                                 .and_then(|did| donors.iter().find(|(id, _)| *id == did))
                                 .map(|(_, n)| n.clone())
-                                .unwrap_or_else(|| "(anonymous)".to_string());
+                                .unwrap_or_else(|| t!("inventory.combo.anonymous").into_owned());
                             egui::ComboBox::from_id_salt("new_donation_donor_combo")
                                 .selected_text(name)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut nd.donor_id, None, "(anonymous)");
+                                    ui.selectable_value(
+                                        &mut nd.donor_id,
+                                        None,
+                                        t!("inventory.combo.anonymous").as_ref(),
+                                    );
                                     for (did, dname) in &donors {
                                         ui.selectable_value(&mut nd.donor_id, Some(*did), dname);
                                     }
                                 });
-                            if ui.button("+ New donor").clicked() {
+                            if ui
+                                .button(t!("inventory.button.new_donor").as_ref())
+                                .clicked()
+                            {
                                 self.new_donor = Some(DonorDraft::default());
                             }
                         });
                         ui.end_row();
 
-                        ui.label("Notes");
+                        ui.label(t!("common.field.notes").as_ref());
                         ui.add(
                             egui::TextEdit::multiline(&mut nd.notes)
                                 .desired_width(240.0)
@@ -504,20 +545,20 @@ impl InventoryView {
                             .spacing([12.0, 6.0])
                             .min_col_width(80.0)
                             .show(ui, |ui| {
-                                ui.label("Name *");
+                                ui.label(t!("common.field.name").as_ref());
                                 ui.add(
                                     egui::TextEdit::singleline(&mut newd.name).desired_width(220.0),
                                 );
                                 ui.end_row();
 
-                                ui.label("Contact info");
+                                ui.label(t!("common.field.contact_info").as_ref());
                                 ui.add(
                                     egui::TextEdit::singleline(&mut newd.contact_info)
                                         .desired_width(220.0),
                                 );
                                 ui.end_row();
 
-                                ui.label("Notes");
+                                ui.label(t!("common.field.notes").as_ref());
                                 ui.add(
                                     egui::TextEdit::multiline(&mut newd.notes)
                                         .desired_width(220.0)
@@ -528,10 +569,13 @@ impl InventoryView {
 
                         let ok = !newd.name.trim().is_empty();
                         ui.horizontal(|ui| {
-                            if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
+                            if ui
+                                .add_enabled(ok, egui::Button::new(t!("common.create").as_ref()))
+                                .clicked()
+                            {
                                 donor_action = DonorAction::Create;
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(t!("common.cancel").as_ref()).clicked() {
                                 donor_action = DonorAction::Cancel;
                             }
                         });
@@ -540,10 +584,13 @@ impl InventoryView {
 
                 let ok = !nd.date_received.trim().is_empty();
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
+                    if ui
+                        .add_enabled(ok, egui::Button::new(t!("common.create").as_ref()))
+                        .clicked()
+                    {
                         action = Action::Create;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t!("common.cancel").as_ref()).clicked() {
                         action = Action::Cancel;
                     }
                 });
@@ -603,11 +650,15 @@ impl InventoryView {
             .collect();
 
         if purchases.is_empty() {
-            ui.weak("No purchases yet — add one in the Purchases section first.");
+            ui.weak(t!("inventory.hint.no_purchases").as_ref());
             return;
         }
 
-        let edit_id = if let Mode::Editing(id) = self.mode { Some(id) } else { None };
+        let edit_id = if let Mode::Editing(id) = self.mode {
+            Some(id)
+        } else {
+            None
+        };
 
         // Purchases that are single-item and already linked to a *different* item.
         let blocked: std::collections::HashSet<i64> = self
@@ -623,14 +674,16 @@ impl InventoryView {
             .source_purchase_id
             .and_then(|pid| purchases.iter().find(|p| p.id == pid))
             .map(purchase_label)
-            .unwrap_or_else(|| "(choose one)".to_string());
+            .unwrap_or_else(|| t!("common.combo.choose_one").into_owned());
 
         egui::ComboBox::from_id_salt("inventory_purchase_combo")
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
                 for p in &purchases {
                     if blocked.contains(&p.id) {
-                        let label = format!("{} (in use)", purchase_label(p));
+                        let label =
+                            t!("inventory.purchase_combo.in_use", label = purchase_label(p))
+                                .into_owned();
                         ui.add(egui::Label::new(
                             egui::RichText::new(&label).color(egui::Color32::from_gray(140)),
                         ));
@@ -655,15 +708,13 @@ impl InventoryView {
         if p.multiple_items {
             return None;
         }
-        let already_used = self.items.iter()
+        let already_used = self
+            .items
+            .iter()
             .filter(|item| edit_id != Some(item.id))
             .any(|item| item.source_purchase_id == Some(pid));
         if already_used {
-            Some(format!(
-                "'{}' is a single-item purchase already linked to another inventory item. \
-                 Enable 'Multiple items' on the purchase to allow this.",
-                p.channel
-            ))
+            Some(t!("inventory.error.purchase_conflict", channel = p.channel).into_owned())
         } else {
             None
         }
@@ -676,18 +727,18 @@ impl InventoryView {
         };
         let documents_dir = data_dir.join("documents");
 
-        ui.heading("Documents");
+        ui.heading(t!("common.doc.heading").as_ref());
         ui.add_space(4.0);
 
         let mut remove_doc: Option<(i64, String)> = None;
         if self.docs.is_empty() {
-            ui.weak("No documents attached yet.");
+            ui.weak(t!("common.doc.none_attached").as_ref());
         } else {
             for doc in &self.docs {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&doc.label).strong());
                     ui.label(&doc.filename);
-                    if ui.small_button("Remove").clicked() {
+                    if ui.small_button(t!("common.doc.remove").as_ref()).clicked() {
                         remove_doc = Some((doc.id, doc.filename.clone()));
                     }
                 });
@@ -696,9 +747,15 @@ impl InventoryView {
 
         if let Some((doc_id, filename)) = remove_doc {
             match docs_qry::soft_delete(db, doc_id) {
-                Err(e) => self.error = Some(format!("DB update failed: {e}")),
+                Err(e) => {
+                    self.error =
+                        Some(t!("common.doc.error.db_update_failed", error = e).into_owned())
+                }
                 Ok(()) => match docs_fs::soft_delete(&documents_dir, &filename) {
-                    Err(e) => self.error = Some(format!("File move failed: {e}")),
+                    Err(e) => {
+                        self.error =
+                            Some(t!("common.doc.error.file_move_failed", error = e).into_owned())
+                    }
                     Ok(()) => {
                         self.docs_needs_reload = true;
                         self.error = None;
@@ -741,16 +798,19 @@ impl InventoryView {
             let labels = self.labels.clone();
             if let Some(pending) = &mut self.pending_doc {
                 ui.group(|ui| {
-                    ui.label(format!(
-                        "File: {}",
-                        pending
-                            .path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    ));
+                    ui.label(
+                        t!(
+                            "common.doc.file_name",
+                            name = pending
+                                .path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        )
+                        .into_owned(),
+                    );
                     ui.horizontal(|ui| {
-                        ui.label("Label:");
+                        ui.label(t!("common.doc.field.label").as_ref());
                         egui::ComboBox::from_id_salt("inventory_doc_label_combo")
                             .selected_text(&pending.label)
                             .show_ui(ui, |ui| {
@@ -763,10 +823,10 @@ impl InventoryView {
                         ui.colored_label(egui::Color32::RED, err);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Attach").clicked() {
+                        if ui.button(t!("common.doc.button.attach").as_ref()).clicked() {
                             doc_action = DocAction::Confirm;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel").as_ref()).clicked() {
                             doc_action = DocAction::Cancel;
                         }
                     });
@@ -777,30 +837,43 @@ impl InventoryView {
             let mut path_cancelled = false;
             if let Some(ref mut path_str) = self.path_input {
                 ui.group(|ui| {
-                    ui.label("File path:");
+                    ui.label(t!("common.doc.field.path").as_ref());
                     ui.add(
                         egui::TextEdit::singleline(path_str)
-                            .hint_text("/home/user/scan.pdf")
+                            .hint_text(t!("common.doc.field.path_hint").as_ref())
                             .desired_width(380.0),
                     );
                     let path = PathBuf::from(path_str.trim());
                     let is_file = path.is_file();
                     if !path_str.trim().is_empty() && !is_file {
-                        ui.weak("File not found.");
+                        ui.weak(t!("common.doc.error.file_not_found").as_ref());
                     }
                     ui.horizontal(|ui| {
-                        if ui.add_enabled(is_file, egui::Button::new("Next →")).clicked() {
+                        if ui
+                            .add_enabled(
+                                is_file,
+                                egui::Button::new(t!("common.doc.button.next").as_ref()),
+                            )
+                            .clicked()
+                        {
                             confirmed_path = Some(path);
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel").as_ref()).clicked() {
                             path_cancelled = true;
                         }
                     });
                 });
-            } else if ui.button("Attach file…").clicked() {
+            } else if ui
+                .button(t!("common.doc.button.attach_file").as_ref())
+                .clicked()
+            {
                 self.path_input = Some(String::new());
             }
-            if self.path_input.is_none() && ui.button("Capture screenshot").clicked() {
+            if self.path_input.is_none()
+                && ui
+                    .button(t!("common.doc.button.capture_screenshot").as_ref())
+                    .clicked()
+            {
                 self.capture_note = None;
                 self.error = None;
                 match settings_qry::get(db, "screenshot_command") {
@@ -820,7 +893,8 @@ impl InventoryView {
                             });
                         }
                         Ok(crate::screenshot::CaptureOutcome::Cancelled) => {
-                            self.capture_note = Some("Capture cancelled.".to_string());
+                            self.capture_note =
+                                Some(t!("common.doc.capture_cancelled").into_owned());
                         }
                         Err(e) => self.error = Some(e),
                     },
@@ -828,9 +902,12 @@ impl InventoryView {
             }
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             if hovering {
-                ui.colored_label(egui::Color32::from_rgb(80, 160, 230), "↓ Drop file to attach");
+                ui.colored_label(
+                    egui::Color32::from_rgb(80, 160, 230),
+                    t!("common.doc.drop_hint").as_ref(),
+                );
             } else {
-                ui.weak("or drag a file onto this window");
+                ui.weak(t!("common.doc.drag_hint").as_ref());
             }
             if let Some(note) = &self.capture_note {
                 ui.weak(note);
@@ -895,12 +972,33 @@ impl InventoryView {
 
 fn donation_label(d: &PhysicalDonation) -> String {
     match &d.donor_name {
-        Some(name) => format!("{} — {}", d.date_received, name),
-        None => format!("{} — Anonymous", d.date_received),
+        Some(name) => t!(
+            "inventory.donation_label",
+            date = format::date(&d.date_received),
+            name = name
+        )
+        .into_owned(),
+        None => t!(
+            "inventory.donation_label_anonymous",
+            date = format::date(&d.date_received)
+        )
+        .into_owned(),
     }
 }
 
 fn purchase_label(p: &Purchase) -> String {
-    let multi = if p.multiple_items { "  [multi]" } else { "" };
-    format!("{}  {}  {}{:.2}{}", p.date, p.channel, p.currency.symbol(), p.cost, multi)
+    let multi = if p.multiple_items {
+        t!("purchases.tag.multi").into_owned()
+    } else {
+        String::new()
+    };
+    t!(
+        "inventory.purchase_label",
+        date = format::date(&p.date),
+        channel = p.channel,
+        symbol = p.currency.symbol(),
+        cost = format::amount(p.cost),
+        multi = multi
+    )
+    .into_owned()
 }

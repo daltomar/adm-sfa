@@ -265,6 +265,24 @@ from a screenshot instead of the filesystem.
   hard-delete from within the app.
 - **Single user.** Do not add multi-user auth, sync, or concurrent-write
   handling — out of scope.
+- **T1 — The database is monolingual.** No stored value changes meaning or
+  spelling based on the active UI locale (see SPEC.md §6). Locale affects
+  presentation only.
+- **T2 — No user-visible string is hardcoded** in view code. Every one
+  resolves through the i18n layer.
+- **T3 — Report generators never read `ui_locale`.** Locale is always an
+  explicit argument to report generation (SPEC.md §6.3), never read
+  implicitly from the UI language setting.
+- **T4 — Filenames are locale-independent** (SPEC.md §4.2, §6.1). Already
+  true today; this constraint exists to keep it true as the codebase grows.
+- **T5 — A missing translation falls back to English and is visible**, not
+  silently blank. Fallback must not panic.
+- **T6 — CSV output is German-format and locale-independent** (SPEC.md
+  §6.4): `;` delimiter, `,` decimal separator, `.` thousands separator,
+  regardless of the active UI language.
+- **T7 — Amount *input* parsing is never coupled to `ui_locale`** (SPEC.md
+  §6.5). The existing comma-or-period leniency (§2) stays available in every
+  UI language; input leniency and display formatting are separate concerns.
 
 ## Conventions once code exists
 

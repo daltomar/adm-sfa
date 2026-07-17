@@ -1,8 +1,10 @@
 use eframe::egui;
 use rusqlite::Connection;
 use rust_decimal::Decimal;
+use rust_i18n::t;
 
 use crate::db::queries::{donors as donors_qry, eur_ledger as qry};
+use crate::format;
 use crate::model::transaction::{EurTxDraft, EurTxRow, EurTxType, ManualEurTxType};
 
 enum Mode {
@@ -77,7 +79,7 @@ impl EurLedgerView {
             .show(ui, |ui| match self.mode {
                 Mode::List => {
                     ui.add_space(16.0);
-                    ui.weak("Add an entry, or select a manual entry to edit.");
+                    ui.weak(t!("eur_ledger.hint.add_or_select").as_ref());
                 }
                 Mode::Adding | Mode::Editing(_) => self.show_form(ui, db),
                 Mode::ViewingLinked(id) => self.show_linked_info(ui, id),
@@ -85,7 +87,7 @@ impl EurLedgerView {
     }
 
     fn show_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("EUR Ledger");
+        ui.heading(t!("eur_ledger.heading").as_ref());
         ui.add_space(4.0);
 
         let bal_color = if self.balance >= Decimal::ZERO {
@@ -94,13 +96,20 @@ impl EurLedgerView {
             egui::Color32::from_rgb(220, 60, 60)
         };
         ui.label(
-            egui::RichText::new(format!("Balance: € {:.2}", self.balance))
-                .strong()
-                .color(bal_color),
+            egui::RichText::new(
+                t!(
+                    "common.balance",
+                    symbol = "€",
+                    amount = format::amount(self.balance)
+                )
+                .into_owned(),
+            )
+            .strong()
+            .color(bal_color),
         );
         ui.add_space(4.0);
 
-        if ui.button("+ Add entry").clicked() {
+        if ui.button(t!("eur_ledger.button.add").as_ref()).clicked() {
             self.draft = EurTxDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
@@ -118,7 +127,7 @@ impl EurLedgerView {
             .id_salt("eur_ledger_list_scroll")
             .show(ui, |ui| {
                 if self.rows.is_empty() {
-                    ui.weak("No entries yet.");
+                    ui.weak(t!("common.no_entries").as_ref());
                     return;
                 }
                 for i in 0..self.rows.len() {
@@ -126,20 +135,30 @@ impl EurLedgerView {
                     let tx_type = self.rows[i].tx_type;
                     let sign = if tx_type.is_inflow() { "+" } else { "-" };
                     let amount = self.rows[i].amount;
-                    let date = self.rows[i].date.clone();
+                    let date = format::date(&self.rows[i].date);
                     let desc = row_desc(&self.rows[i]);
 
                     let row_label = if desc.is_empty() {
-                        format!("{}  {}  {}€{:.2}", date, tx_type.label(), sign, amount)
-                    } else {
-                        format!(
-                            "{}  {}  {}€{:.2}  {}",
-                            date,
-                            tx_type.label(),
-                            sign,
-                            amount,
-                            desc
+                        t!(
+                            "common.ledger_row.no_desc",
+                            date = date,
+                            kind = tx_type.label(),
+                            sign = sign,
+                            symbol = "€",
+                            amount = format::amount(amount)
                         )
+                        .into_owned()
+                    } else {
+                        t!(
+                            "common.ledger_row.with_desc",
+                            date = date,
+                            kind = tx_type.label(),
+                            sign = sign,
+                            symbol = "€",
+                            amount = format::amount(amount),
+                            desc = desc
+                        )
+                        .into_owned()
                     };
 
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id)
@@ -181,28 +200,33 @@ impl EurLedgerView {
             None
         };
 
-        ui.heading(if is_adding { "New Entry" } else { "Edit Entry" });
+        let heading = if is_adding {
+            t!("eur_ledger.heading.new")
+        } else {
+            t!("eur_ledger.heading.edit")
+        };
+        ui.heading(heading.as_ref());
         ui.add_space(8.0);
 
         // Type selector — shown only when adding; read-only label when editing.
         if is_adding {
             ui.horizontal(|ui| {
-                ui.label("Type:");
+                ui.label(t!("eur_ledger.label.type").as_ref());
                 ui.radio_value(
                     &mut self.draft.tx_type,
                     ManualEurTxType::DonationIn,
-                    "Donation",
+                    t!("eur_ledger.radio.donation").as_ref(),
                 );
                 ui.radio_value(
                     &mut self.draft.tx_type,
                     ManualEurTxType::SelfFundingIn,
-                    "Self-funding",
+                    t!("eur_ledger.radio.self_funding").as_ref(),
                 );
             });
             ui.add_space(4.0);
         } else {
             ui.horizontal(|ui| {
-                ui.label("Type:");
+                ui.label(t!("eur_ledger.label.type").as_ref());
                 ui.label(egui::RichText::new(self.draft.tx_type.as_eur_tx_type().label()).strong());
             });
             ui.add_space(4.0);
@@ -217,34 +241,38 @@ impl EurLedgerView {
             .spacing([12.0, 8.0])
             .min_col_width(80.0)
             .show(ui, |ui| {
-                ui.label("Date *");
+                ui.label(t!("common.field.date").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.date)
-                        .hint_text("YYYY-MM-DD")
+                        .hint_text(t!("common.field.date_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("Amount (€) *");
+                ui.label(t!("eur_ledger.field.amount").as_ref());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.draft.amount_str)
-                        .hint_text("0.00")
+                        .hint_text(t!("common.field.amount_hint").as_ref())
                         .desired_width(140.0),
                 );
                 ui.end_row();
 
                 if show_donor {
-                    ui.label("Donor");
+                    ui.label(t!("common.field.donor").as_ref());
                     let selected_name = self
                         .draft
                         .donor_id
                         .and_then(|id| donors.iter().find(|(did, _)| *did == id))
                         .map(|(_, n)| n.clone())
-                        .unwrap_or_else(|| "(none)".to_string());
+                        .unwrap_or_else(|| t!("common.combo.none").into_owned());
                     egui::ComboBox::from_id_salt("eur_donor_combo")
                         .selected_text(&selected_name)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.draft.donor_id, None, "(none)");
+                            ui.selectable_value(
+                                &mut self.draft.donor_id,
+                                None,
+                                t!("common.combo.none").as_ref(),
+                            );
                             for (did, name) in &donors {
                                 ui.selectable_value(&mut self.draft.donor_id, Some(*did), name);
                             }
@@ -252,7 +280,7 @@ impl EurLedgerView {
                     ui.end_row();
                 }
 
-                ui.label("Note");
+                ui.label(t!("common.field.note").as_ref());
                 ui.add(
                     egui::TextEdit::multiline(&mut self.draft.note)
                         .desired_width(280.0)
@@ -273,17 +301,23 @@ impl EurLedgerView {
             if amount_parsed.is_none() {
                 ui.colored_label(
                     egui::Color32::RED,
-                    "Not a valid amount — use e.g. 12.34 or 12,34",
+                    t!("common.error.invalid_amount").as_ref(),
                 );
             } else if !amount_ok {
-                ui.colored_label(egui::Color32::RED, "Amount must be greater than zero");
+                ui.colored_label(
+                    egui::Color32::RED,
+                    t!("eur_ledger.error.amount_zero").as_ref(),
+                );
             }
         }
         let form_ok = !self.draft.date.trim().is_empty() && amount_ok;
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(form_ok, egui::Button::new("Save")).clicked() {
+            if ui
+                .add_enabled(form_ok, egui::Button::new(t!("common.save").as_ref()))
+                .clicked()
+            {
                 if is_adding {
                     match qry::insert(db, &self.draft) {
                         Ok(_) => {
@@ -304,7 +338,7 @@ impl EurLedgerView {
                 }
             }
 
-            if ui.button("Cancel").clicked() {
+            if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
             }
@@ -317,29 +351,55 @@ impl EurLedgerView {
         };
         match row.tx_type {
             EurTxType::PurchaseOut => {
-                ui.heading("Purchase (read-only)");
+                ui.heading(t!("eur_ledger.detail.purchase.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(format!("Date: {}", row.date));
-                ui.label(format!("Amount: € {:.2}", row.amount));
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
+                ui.label(
+                    t!(
+                        "common.detail.amount",
+                        symbol = "€",
+                        amount = format::amount(row.amount)
+                    )
+                    .into_owned(),
+                );
                 if let Some(ch) = &row.purchase_channel {
-                    ui.label(format!("Channel: {ch}"));
+                    ui.label(t!("common.detail.channel", channel = ch).into_owned());
                 }
                 if let Some(n) = &row.note {
-                    ui.label(format!("Note: {n}"));
+                    ui.label(t!("common.detail.note", note = n).into_owned());
                 }
                 ui.add_space(8.0);
-                ui.weak("Created automatically by the Purchases section. Edit or delete the purchase there.");
+                ui.weak(
+                    t!(
+                        "eur_ledger.detail.purchase.created_by",
+                        section = t!("sidebar.purchases")
+                    )
+                    .into_owned(),
+                );
             }
             EurTxType::TransferToBrlOut => {
-                ui.heading("EUR → BRL Transfer (read-only)");
+                ui.heading(t!("eur_ledger.detail.transfer.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(format!("Date: {}", row.date));
-                ui.label(format!("Amount sent: € {:.2}", row.amount));
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
+                ui.label(
+                    t!(
+                        "eur_ledger.detail.amount_sent",
+                        symbol = "€",
+                        amount = format::amount(row.amount)
+                    )
+                    .into_owned(),
+                );
                 if let Some(n) = &row.note {
-                    ui.label(format!("Note: {n}"));
+                    ui.label(t!("common.detail.note", note = n).into_owned());
                 }
                 ui.add_space(8.0);
-                ui.weak("Created automatically by the Transfers section.");
+                ui.weak(
+                    t!(
+                        "eur_ledger.detail.transfer.created_by",
+                        section = t!("sidebar.transfers")
+                    )
+                    .into_owned(),
+                );
             }
             _ => {}
         }
