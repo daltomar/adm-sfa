@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::queries::{documents as docs_qry, purchases as qry, settings as settings_qry};
 use crate::docs_fs;
+use crate::format;
 use crate::model::document::Document;
 use crate::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
 
@@ -172,10 +173,10 @@ impl PurchasesView {
                     };
                     let row = t!(
                         "purchases.row",
-                        date = p.date,
+                        date = format::date(&p.date),
                         channel = p.channel,
                         symbol = p.currency.symbol(),
-                        cost = format!("{:.2}", p.cost),
+                        cost = format::amount(p.cost),
                         multi = multi,
                         status = status_tag
                     )

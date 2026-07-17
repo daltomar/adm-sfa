@@ -4,6 +4,7 @@ use rust_decimal::Decimal;
 use rust_i18n::t;
 
 use crate::db::queries::brl_ledger as qry;
+use crate::format;
 use crate::model::transaction::{BrlTxRow, BrlTxType};
 
 enum Mode {
@@ -78,7 +79,7 @@ impl BrlLedgerView {
                 t!(
                     "common.balance",
                     symbol = "R$",
-                    amount = format!("{:.2}", self.balance)
+                    amount = format::amount(self.balance)
                 )
                 .into_owned(),
             )
@@ -107,7 +108,7 @@ impl BrlLedgerView {
                     let tx_type = self.rows[i].tx_type;
                     let sign = if tx_type.is_inflow() { "+" } else { "-" };
                     let amount = self.rows[i].amount;
-                    let date = self.rows[i].date.clone();
+                    let date = format::date(&self.rows[i].date);
                     let desc = row_desc(&self.rows[i]);
 
                     let row_label = if desc.is_empty() {
@@ -117,7 +118,7 @@ impl BrlLedgerView {
                             kind = tx_type.label(),
                             sign = sign,
                             symbol = "R$",
-                            amount = format!("{amount:.2}")
+                            amount = format::amount(amount)
                         )
                         .into_owned()
                     } else {
@@ -127,7 +128,7 @@ impl BrlLedgerView {
                             kind = tx_type.label(),
                             sign = sign,
                             symbol = "R$",
-                            amount = format!("{amount:.2}"),
+                            amount = format::amount(amount),
                             desc = desc
                         )
                         .into_owned()
@@ -150,11 +151,11 @@ impl BrlLedgerView {
             BrlTxType::TransferIn => {
                 ui.heading(t!("brl_ledger.detail.transfer_in.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(t!("common.detail.date", date = row.date).into_owned());
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
                 ui.label(
                     t!(
                         "brl_ledger.detail.amount_received",
-                        amount = format!("{:.2}", row.amount)
+                        amount = format::amount(row.amount)
                     )
                     .into_owned(),
                 );
@@ -175,12 +176,12 @@ impl BrlLedgerView {
             BrlTxType::BrazilPurchaseOut => {
                 ui.heading(t!("brl_ledger.detail.purchase.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(t!("common.detail.date", date = row.date).into_owned());
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
                 ui.label(
                     t!(
                         "common.detail.amount",
                         symbol = "R$",
-                        amount = format!("{:.2}", row.amount)
+                        amount = format::amount(row.amount)
                     )
                     .into_owned(),
                 );
@@ -204,12 +205,12 @@ impl BrlLedgerView {
             BrlTxType::CashGiftOut => {
                 ui.heading(t!("brl_ledger.detail.cash_gift.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(t!("common.detail.date", date = row.date).into_owned());
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
                 ui.label(
                     t!(
                         "common.detail.amount",
                         symbol = "R$",
-                        amount = format!("{:.2}", row.amount)
+                        amount = format::amount(row.amount)
                     )
                     .into_owned(),
                 );

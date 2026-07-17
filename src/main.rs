@@ -2,6 +2,7 @@ mod app;
 mod backup;
 mod db;
 mod docs_fs;
+mod format;
 mod model;
 mod money;
 mod reports;

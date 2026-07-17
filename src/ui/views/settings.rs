@@ -26,6 +26,8 @@ pub struct SettingsView {
     screenshot_command: String,
     screenshot_error: Option<String>,
     screenshot_status: Option<Result<String, String>>,
+
+    locale_error: Option<String>,
 }
 
 impl Default for SettingsView {
@@ -45,6 +47,7 @@ impl Default for SettingsView {
             screenshot_command: String::new(),
             screenshot_error: None,
             screenshot_status: None,
+            locale_error: None,
         }
     }
 }
@@ -81,6 +84,10 @@ impl SettingsView {
         egui::ScrollArea::vertical()
             .id_salt("settings_scroll")
             .show(ui, |ui| {
+                self.show_locale_panel(ui, db);
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
                 self.show_categories_panel(ui, db);
                 ui.add_space(16.0);
                 ui.separator();
@@ -95,6 +102,56 @@ impl SettingsView {
                 ui.add_space(8.0);
                 self.show_backup_panel(ui, data_dir);
             });
+    }
+
+    /// Language selector (SPEC.md §6.1/§6.2). Switches live via
+    /// `rust_i18n::set_locale` — no restart, no separate Save button, since
+    /// SPEC.md requires the change take effect immediately. Language names
+    /// are shown as their own endonyms ("Deutsch", not a translation of
+    /// "German") — the universal convention for language pickers, and not
+    /// routed through `t!()` for the same reason donor/recipient names
+    /// aren't: they're proper nouns, not UI chrome.
+    fn show_locale_panel(&mut self, ui: &mut egui::Ui, db: &Connection) {
+        use crate::format::LOCALES;
+
+        ui.label(egui::RichText::new(t!("settings.locale.heading").as_ref()).strong());
+        ui.add_space(4.0);
+        ui.weak(t!("settings.locale.hint").as_ref());
+        ui.add_space(6.0);
+
+        let current = rust_i18n::locale().to_string();
+        let current_label = LOCALES
+            .iter()
+            .find(|(code, _)| *code == current)
+            .map(|(_, label)| *label)
+            .unwrap_or(current.as_str());
+
+        let mut selected = current.clone();
+        ui.horizontal(|ui| {
+            ui.label(t!("settings.locale.field.language").as_ref());
+            egui::ComboBox::from_id_salt("ui_locale_combo")
+                .selected_text(current_label)
+                .show_ui(ui, |ui| {
+                    for (code, label) in LOCALES {
+                        ui.selectable_value(&mut selected, code.to_string(), *label);
+                    }
+                });
+        });
+
+        if selected != current {
+            match settings_qry::set(db, "ui_locale", &selected) {
+                Ok(()) => {
+                    rust_i18n::set_locale(&selected);
+                    self.locale_error = None;
+                }
+                Err(e) => self.locale_error = Some(e.to_string()),
+            }
+        }
+
+        if let Some(err) = &self.locale_error {
+            ui.add_space(4.0);
+            ui.colored_label(egui::Color32::RED, err);
+        }
     }
 
     fn show_categories_panel(&mut self, ui: &mut egui::Ui, db: &Connection) {

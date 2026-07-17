@@ -45,6 +45,15 @@ pub struct App {
 impl App {
     pub fn new(_cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
         let db = crate::db::open_db(&data_dir).expect("failed to open database");
+
+        // Apply the saved UI language at startup (SPEC.md §6.1/§6.2) — seeded
+        // to "en" by seed_default_settings if never set. Live switching
+        // (rust_i18n::set_locale) also happens from the Settings selector
+        // without restarting; this just makes the choice persist across runs.
+        if let Ok(Some(locale)) = crate::db::queries::settings::get(&db, "ui_locale") {
+            rust_i18n::set_locale(&locale);
+        }
+
         Self {
             section: Section::Dashboard,
             prev_section: Section::Dashboard,

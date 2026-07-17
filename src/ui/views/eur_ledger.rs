@@ -4,6 +4,7 @@ use rust_decimal::Decimal;
 use rust_i18n::t;
 
 use crate::db::queries::{donors as donors_qry, eur_ledger as qry};
+use crate::format;
 use crate::model::transaction::{EurTxDraft, EurTxRow, EurTxType, ManualEurTxType};
 
 enum Mode {
@@ -99,7 +100,7 @@ impl EurLedgerView {
                 t!(
                     "common.balance",
                     symbol = "€",
-                    amount = format!("{:.2}", self.balance)
+                    amount = format::amount(self.balance)
                 )
                 .into_owned(),
             )
@@ -134,7 +135,7 @@ impl EurLedgerView {
                     let tx_type = self.rows[i].tx_type;
                     let sign = if tx_type.is_inflow() { "+" } else { "-" };
                     let amount = self.rows[i].amount;
-                    let date = self.rows[i].date.clone();
+                    let date = format::date(&self.rows[i].date);
                     let desc = row_desc(&self.rows[i]);
 
                     let row_label = if desc.is_empty() {
@@ -144,7 +145,7 @@ impl EurLedgerView {
                             kind = tx_type.label(),
                             sign = sign,
                             symbol = "€",
-                            amount = format!("{amount:.2}")
+                            amount = format::amount(amount)
                         )
                         .into_owned()
                     } else {
@@ -154,7 +155,7 @@ impl EurLedgerView {
                             kind = tx_type.label(),
                             sign = sign,
                             symbol = "€",
-                            amount = format!("{amount:.2}"),
+                            amount = format::amount(amount),
                             desc = desc
                         )
                         .into_owned()
@@ -352,12 +353,12 @@ impl EurLedgerView {
             EurTxType::PurchaseOut => {
                 ui.heading(t!("eur_ledger.detail.purchase.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(t!("common.detail.date", date = row.date).into_owned());
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
                 ui.label(
                     t!(
                         "common.detail.amount",
                         symbol = "€",
-                        amount = format!("{:.2}", row.amount)
+                        amount = format::amount(row.amount)
                     )
                     .into_owned(),
                 );
@@ -379,12 +380,12 @@ impl EurLedgerView {
             EurTxType::TransferToBrlOut => {
                 ui.heading(t!("eur_ledger.detail.transfer.heading").as_ref());
                 ui.add_space(8.0);
-                ui.label(t!("common.detail.date", date = row.date).into_owned());
+                ui.label(t!("common.detail.date", date = format::date(&row.date)).into_owned());
                 ui.label(
                     t!(
                         "eur_ledger.detail.amount_sent",
                         symbol = "€",
-                        amount = format!("{:.2}", row.amount)
+                        amount = format::amount(row.amount)
                     )
                     .into_owned(),
                 );

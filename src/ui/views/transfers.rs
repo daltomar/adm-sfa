@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::queries::{documents as docs_qry, settings as settings_qry, transfers as qry};
 use crate::docs_fs;
+use crate::format;
 use crate::model::document::Document;
 use crate::model::transfer::{AnnualTransfer, TransferDraft};
 
@@ -160,10 +161,10 @@ impl TransfersView {
                     let id = tr.id;
                     let row = t!(
                         "transfers.row",
-                        date = tr.date,
-                        eur = format!("{:.2}", tr.eur_amount_sent),
-                        brl = format!("{:.2}", tr.brl_amount_received),
-                        rate = format!("{:.4}", tr.exchange_rate)
+                        date = format::date(&tr.date),
+                        eur = format::amount(tr.eur_amount_sent),
+                        brl = format::amount(tr.brl_amount_received),
+                        rate = format::number(tr.exchange_rate, 4)
                     )
                     .into_owned();
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
@@ -247,7 +248,7 @@ impl TransfersView {
             ui.label(
                 t!(
                     "transfers.field.brl_received",
-                    amount = format!("{:.2}", eur * rate)
+                    amount = format::amount(eur * rate)
                 )
                 .into_owned(),
             );

@@ -34,6 +34,13 @@ fn seed_default_settings(conn: &Connection) -> rusqlite::Result<()> {
     if queries::settings::get(conn, "screenshot_command")?.is_none() {
         queries::settings::set(conn, "screenshot_command", default_screenshot_command())?;
     }
+    // ui_locale (SPEC.md §6.2): "en" | "de" | "pt-BR", validated in Rust only
+    // (settings.rs), not via a DB CHECK constraint — app_setting is a
+    // generic key/value table with no per-key constraint mechanism, see
+    // NewFeature-Translation-Review.md §1.1.
+    if queries::settings::get(conn, "ui_locale")?.is_none() {
+        queries::settings::set(conn, "ui_locale", "en")?;
+    }
     Ok(())
 }
 
@@ -85,6 +92,26 @@ mod tests {
         assert_eq!(
             queries::settings::get(&conn, "screenshot_command").unwrap(),
             Some("my custom command {path}".to_string())
+        );
+    }
+
+    #[test]
+    fn seed_default_settings_populates_ui_locale_once() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+
+        seed_default_settings(&conn).unwrap();
+        assert_eq!(
+            queries::settings::get(&conn, "ui_locale").unwrap(),
+            Some("en".to_string())
+        );
+
+        // A user's chosen locale must survive a second seeding pass.
+        queries::settings::set(&conn, "ui_locale", "de").unwrap();
+        seed_default_settings(&conn).unwrap();
+        assert_eq!(
+            queries::settings::get(&conn, "ui_locale").unwrap(),
+            Some("de".to_string())
         );
     }
 }

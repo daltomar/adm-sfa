@@ -22,11 +22,14 @@ impl Location {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// Display-layer only (SPEC.md §5.1) — the stored value from `as_str()`
+    /// stays an English identifier regardless of UI locale.
+    pub fn label(self) -> String {
         match self {
-            Location::Germany => "Germany",
-            Location::Brazil => "Brazil",
+            Location::Germany => rust_i18n::t!("status.location.germany"),
+            Location::Brazil => rust_i18n::t!("status.location.brazil"),
         }
+        .into_owned()
     }
 }
 
@@ -55,12 +58,15 @@ impl ItemStatus {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// Display-layer only (SPEC.md §5.1) — the stored value from `as_str()`
+    /// stays an English identifier regardless of UI locale.
+    pub fn label(self) -> String {
         match self {
-            ItemStatus::Available => "Available",
-            ItemStatus::Reserved => "Reserved",
-            ItemStatus::Donated => "Donated",
+            ItemStatus::Available => rust_i18n::t!("status.item.available"),
+            ItemStatus::Reserved => rust_i18n::t!("status.item.reserved"),
+            ItemStatus::Donated => rust_i18n::t!("status.item.donated"),
         }
+        .into_owned()
     }
 }
 

@@ -5,6 +5,8 @@ use rust_decimal::Decimal;
 use rust_i18n::t;
 use std::collections::{BTreeMap, HashMap};
 
+use crate::format;
+
 use crate::db::queries::{
     brl_ledger as brl_qry, documents as documents_qry, donors as donors_qry, eur_ledger as eur_qry,
     inventory as inventory_qry, outbound as outbound_qry,
@@ -48,8 +50,12 @@ pub struct ReportsView {
     error: Option<String>,
     export_status: Option<Result<String, String>>,
     csv_path_input: Option<String>,
-    csv_pending_data: Option<(Vec<String>, Vec<Vec<String>>)>,
+    csv_pending_tab: Option<Tab>,
     pdf_path_input: Option<String>,
+    /// Target report language (SPEC.md §6.3) — an explicit choice in the
+    /// export dialog, defaulted from the ambient UI locale when a dialog
+    /// opens but never read implicitly from it thereafter.
+    export_locale: String,
 
     donors: Vec<Donor>,
     donations: Vec<PhysicalDonation>,
@@ -74,8 +80,9 @@ impl Default for ReportsView {
             error: None,
             export_status: None,
             csv_path_input: None,
-            csv_pending_data: None,
+            csv_pending_tab: None,
             pdf_path_input: None,
+            export_locale: "en".to_string(),
             donors: Vec::new(),
             donations: Vec::new(),
             eur_rows: Vec::new(),
@@ -100,9 +107,23 @@ struct AuditEntry {
     date: String,
     ledger: String,
     kind: String,
+    // Base description text, never including the outbound cash-gift figure
+    // (see `outbound_cash` below) — kept as raw pieces, not a pre-formatted
+    // string, since this entry feeds both the on-screen table (locale-aware
+    // display) and CSV export (always fixed-format, SPEC.md §6.4/T6), which
+    // need different number formatting from the same underlying value.
     description: String,
-    amount: String,
+    /// Set only for outbound rows with a nonzero cash gift; each consumer
+    /// appends its own formatted "+ cash gift" suffix to `description`.
+    outbound_cash: Option<Decimal>,
+    amount: Option<AuditAmount>,
     docs: i64,
+}
+
+struct AuditAmount {
+    sign: &'static str,
+    symbol: &'static str,
+    value: Decimal,
 }
 
 impl ReportsView {
@@ -224,14 +245,6 @@ impl ReportsView {
                     .map(|(_, _, slug)| *slug)
                     .unwrap_or("report");
                 let filename = format!("{tab_slug}.csv");
-                let (headers, rows) = match self.tab {
-                    Tab::Donors => self.csv_data_donors(),
-                    Tab::Eur => self.csv_data_eur(),
-                    Tab::Brl => self.csv_data_brl(),
-                    Tab::Inventory => self.csv_data_inventory(),
-                    Tab::Outbound => self.csv_data_outbound(),
-                    Tab::AuditTrail => self.csv_data_audit_trail(),
-                };
                 let default_path = dirs::download_dir()
                     .unwrap_or_else(|| {
                         dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -239,8 +252,9 @@ impl ReportsView {
                     .join(&filename)
                     .to_string_lossy()
                     .into_owned();
+                self.export_locale = rust_i18n::locale().to_string();
                 self.csv_path_input = Some(default_path);
-                self.csv_pending_data = Some((headers, rows));
+                self.csv_pending_tab = Some(self.tab);
             }
             if ui
                 .button(t!("reports.button.export_pdf").as_ref())
@@ -254,6 +268,7 @@ impl ReportsView {
                     .join("adm-sfa-report.pdf")
                     .to_string_lossy()
                     .into_owned();
+                self.export_locale = rust_i18n::locale().to_string();
                 self.pdf_path_input = Some(default_path);
             }
         });
@@ -264,6 +279,7 @@ impl ReportsView {
             ui.group(|ui| {
                 ui.label(t!("reports.csv.save_to").as_ref());
                 ui.add(egui::TextEdit::singleline(path_str).desired_width(500.0));
+                show_export_locale_picker(ui, &mut self.export_locale, "csv_export_locale_combo");
                 ui.horizontal(|ui| {
                     if ui.button(t!("common.save").as_ref()).clicked() {
                         csv_save = true;
@@ -275,10 +291,19 @@ impl ReportsView {
             });
         }
         if csv_save {
-            if let (Some(path_str), Some((headers, rows))) =
-                (self.csv_path_input.take(), self.csv_pending_data.take())
+            if let (Some(path_str), Some(tab)) =
+                (self.csv_path_input.take(), self.csv_pending_tab.take())
             {
                 let path = std::path::PathBuf::from(path_str.trim());
+                let locale = self.export_locale.clone();
+                let (headers, rows) = match tab {
+                    Tab::Donors => self.csv_data_donors(&locale, true),
+                    Tab::Eur => self.csv_data_eur(&locale, true),
+                    Tab::Brl => self.csv_data_brl(&locale, true),
+                    Tab::Inventory => self.csv_data_inventory(&locale),
+                    Tab::Outbound => self.csv_data_outbound(&locale, true),
+                    Tab::AuditTrail => self.csv_data_audit_trail(&locale, true),
+                };
                 self.export_status = Some(
                     crate::reports::csv::write(&path, &headers, &rows)
                         .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
@@ -287,7 +312,7 @@ impl ReportsView {
             }
         } else if csv_cancel {
             self.csv_path_input = None;
-            self.csv_pending_data = None;
+            self.csv_pending_tab = None;
         }
 
         let mut pdf_save = false;
@@ -296,6 +321,7 @@ impl ReportsView {
             ui.group(|ui| {
                 ui.label(t!("reports.pdf.save_to").as_ref());
                 ui.add(egui::TextEdit::singleline(path_str).desired_width(500.0));
+                show_export_locale_picker(ui, &mut self.export_locale, "pdf_export_locale_combo");
                 ui.horizontal(|ui| {
                     if ui.button(t!("common.save").as_ref()).clicked() {
                         pdf_save = true;
@@ -319,7 +345,7 @@ impl ReportsView {
             } else {
                 self.pdf_path_input = None;
                 let generated = chrono::Local::now().format("%Y-%m-%d").to_string();
-                let sections = self.build_pdf_sections();
+                let sections = self.build_pdf_sections(&self.export_locale);
                 self.export_status = Some(
                     crate::reports::pdf::export(
                         &path,
@@ -402,7 +428,7 @@ impl ReportsView {
                                 ui.label(r.cash_count.to_string());
                             });
                             row.col(|ui| {
-                                ui.label(format!("{:.2}", r.cash_total));
+                                ui.label(format::amount(r.cash_total));
                             });
                             row.col(|ui| {
                                 ui.label(r.item_count.to_string());
@@ -515,19 +541,19 @@ impl ReportsView {
                             amount,
                         } => {
                             row.col(|ui| {
-                                ui.label(date);
+                                ui.label(format::date(date));
                             });
                             row.col(|ui| {
                                 ui.label(donor);
                             });
                             row.col(|ui| {
-                                ui.label(format!("{:.2}", amount));
+                                ui.label(format::amount(*amount));
                             });
                             row.col(|_| {});
                         }
                         DonorLogRow::Physical { date, donor, items } => {
                             row.col(|ui| {
-                                ui.label(date);
+                                ui.label(format::date(date));
                             });
                             row.col(|ui| {
                                 ui.label(donor);
@@ -591,22 +617,22 @@ impl ReportsView {
 
                 ui.label(t!("reports.eur.row.donations_in").as_ref());
                 ui.label(don_count.to_string());
-                ui.label(format!("{:.2}", don_total));
+                ui.label(format::amount(don_total));
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.self_funding_in").as_ref());
                 ui.label(sf_count.to_string());
-                ui.label(format!("{:.2}", sf_total));
+                ui.label(format::amount(sf_total));
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.purchases_out").as_ref());
                 ui.label(pur_count.to_string());
-                ui.label(format!("{:.2}", pur_total));
+                ui.label(format::amount(pur_total));
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.transfers_out").as_ref());
                 ui.label(tr_count.to_string());
-                ui.label(format!("{:.2}", tr_total));
+                ui.label(format::amount(tr_total));
                 ui.end_row();
             });
 
@@ -616,16 +642,16 @@ impl ReportsView {
         ui.label(
             t!(
                 "reports.eur.starting_balance",
-                amount = format!("{:.2}", starting_balance)
+                amount = format::amount(starting_balance)
             )
             .into_owned(),
         );
-        ui.label(t!("reports.eur.net_for_period", amount = format!("{:.2}", net)).into_owned());
+        ui.label(t!("reports.eur.net_for_period", amount = format::amount(net)).into_owned());
         ui.label(
             egui::RichText::new(
                 t!(
                     "reports.eur.ending_balance",
-                    amount = format!("{:.2}", ending_balance)
+                    amount = format::amount(ending_balance)
                 )
                 .into_owned(),
             )
@@ -681,7 +707,7 @@ impl ReportsView {
                     row.col(|_| {});
                     row.col(|_| {});
                     row.col(|ui| {
-                        ui.label(format!("{:.2}", balance));
+                        ui.label(format::amount(balance));
                     });
                 });
                 for r in rows {
@@ -695,23 +721,23 @@ impl ReportsView {
                     };
                     body.row(18.0, |mut row| {
                         row.col(|ui| {
-                            ui.label(&r.date);
+                            ui.label(format::date(&r.date));
                         });
                         row.col(|ui| {
                             ui.label(&description);
                         });
                         row.col(|ui| {
                             if let Some(v) = inbound {
-                                ui.label(format!("{:.2}", v));
+                                ui.label(format::amount(v));
                             }
                         });
                         row.col(|ui| {
                             if let Some(v) = outbound {
-                                ui.label(format!("{:.2}", v));
+                                ui.label(format::amount(v));
                             }
                         });
                         row.col(|ui| {
-                            ui.label(format!("{:.2}", balance));
+                            ui.label(format::amount(balance));
                         });
                     });
                 }
@@ -766,17 +792,17 @@ impl ReportsView {
 
                 ui.label(t!("reports.brl.row.transfer_in").as_ref());
                 ui.label(tr_count.to_string());
-                ui.label(format!("{:.2}", tr_total));
+                ui.label(format::amount(tr_total));
                 ui.end_row();
 
                 ui.label(t!("reports.brl.row.purchases_out").as_ref());
                 ui.label(pur_count.to_string());
-                ui.label(format!("{:.2}", pur_total));
+                ui.label(format::amount(pur_total));
                 ui.end_row();
 
                 ui.label(t!("reports.brl.row.gifts_out").as_ref());
                 ui.label(gift_count.to_string());
-                ui.label(format!("{:.2}", gift_total));
+                ui.label(format::amount(gift_total));
                 ui.end_row();
             });
 
@@ -786,16 +812,16 @@ impl ReportsView {
         ui.label(
             t!(
                 "reports.brl.starting_balance",
-                amount = format!("{:.2}", starting_balance)
+                amount = format::amount(starting_balance)
             )
             .into_owned(),
         );
-        ui.label(t!("reports.brl.net_for_period", amount = format!("{:.2}", net)).into_owned());
+        ui.label(t!("reports.brl.net_for_period", amount = format::amount(net)).into_owned());
         ui.label(
             egui::RichText::new(
                 t!(
                     "reports.brl.ending_balance",
-                    amount = format!("{:.2}", ending_balance)
+                    amount = format::amount(ending_balance)
                 )
                 .into_owned(),
             )
@@ -853,7 +879,7 @@ impl ReportsView {
                     row.col(|_| {});
                     row.col(|_| {});
                     row.col(|ui| {
-                        ui.label(format!("{:.2}", balance));
+                        ui.label(format::amount(balance));
                     });
                 });
                 for r in rows {
@@ -867,23 +893,23 @@ impl ReportsView {
                     };
                     body.row(18.0, |mut row| {
                         row.col(|ui| {
-                            ui.label(&r.date);
+                            ui.label(format::date(&r.date));
                         });
                         row.col(|ui| {
                             ui.label(&description);
                         });
                         row.col(|ui| {
                             if let Some(v) = inbound {
-                                ui.label(format!("{:.2}", v));
+                                ui.label(format::amount(v));
                             }
                         });
                         row.col(|ui| {
                             if let Some(v) = outbound {
-                                ui.label(format!("{:.2}", v));
+                                ui.label(format::amount(v));
                             }
                         });
                         row.col(|ui| {
-                            ui.label(format!("{:.2}", balance));
+                            ui.label(format::amount(balance));
                         });
                     });
                 }
@@ -895,8 +921,8 @@ impl ReportsView {
         ui.weak(t!("reports.inventory.hint").as_ref());
         ui.add_space(6.0);
 
-        let mut by_cat_status: BTreeMap<(String, &'static str), i64> = BTreeMap::new();
-        let mut by_location: BTreeMap<&'static str, i64> = BTreeMap::new();
+        let mut by_cat_status: BTreeMap<(String, String), i64> = BTreeMap::new();
+        let mut by_location: BTreeMap<String, i64> = BTreeMap::new();
 
         for item in &self.inventory_rows {
             *by_cat_status
@@ -937,7 +963,7 @@ impl ReportsView {
                             ui.label(cat);
                         });
                         row.col(|ui| {
-                            ui.label(*status);
+                            ui.label(status);
                         });
                         row.col(|ui| {
                             ui.label(count.to_string());
@@ -967,7 +993,7 @@ impl ReportsView {
                 for (loc, count) in &by_location {
                     body.row(22.0, |mut row| {
                         row.col(|ui| {
-                            ui.label(*loc);
+                            ui.label(loc);
                         });
                         row.col(|ui| {
                             ui.label(count.to_string());
@@ -1107,7 +1133,7 @@ impl ReportsView {
                                 ui.label(items.to_string());
                             });
                             row.col(|ui| {
-                                ui.label(format!("{:.2}", cash));
+                                ui.label(format::amount(*cash));
                             });
                         });
                     }
@@ -1140,7 +1166,7 @@ impl ReportsView {
                     for e in &filtered {
                         body.row(22.0, |mut row| {
                             row.col(|ui| {
-                                ui.label(&e.date);
+                                ui.label(format::date(&e.date));
                             });
                             row.col(|ui| {
                                 ui.label(&e.recipient_name);
@@ -1151,7 +1177,7 @@ impl ReportsView {
                             row.col(|ui| {
                                 let cash = e.cash_amount_brl.unwrap_or(Decimal::ZERO);
                                 ui.label(if cash > Decimal::ZERO {
-                                    format!("{:.2}", cash)
+                                    format::amount(cash)
                                 } else {
                                     "—".to_string()
                                 });
@@ -1211,14 +1237,14 @@ impl ReportsView {
                         .unwrap_or_default();
                     body.row(18.0, |mut row| {
                         row.col(|ui| {
-                            ui.label(&e.date);
+                            ui.label(format::date(&e.date));
                         });
                         row.col(|ui| {
                             ui.label(&e.recipient_name);
                         });
                         row.col(|ui| {
                             if cash > Decimal::ZERO {
-                                ui.label(format!("{:.2}", cash));
+                                ui.label(format::amount(cash));
                             }
                         });
                         row.col(|ui| {
@@ -1274,7 +1300,7 @@ impl ReportsView {
                 for e in &entries {
                     body.row(22.0, |mut row| {
                         row.col(|ui| {
-                            ui.label(&e.date);
+                            ui.label(format::date(&e.date));
                         });
                         row.col(|ui| {
                             ui.label(&e.ledger);
@@ -1283,10 +1309,24 @@ impl ReportsView {
                             ui.label(&e.kind);
                         });
                         row.col(|ui| {
-                            ui.label(&e.description);
+                            let mut desc = e.description.clone();
+                            if let Some(cash) = e.outbound_cash {
+                                desc.push_str(&t!(
+                                    "reports.audit.outbound_cash_suffix",
+                                    cash = format::amount(cash)
+                                ));
+                            }
+                            ui.label(desc);
                         });
                         row.col(|ui| {
-                            ui.label(&e.amount);
+                            if let Some(a) = &e.amount {
+                                ui.label(format!(
+                                    "{}{}{}",
+                                    a.sign,
+                                    a.symbol,
+                                    format::amount(a.value)
+                                ));
+                            }
                         });
                         row.col(|ui| {
                             ui.label(if e.docs > 0 {
@@ -1299,21 +1339,31 @@ impl ReportsView {
                 }
             });
     }
-    fn csv_data_donors(&self) -> (Vec<String>, Vec<Vec<String>>) {
+    /// Builds the Donor Breakdown export data in an explicit target
+    /// `locale`, per SPEC.md §6.3 — never the ambient UI locale. `for_csv`
+    /// additionally pins amounts to the fixed German format CSV always uses
+    /// (SPEC.md §6.4/T6), regardless of `locale`; PDF export (`for_csv =
+    /// false`) instead follows `locale` for both text and numbers.
+    fn csv_data_donors(&self, locale: &str, for_csv: bool) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = vec![
-            t!("common.field.donor").into_owned(),
-            t!("reports.donor.col.cash_count").into_owned(),
-            t!("reports.donor.csv.col.cash_total").into_owned(),
-            t!("reports.donor.col.items").into_owned(),
+            t!("common.field.donor", locale = locale).into_owned(),
+            t!("reports.donor.col.cash_count", locale = locale).into_owned(),
+            t!("reports.donor.csv.col.cash_total", locale = locale).into_owned(),
+            t!("reports.donor.col.items", locale = locale).into_owned(),
         ];
         let rows = self
             .build_donor_rows()
             .into_iter()
             .map(|r| {
+                let cash_total = if for_csv {
+                    format::csv_amount(r.cash_total)
+                } else {
+                    format::amount_in(r.cash_total, locale)
+                };
                 vec![
                     r.name,
                     r.cash_count.to_string(),
-                    format!("{:.2}", r.cash_total),
+                    cash_total,
                     r.item_count.to_string(),
                 ]
             })
@@ -1380,12 +1430,12 @@ impl ReportsView {
         rows
     }
 
-    fn csv_data_eur(&self) -> (Vec<String>, Vec<Vec<String>>) {
+    fn csv_data_eur(&self, locale: &str, for_csv: bool) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = vec![
-            t!("common.col.date").into_owned(),
-            t!("reports.col.type").into_owned(),
-            t!("common.col.description").into_owned(),
-            t!("reports.eur.csv.col.amount").into_owned(),
+            t!("common.col.date", locale = locale).into_owned(),
+            t!("reports.col.type", locale = locale).into_owned(),
+            t!("common.col.description", locale = locale).into_owned(),
+            t!("reports.eur.csv.col.amount", locale = locale).into_owned(),
         ];
         let rows = self
             .eur_rows
@@ -1394,23 +1444,33 @@ impl ReportsView {
             .map(|r| {
                 let description = eur_tx_description(r);
                 let sign = if r.tx_type.is_inflow() { "" } else { "-" };
+                let date = if for_csv {
+                    r.date.clone()
+                } else {
+                    format::date_in(&r.date, locale)
+                };
+                let amount = if for_csv {
+                    format::csv_amount(r.amount)
+                } else {
+                    format::amount_in(r.amount, locale)
+                };
                 vec![
-                    r.date.clone(),
-                    r.tx_type.label().to_string(),
+                    date,
+                    r.tx_type.label(),
                     description,
-                    format!("{sign}{:.2}", r.amount),
+                    format!("{sign}{amount}"),
                 ]
             })
             .collect();
         (headers, rows)
     }
 
-    fn csv_data_brl(&self) -> (Vec<String>, Vec<Vec<String>>) {
+    fn csv_data_brl(&self, locale: &str, for_csv: bool) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = vec![
-            t!("common.col.date").into_owned(),
-            t!("reports.col.type").into_owned(),
-            t!("common.col.description").into_owned(),
-            t!("reports.brl.csv.col.amount").into_owned(),
+            t!("common.col.date", locale = locale).into_owned(),
+            t!("reports.col.type", locale = locale).into_owned(),
+            t!("common.col.description", locale = locale).into_owned(),
+            t!("reports.brl.csv.col.amount", locale = locale).into_owned(),
         ];
         let rows = self
             .brl_rows
@@ -1419,25 +1479,40 @@ impl ReportsView {
             .map(|r| {
                 let description = brl_tx_description(r);
                 let sign = if r.tx_type.is_inflow() { "" } else { "-" };
+                let date = if for_csv {
+                    r.date.clone()
+                } else {
+                    format::date_in(&r.date, locale)
+                };
+                let amount = if for_csv {
+                    format::csv_amount(r.amount)
+                } else {
+                    format::amount_in(r.amount, locale)
+                };
                 vec![
-                    r.date.clone(),
-                    r.tx_type.label().to_string(),
+                    date,
+                    r.tx_type.label(),
                     description,
-                    format!("{sign}{:.2}", r.amount),
+                    format!("{sign}{amount}"),
                 ]
             })
             .collect();
         (headers, rows)
     }
 
-    fn csv_data_inventory(&self) -> (Vec<String>, Vec<Vec<String>>) {
+    // No amounts to format, so no for_csv branching needed — only the
+    // headers vary by locale. Row *values* (status/location/source_type)
+    // still resolve through the enum `.label()` methods' ambient UI locale,
+    // not `locale`, a known scope limit (see the module-level note above
+    // `build_pdf_sections` for why this wasn't threaded further).
+    fn csv_data_inventory(&self, locale: &str) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = vec![
-            t!("common.col.name").into_owned(),
-            t!("common.col.category").into_owned(),
-            t!("common.field.status").into_owned(),
-            t!("common.field.location").into_owned(),
-            t!("reports.inventory.csv.col.source_type").into_owned(),
-            t!("common.field.source").into_owned(),
+            t!("common.col.name", locale = locale).into_owned(),
+            t!("common.col.category", locale = locale).into_owned(),
+            t!("common.field.status", locale = locale).into_owned(),
+            t!("common.field.location", locale = locale).into_owned(),
+            t!("reports.inventory.csv.col.source_type", locale = locale).into_owned(),
+            t!("common.field.source", locale = locale).into_owned(),
         ];
         let rows = self
             .inventory_rows
@@ -1450,8 +1525,8 @@ impl ReportsView {
                 vec![
                     item.name.clone(),
                     item.category_name.clone(),
-                    item.status.label().to_string(),
-                    item.location.label().to_string(),
+                    item.status.label(),
+                    item.location.label(),
                     source_type.into_owned(),
                     item.source_desc.clone(),
                 ]
@@ -1460,12 +1535,12 @@ impl ReportsView {
         (headers, rows)
     }
 
-    fn csv_data_outbound(&self) -> (Vec<String>, Vec<Vec<String>>) {
+    fn csv_data_outbound(&self, locale: &str, for_csv: bool) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = vec![
-            t!("common.col.date").into_owned(),
-            t!("reports.col.recipient").into_owned(),
-            t!("reports.col.items").into_owned(),
-            t!("reports.outbound.csv.col.cash").into_owned(),
+            t!("common.col.date", locale = locale).into_owned(),
+            t!("reports.col.recipient", locale = locale).into_owned(),
+            t!("reports.col.items", locale = locale).into_owned(),
+            t!("reports.outbound.csv.col.cash", locale = locale).into_owned(),
         ];
         let rows = self
             .outbound_rows
@@ -1476,38 +1551,72 @@ impl ReportsView {
                     .is_none_or(|rid| e.recipient_project_id == rid)
             })
             .map(|e| {
+                let date = if for_csv {
+                    e.date.clone()
+                } else {
+                    format::date_in(&e.date, locale)
+                };
+                let cash = e
+                    .cash_amount_brl
+                    .map(|c| {
+                        if for_csv {
+                            format::csv_amount(c)
+                        } else {
+                            format::amount_in(c, locale)
+                        }
+                    })
+                    .unwrap_or_default();
                 vec![
-                    e.date.clone(),
+                    date,
                     e.recipient_name.clone(),
                     e.item_count.to_string(),
-                    e.cash_amount_brl
-                        .map(|c| format!("{:.2}", c))
-                        .unwrap_or_default(),
+                    cash,
                 ]
             })
             .collect();
         (headers, rows)
     }
 
-    fn csv_data_audit_trail(&self) -> (Vec<String>, Vec<Vec<String>>) {
+    fn csv_data_audit_trail(&self, locale: &str, for_csv: bool) -> (Vec<String>, Vec<Vec<String>>) {
         let headers = vec![
-            t!("common.col.date").into_owned(),
-            t!("reports.audit.col.ledger").into_owned(),
-            t!("reports.col.type").into_owned(),
-            t!("common.col.description").into_owned(),
-            t!("common.col.amount").into_owned(),
-            t!("reports.audit.csv.col.documents").into_owned(),
+            t!("common.col.date", locale = locale).into_owned(),
+            t!("reports.audit.col.ledger", locale = locale).into_owned(),
+            t!("reports.col.type", locale = locale).into_owned(),
+            t!("common.col.description", locale = locale).into_owned(),
+            t!("common.col.amount", locale = locale).into_owned(),
+            t!("reports.audit.csv.col.documents", locale = locale).into_owned(),
         ];
+        let fmt_amount = |v: Decimal| {
+            if for_csv {
+                format::csv_amount(v)
+            } else {
+                format::amount_in(v, locale)
+            }
+        };
         let rows = self
             .build_audit_entries()
             .into_iter()
             .map(|e| {
+                let date = if for_csv {
+                    e.date
+                } else {
+                    format::date_in(&e.date, locale)
+                };
+                let mut description = e.description;
+                if let Some(cash) = e.outbound_cash {
+                    description.push_str(&t!(
+                        "reports.audit.outbound_cash_suffix",
+                        cash = fmt_amount(cash)
+                    ));
+                }
                 vec![
-                    e.date,
+                    date,
                     e.ledger,
                     e.kind,
-                    e.description,
-                    e.amount,
+                    description,
+                    e.amount
+                        .map(|a| format!("{}{}{}", a.sign, a.symbol, fmt_amount(a.value)))
+                        .unwrap_or_default(),
                     if e.docs > 0 {
                         e.docs.to_string()
                     } else {
@@ -1519,41 +1628,45 @@ impl ReportsView {
         (headers, rows)
     }
 
-    fn build_pdf_sections(&self) -> Vec<crate::reports::pdf::PdfSection> {
-        let (dh, dr) = self.csv_data_donors();
-        let (eh, er) = self.csv_data_eur();
-        let (bh, br) = self.csv_data_brl();
-        let (ih, ir) = self.csv_data_inventory();
-        let (oh, or_) = self.csv_data_outbound();
-        let (ah, ar) = self.csv_data_audit_trail();
+    /// Builds all PDF sections in an explicit target `locale` (SPEC.md
+    /// §6.3) — the operator's choice in the export dialog, never the
+    /// ambient UI locale. Unlike CSV, PDF numbers follow `locale` too
+    /// (`for_csv = false` on every shared `csv_data_*` call).
+    fn build_pdf_sections(&self, locale: &str) -> Vec<crate::reports::pdf::PdfSection> {
+        let (dh, dr) = self.csv_data_donors(locale, false);
+        let (eh, er) = self.csv_data_eur(locale, false);
+        let (bh, br) = self.csv_data_brl(locale, false);
+        let (ih, ir) = self.csv_data_inventory(locale);
+        let (oh, or_) = self.csv_data_outbound(locale, false);
+        let (ah, ar) = self.csv_data_audit_trail(locale, false);
         vec![
             crate::reports::pdf::PdfSection {
-                title: t!("reports.pdf.section.donor").into_owned(),
+                title: t!("reports.pdf.section.donor", locale = locale).into_owned(),
                 headers: dh,
                 rows: dr,
             },
             crate::reports::pdf::PdfSection {
-                title: t!("reports.pdf.section.eur").into_owned(),
+                title: t!("reports.pdf.section.eur", locale = locale).into_owned(),
                 headers: eh,
                 rows: er,
             },
             crate::reports::pdf::PdfSection {
-                title: t!("reports.pdf.section.brl").into_owned(),
+                title: t!("reports.pdf.section.brl", locale = locale).into_owned(),
                 headers: bh,
                 rows: br,
             },
             crate::reports::pdf::PdfSection {
-                title: t!("sidebar.inventory").into_owned(),
+                title: t!("sidebar.inventory", locale = locale).into_owned(),
                 headers: ih,
                 rows: ir,
             },
             crate::reports::pdf::PdfSection {
-                title: t!("reports.pdf.section.outbound").into_owned(),
+                title: t!("reports.pdf.section.outbound", locale = locale).into_owned(),
                 headers: oh,
                 rows: or_,
             },
             crate::reports::pdf::PdfSection {
-                title: t!("reports.pdf.section.audit").into_owned(),
+                title: t!("reports.pdf.section.audit", locale = locale).into_owned(),
                 headers: ah,
                 rows: ar,
             },
@@ -1583,9 +1696,14 @@ impl ReportsView {
             entries.push(AuditEntry {
                 date: r.date.clone(),
                 ledger: "EUR".to_string(),
-                kind: r.tx_type.label().to_string(),
+                kind: r.tx_type.label(),
                 description,
-                amount: format!("{sign}€{:.2}", r.amount),
+                outbound_cash: None,
+                amount: Some(AuditAmount {
+                    sign,
+                    symbol: "€",
+                    value: r.amount,
+                }),
                 docs,
             });
         }
@@ -1621,9 +1739,14 @@ impl ReportsView {
             entries.push(AuditEntry {
                 date: r.date.clone(),
                 ledger: "BRL".to_string(),
-                kind: r.tx_type.label().to_string(),
+                kind: r.tx_type.label(),
                 description,
-                amount: format!("{sign}R${:.2}", r.amount),
+                outbound_cash: None,
+                amount: Some(AuditAmount {
+                    sign,
+                    symbol: "R$",
+                    value: r.amount,
+                }),
                 docs,
             });
         }
@@ -1637,7 +1760,7 @@ impl ReportsView {
                     continue;
                 }
             }
-            let mut desc = if e.item_count == 1 {
+            let desc = if e.item_count == 1 {
                 t!(
                     "reports.audit.outbound_desc_one",
                     recipient = e.recipient_name
@@ -1651,20 +1774,14 @@ impl ReportsView {
                 )
                 .into_owned()
             };
-            if let Some(cash) = e.cash_amount_brl {
-                if cash > Decimal::ZERO {
-                    desc.push_str(&t!(
-                        "reports.audit.outbound_cash_suffix",
-                        cash = format!("{cash:.2}")
-                    ));
-                }
-            }
+            let outbound_cash = e.cash_amount_brl.filter(|&cash| cash > Decimal::ZERO);
             entries.push(AuditEntry {
                 date: e.date.clone(),
                 ledger: t!("sidebar.outbound").into_owned(),
                 kind: t!("status.source_type.donation").into_owned(),
                 description: desc,
-                amount: String::new(),
+                outbound_cash,
+                amount: None,
                 docs: 0,
             });
         }
@@ -1672,6 +1789,32 @@ impl ReportsView {
         entries.sort_by(|a, b| b.date.cmp(&a.date));
         entries
     }
+}
+
+/// Report-language picker shown inside the CSV/PDF save dialogs (SPEC.md
+/// §6.3) — defaults to the ambient UI locale (set when the export dialog
+/// is opened) but is an explicit, independent choice from then on, same as
+/// the language selector in Settings. A free function, not a method: it's
+/// called from inside a block that already holds `self.csv_path_input`/
+/// `self.pdf_path_input` borrowed, so it must take `export_locale`
+/// directly rather than `&mut self` to keep the borrows disjoint.
+fn show_export_locale_picker(ui: &mut egui::Ui, export_locale: &mut String, id_salt: &str) {
+    let current_label = format::LOCALES
+        .iter()
+        .find(|(code, _)| *code == export_locale.as_str())
+        .map(|(_, label)| *label)
+        .unwrap_or(export_locale.as_str())
+        .to_string();
+    ui.horizontal(|ui| {
+        ui.label(t!("settings.locale.field.language").as_ref());
+        egui::ComboBox::from_id_salt(id_salt)
+            .selected_text(current_label)
+            .show_ui(ui, |ui| {
+                for (code, label) in format::LOCALES {
+                    ui.selectable_value(export_locale, code.to_string(), *label);
+                }
+            });
+    });
 }
 
 fn in_range(date: &str, from: &str, to: &str) -> bool {

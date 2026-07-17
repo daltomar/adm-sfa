@@ -8,6 +8,7 @@ use crate::db::queries::{
     purchases as purchases_qry, settings as settings_qry,
 };
 use crate::docs_fs;
+use crate::format;
 use crate::model::category::Category;
 use crate::model::document::Document;
 use crate::model::donor::{DonorDraft, PhysicalDonation, PhysicalDonationDraft};
@@ -973,11 +974,15 @@ fn donation_label(d: &PhysicalDonation) -> String {
     match &d.donor_name {
         Some(name) => t!(
             "inventory.donation_label",
-            date = d.date_received,
+            date = format::date(&d.date_received),
             name = name
         )
         .into_owned(),
-        None => t!("inventory.donation_label_anonymous", date = d.date_received).into_owned(),
+        None => t!(
+            "inventory.donation_label_anonymous",
+            date = format::date(&d.date_received)
+        )
+        .into_owned(),
     }
 }
 
@@ -989,10 +994,10 @@ fn purchase_label(p: &Purchase) -> String {
     };
     t!(
         "inventory.purchase_label",
-        date = p.date,
+        date = format::date(&p.date),
         channel = p.channel,
         symbol = p.currency.symbol(),
-        cost = format!("{:.2}", p.cost),
+        cost = format::amount(p.cost),
         multi = multi
     )
     .into_owned()

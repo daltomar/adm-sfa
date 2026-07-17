@@ -4,6 +4,7 @@ use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::db::queries::{inventory as inventory_qry, outbound as qry};
+use crate::format;
 use crate::model::inventory::InventoryItemRow;
 use crate::model::outbound::{
     OutboundEventDraft, OutboundEventRow, RecipientProject, RecipientProjectDraft,
@@ -150,17 +151,18 @@ impl OutboundView {
                 for i in 0..self.events.len() {
                     let ev = &self.events[i];
                     let id = ev.id;
+                    let ev_date = format::date(&ev.date);
                     let mut row = if ev.item_count == 1 {
                         t!(
                             "outbound.row.summary_one",
-                            date = ev.date,
+                            date = ev_date,
                             recipient = ev.recipient_name
                         )
                         .into_owned()
                     } else {
                         t!(
                             "outbound.row.summary_other",
-                            date = ev.date,
+                            date = ev_date,
                             recipient = ev.recipient_name,
                             count = ev.item_count
                         )
@@ -170,7 +172,7 @@ impl OutboundView {
                         if cash > Decimal::ZERO {
                             row.push_str(&t!(
                                 "outbound.row.cash_suffix",
-                                cash = format!("{cash:.2}")
+                                cash = format::amount(cash)
                             ));
                         }
                     }
