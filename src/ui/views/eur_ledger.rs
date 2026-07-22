@@ -5,6 +5,7 @@ use rust_i18n::t;
 
 use crate::db::queries::{donors as donors_qry, eur_ledger as qry};
 use crate::format;
+use crate::model::donor::DonorDraft;
 use crate::model::transaction::{EurTxDraft, EurTxRow, EurTxType, ManualEurTxType};
 
 enum Mode {
@@ -23,6 +24,7 @@ pub struct EurLedgerView {
     needs_reload: bool,
     donors: Vec<(i64, String)>,
     donors_loaded: bool,
+    new_donor: Option<DonorDraft>,
 }
 
 impl Default for EurLedgerView {
@@ -36,6 +38,7 @@ impl Default for EurLedgerView {
             needs_reload: true,
             donors: Vec::new(),
             donors_loaded: false,
+            new_donor: None,
         }
     }
 }
@@ -114,6 +117,7 @@ impl EurLedgerView {
             self.mode = Mode::Adding;
             self.error = None;
             self.donors_loaded = false;
+            self.new_donor = None;
         }
 
         ui.separator();
@@ -184,6 +188,7 @@ impl EurLedgerView {
                             };
                             self.mode = Mode::Editing(id);
                             self.error = None;
+                            self.new_donor = None;
                         } else {
                             self.mode = Mode::ViewingLinked(id);
                         }
@@ -259,24 +264,32 @@ impl EurLedgerView {
 
                 if show_donor {
                     ui.label(t!("common.field.donor").as_ref());
-                    let selected_name = self
-                        .draft
-                        .donor_id
-                        .and_then(|id| donors.iter().find(|(did, _)| *did == id))
-                        .map(|(_, n)| n.clone())
-                        .unwrap_or_else(|| t!("common.combo.none").into_owned());
-                    egui::ComboBox::from_id_salt("eur_donor_combo")
-                        .selected_text(&selected_name)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.draft.donor_id,
-                                None,
-                                t!("common.combo.none").as_ref(),
-                            );
-                            for (did, name) in &donors {
-                                ui.selectable_value(&mut self.draft.donor_id, Some(*did), name);
-                            }
-                        });
+                    ui.horizontal(|ui| {
+                        let selected_name = self
+                            .draft
+                            .donor_id
+                            .and_then(|id| donors.iter().find(|(did, _)| *did == id))
+                            .map(|(_, n)| n.clone())
+                            .unwrap_or_else(|| t!("common.combo.none").into_owned());
+                        egui::ComboBox::from_id_salt("eur_donor_combo")
+                            .selected_text(&selected_name)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.draft.donor_id,
+                                    None,
+                                    t!("common.combo.none").as_ref(),
+                                );
+                                for (did, name) in &donors {
+                                    ui.selectable_value(&mut self.draft.donor_id, Some(*did), name);
+                                }
+                            });
+                        if ui
+                            .button(t!("eur_ledger.button.new_donor").as_ref())
+                            .clicked()
+                        {
+                            self.new_donor = Some(DonorDraft::default());
+                        }
+                    });
                     ui.end_row();
                 }
 
@@ -288,6 +301,72 @@ impl EurLedgerView {
                 );
                 ui.end_row();
             });
+
+        enum DonorAction {
+            None,
+            Create,
+            Cancel,
+        }
+        let mut donor_action = DonorAction::None;
+
+        if let Some(newd) = &mut self.new_donor {
+            ui.add_space(6.0);
+            ui.group(|ui| {
+                egui::Grid::new("eur_new_donor_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .min_col_width(80.0)
+                    .show(ui, |ui| {
+                        ui.label(t!("common.field.name").as_ref());
+                        ui.add(egui::TextEdit::singleline(&mut newd.name).desired_width(220.0));
+                        ui.end_row();
+
+                        ui.label(t!("common.field.contact_info").as_ref());
+                        ui.add(
+                            egui::TextEdit::singleline(&mut newd.contact_info).desired_width(220.0),
+                        );
+                        ui.end_row();
+
+                        ui.label(t!("common.field.notes").as_ref());
+                        ui.add(
+                            egui::TextEdit::multiline(&mut newd.notes)
+                                .desired_width(220.0)
+                                .desired_rows(2),
+                        );
+                        ui.end_row();
+                    });
+
+                let ok = !newd.name.trim().is_empty();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(ok, egui::Button::new(t!("common.create").as_ref()))
+                        .clicked()
+                    {
+                        donor_action = DonorAction::Create;
+                    }
+                    if ui.button(t!("common.cancel").as_ref()).clicked() {
+                        donor_action = DonorAction::Cancel;
+                    }
+                });
+            });
+        }
+
+        match donor_action {
+            DonorAction::Cancel => self.new_donor = None,
+            DonorAction::Create => {
+                let draft = self.new_donor.clone().unwrap();
+                match donors_qry::insert(db, &draft) {
+                    Ok(new_id) => {
+                        self.draft.donor_id = Some(new_id);
+                        self.new_donor = None;
+                        self.donors_loaded = false;
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(e.to_string()),
+                }
+            }
+            DonorAction::None => {}
+        }
 
         if let Some(err) = &self.error {
             ui.add_space(4.0);
@@ -341,6 +420,7 @@ impl EurLedgerView {
             if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
+                self.new_donor = None;
             }
         });
     }
