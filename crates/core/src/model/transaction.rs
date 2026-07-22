@@ -9,6 +9,7 @@ pub enum EurTxType {
 }
 
 impl EurTxType {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "donation_in" => Some(Self::DonationIn),
@@ -124,6 +125,7 @@ pub enum BrlTxType {
 }
 
 impl BrlTxType {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "transfer_in" => Some(Self::TransferIn),

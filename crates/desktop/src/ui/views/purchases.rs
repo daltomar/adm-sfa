@@ -3,11 +3,13 @@ use rusqlite::Connection;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
-use crate::db::queries::{documents as docs_qry, purchases as qry, settings as settings_qry};
-use crate::docs_fs;
-use crate::format;
-use crate::model::document::Document;
-use crate::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
+use adm_sfa_core::db::queries::{
+    documents as docs_qry, purchases as qry, settings as settings_qry,
+};
+use adm_sfa_core::docs_fs;
+use adm_sfa_core::format;
+use adm_sfa_core::model::document::Document;
+use adm_sfa_core::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
 
 enum Mode {
     List,
@@ -308,13 +310,13 @@ impl PurchasesView {
         }
 
         let date_text = self.draft.date.trim();
-        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        let date_ok = adm_sfa_core::date::parse_date_input(date_text).is_some();
         if !date_text.is_empty() && !date_ok {
             ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
         }
 
         let cost_text = self.draft.cost_str.trim();
-        let cost_parsed = crate::money::parse_amount_input(cost_text);
+        let cost_parsed = adm_sfa_core::money::parse_amount_input(cost_text);
         let cost_ok = cost_parsed
             .map(|d| d > rust_decimal::Decimal::ZERO)
             .unwrap_or(false);
@@ -706,7 +708,7 @@ impl PurchasesView {
                     // the persisted purchase's own ISO date if the draft
                     // is momentarily unparseable mid-edit, and to today's
                     // date as a last resort.
-                    let filing_date = crate::date::parse_date_input(&self.draft.date)
+                    let filing_date = adm_sfa_core::date::parse_date_input(&self.draft.date)
                         .map(|d| d.format("%Y-%m-%d").to_string())
                         .or_else(|| {
                             self.purchases

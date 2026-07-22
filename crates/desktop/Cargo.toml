@@ -1,0 +1,22 @@
+[package]
+name = "desktop"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "adm-sfa"
+path = "src/main.rs"
+
+[dependencies]
+adm_sfa_core = { path = "../core" }
+reports = { path = "../reports" }
+
+# glow (OpenGL) backend only — avoids wgpu/naga/ash/vello for the scaffold build.
+# Switch to default-features if wgpu is needed later.
+eframe      = { version = "0.35", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }
+egui_extras = { version = "0.35", features = ["image"] }
+rusqlite    = { workspace = true }
+rust_decimal = { workspace = true }
+chrono      = { workspace = true }
+rust-i18n   = { workspace = true }
+dirs        = { workspace = true }

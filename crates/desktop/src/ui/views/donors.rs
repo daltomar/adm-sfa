@@ -2,8 +2,8 @@ use eframe::egui;
 use rusqlite::Connection;
 use rust_i18n::t;
 
-use crate::db::queries::donors as qry;
-use crate::model::donor::{Donor, DonorDraft};
+use adm_sfa_core::db::queries::donors as qry;
+use adm_sfa_core::model::donor::{Donor, DonorDraft};
 
 enum Mode {
     List,

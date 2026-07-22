@@ -14,6 +14,7 @@ impl Currency {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "EUR" => Some(Currency::Eur),
@@ -44,6 +45,7 @@ impl PurchaseStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "negotiating" => Some(PurchaseStatus::Negotiating),

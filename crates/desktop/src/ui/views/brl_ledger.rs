@@ -3,9 +3,9 @@ use rusqlite::Connection;
 use rust_decimal::Decimal;
 use rust_i18n::t;
 
-use crate::db::queries::brl_ledger as qry;
-use crate::format;
-use crate::model::transaction::{BrlTxRow, BrlTxType};
+use adm_sfa_core::db::queries::brl_ledger as qry;
+use adm_sfa_core::format;
+use adm_sfa_core::model::transaction::{BrlTxRow, BrlTxType};
 
 enum Mode {
     List,

@@ -4,10 +4,15 @@ Project memory and working instructions for Claude Code in this repository.
 
 ## What this project is
 
-A desktop application (Rust) for a small charitable project that tracks physical
+A Rust application for a small charitable project that tracks physical
 skateboard-related donations, dual-currency (EUR/BRL) cash flow, purchases, and
-outbound donations to recipient projects in Brazil. Single user, single machine,
-no sync required.
+outbound donations to recipient projects in Brazil.
+
+**Two front-ends, one domain core.** The original egui desktop app remains the
+primary interface. A web front-end is being added so a second, occasional user
+can access the same data from another machine on the LAN. Both binaries run on
+the same internal-LAN Linux machine against the same SQLite database and the
+same `documents/` folder. Simultaneous use is possible but expected to be rare.
 
 **Read `SPEC.md` before making any architectural or data-model decision.** It is
 the source of truth for entities, fields, the document/filename system, and
@@ -44,6 +49,10 @@ there.
   negotiation status, inline "+ New donor", permanent itemized inventory
   table, native screenshot capture) are all shipped. Next candidates are
   Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
+- **In progress: workspace restructure + web front-end.** See "Workspace
+  restructure and web front-end" below. The desktop app must keep working
+  and behaving identically at every phase boundary. Tag `v1.0-desktop`
+  marks the pre-restructure state.
 
 ## Purchase `multiple_items` flag (implemented)
 
@@ -225,6 +234,117 @@ from a screenshot instead of the filesystem.
   self-review: a flaky test from temp-filename collisions under
   parallel test execution (fixed with an atomic counter).
 
+## Workspace restructure and web front-end (in progress)
+
+Goal: extract the domain layer into a shared crate so a web front-end can
+be added alongside the existing desktop app, both running on the same
+internal-LAN machine against one database.
+
+### Target layout
+
+```
+adm-sfa/
+  Cargo.toml          # workspace
+  crates/
+    core/             # model/, db/, schema.sql, migrations/, docs_fs, backup, config
+    reports/          # csv + typst rendering (pure renderers, no aggregation)
+    desktop/          # existing egui UI + screenshot.rs
+    web/              # axum + server-rendered templates (new)
+```
+
+`desktop` and `web` both depend on `core` and `reports`. Neither knows the
+other exists.
+
+**`core`'s actual package name is `adm_sfa_core`, not the literal string
+`core`.** Naming a workspace crate `core` shadows Rust's own sysroot `core`
+crate in the extern prelude of every crate that depends on it — confirmed
+during phase 1 with a live repro (`use core::mem;` inside `desktop` silently
+resolved to the local crate instead of `::core` once a dependency named
+`core` existed, rather than failing loudly). The directory stays
+`crates/core/`; only the `[package].name` / `use adm_sfa_core::...` differ
+from what the prose above calls it. `web` (phase 5) must depend on it the
+same way `desktop` does — `adm_sfa_core = { path = "../core" }`, not
+`core = { path = "../core" }`.
+
+### Phases
+
+Work through these in order, one Claude Code session per phase, each
+ending in a working desktop app. Do not start a phase before the previous
+one compiles, passes tests, and behaves identically.
+
+1. **Workspace split.** Mechanical move only — no logic or signature
+   changes beyond what visibility requires. Fold in the configurable data
+   root, and enable WAL mode, here. **Checkpoint:** if types resist moving
+   because `ui/` is threaded into them, stop and report rather than
+   working around it — that finding changes the plan.
+2. **Invariants into `core`.** Push down the cross-row rules currently
+   enforced only in view code (see "Known domain-logic-in-view debt"
+   below). Highest priority: the outbound item status guard, which is a
+   real data-integrity gap today and an exploitable one once an HTTP
+   client can call it.
+3. **Reports aggregation into `core`.** Extract `build_donor_rows`, the
+   EUR/BRL summary folds, `build_audit_entries`, and the free functions
+   (`in_range`, the `*_tx_description` helpers, `donor_or_anonymous`) out
+   of `ui/views/reports.rs`. Unify the three `compute_balance` copies into
+   one. **Verification:** generate every report before and after and diff
+   the output — byte-identical, or explain the difference.
+4. **Service layer.** Operation-shaped functions in `core`
+   (`create_purchase`, `mark_purchase_bought`, `donate_items`,
+   `attach_document`, …). Desktop views call these instead of reaching
+   into `db::queries` directly.
+5. **Web crate.** axum + server-rendered templates over the service layer.
+   Multipart upload replacing drag-and-drop; file serving for
+   `documents/`; single shared password + session cookie.
+6. **Deployment.** systemd unit, own `adm-sfa` user, `WorkingDirectory` at
+   the data root, hardening (`PrivateTmp`, `ProtectSystem=strict`,
+   `ReadWritePaths` scoped to the data dir, `NoNewPrivileges`), bind to
+   the LAN IP with a firewall rule scoped to the subnet,
+   `WantedBy=multi-user.target` (the machine is not always on). Nightly
+   `sqlite3 .backup` + rsync of `documents/` off the machine.
+
+### Known domain-logic-in-view debt (target of phase 2)
+
+From an audit of the pre-restructure codebase. These are cross-row
+invariants with no DB constraint or query-layer guard behind them:
+
+- `db/queries/outbound.rs::link_items` unconditionally sets any passed
+  item id to `donated` with no status check. The only thing preventing a
+  double-donation or hijack of a reserved item is a client-side
+  `.filter()` in `outbound.rs::show_item_picker`. **Fix at the query
+  layer**, not the view.
+- "Can't unset `multiple_items` while >1 inventory items are linked" is
+  checked inside the Save button's click handler in `purchases.rs`.
+- `purchase_source_conflict` ("a single-item purchase backs at most one
+  inventory item") is implemented *twice, independently*, in
+  `inventory.rs` — once for save validation, once for the picker's
+  grey-out. Collapse to one implementation in `core`.
+
+Also: `compute_balance` is defined identically in `eur_ledger.rs` and
+`brl_ledger.rs`, with a third period-scoped variant inline in
+`reports.rs`. `transfers.rs` recomputes `eur * rate = brl` as a preview
+label; the authoritative version is in `db/queries/transfers.rs` and stays
+there.
+
+What the audit found *correct* and not to be "improved" during the move:
+`db/queries/*` (parameterized, no business logic), `model/*` (enum
+`label()`/`as_str()`/`is_inflow()` helpers are domain vocabulary, correctly
+placed), `src/reports/{csv,pdf}.rs` (pure renderers), and the CRUD-only
+views (`donors.rs`, `settings.rs`).
+
+### Platform differences between front-ends
+
+- **Native screenshot capture (`SPEC.md §3.y`) is desktop-only** — a
+  permanent platform constraint, not an unimplemented gap. A browser
+  cannot invoke the OS screenshot tool on the *client* machine. `web` gets
+  plain file upload for the same document labels. `screenshot.rs` stays in
+  `crates/desktop`; do not attempt to move it to `core` or reimplement it
+  server-side.
+- Drag-and-drop attachment becomes HTTP multipart in `web`. The filename
+  convention (SPEC.md §4.2) is unchanged and generated in `core` either
+  way — the user still never types a filename.
+- PDF export (`typst-as-lib`) runs server-side in `web` and returns a
+  download response.
+
 ## How to work in this repo
 
 1. On starting a session, read `SPEC.md` and `stack-plan.md` in full before
@@ -240,6 +360,15 @@ from a screenshot instead of the filesystem.
    implementation reveals an ambiguity or necessary change to the spec or
    plan, flag it and propose an edit rather than letting the code silently
    diverge.
+5. While the workspace restructure is in progress, respect the phase
+   boundaries above. Do not opportunistically fix domain-logic-in-view
+   debt during phase 1 — the whole point of a mechanical move is that a
+   behaviour change can't hide inside it. Report anything you notice and
+   leave it for its phase.
+6. When adding a feature after phase 5, implement it in `core` first, then
+   wire up *both* front-ends — or state explicitly that it's
+   platform-specific and why. Silently shipping a feature to only one
+   front-end is the failure mode to avoid.
 
 ## Non-negotiable design constraints (do not change without explicit confirmation)
 
@@ -263,8 +392,22 @@ from a screenshot instead of the filesystem.
   filename.
 - **Soft-delete only** for documents — move to `documents/_deleted/`, never
   hard-delete from within the app.
-- **Single user.** Do not add multi-user auth, sync, or concurrent-write
-  handling — out of scope.
+- **Two users, one machine, no sync.** *(Supersedes the previous "single
+  user" constraint as of the web front-end work.)* The web front-end gets a
+  single shared password with a session cookie — not per-user accounts,
+  roles, or permissions. Both binaries open the same SQLite file directly;
+  SQLite runs in WAL mode. Do not add sync, replication, per-user identity,
+  or an ORM/connection-pool layer to "solve" concurrency — WAL plus rare
+  overlapping use is the whole design. Stale reads in a long-open desktop
+  session are accepted, not worked around.
+- **Business rules live in `core`.** UI crates (`desktop`, `web`) call into
+  `core` and never implement domain logic, validation, or cross-row
+  invariants themselves. If a rule can be violated by a caller that isn't
+  the UI, it belongs in `core` — this is what makes the web front-end safe,
+  since an HTTP client is untrusted in a way an egui widget was not.
+- **`core` takes its data root as configuration.** Never derive the DB or
+  `documents/` path from the binary's own location, and never assume the
+  two front-ends resolve it differently — they must point at the same root.
 - **T1 — The database is monolingual.** No stored value changes meaning or
   spelling based on the active UI locale (see SPEC.md §6). Locale affects
   presentation only.
@@ -286,17 +429,20 @@ from a screenshot instead of the filesystem.
 
 ## Conventions once code exists
 
-- **Module layout** (see `stack-plan.md` for the full tree): `db/` for
-  `rusqlite` access and query modules per entity group, `model/` for plain
-  structs mirroring DB rows (including `category` and `document_label` as
-  first-class models, not enums), `ui/views/` for one file per section
-  (including `settings.rs` for category/label/screenshot-command
-  management), `reports/` for PDF/CSV generation, `docs_fs.rs` for filename
-  generation, the shared document-filing helper, and soft-delete,
-  `screenshot.rs` for OS screenshot-tool invocation, `backup.rs` for the
-  zip-based backup. No `ui/widgets/` — the one stub it ever held
-  (`document_panel.rs`) was deleted unused; add it back only if a second
-  shared widget actually materializes.
+- **Module layout** (see `stack-plan.md` for the full tree; paths below are
+  post-restructure — before phase 1 they all sit under a single `src/`):
+  in `crates/core`: `db/` for `rusqlite` access and query modules per
+  entity group, `model/` for plain structs mirroring DB rows (including
+  `category` and `document_label` as first-class models, not enums),
+  `docs_fs.rs` for filename generation, the shared document-filing helper,
+  and soft-delete, `backup.rs` for the zip-based backup, plus the service
+  layer (phase 4) and the extracted reports aggregation (phase 3).
+  In `crates/reports`: PDF/CSV rendering only — no aggregation.
+  In `crates/desktop`: `ui/views/` for one file per section (including
+  `settings.rs` for category/label/screenshot-command management) and
+  `screenshot.rs` for OS screenshot-tool invocation. No `ui/widgets/` —
+  the one stub it ever held (`document_panel.rs`) was deleted unused; add
+  it back only if a second shared widget actually materializes.
 - **Migrations**: `rusqlite_migration`, tracked via `schema.sql` (canonical,
   hand-maintained) kept in sync with `migrations/NNN_name.sql` (applied,
   incremental). New tables/columns get a new migration file, not edits to
@@ -321,6 +467,8 @@ before the commit; surface 🟡/🟢 for me to decide.
 
 ## Useful commands
 
+Pre-restructure (single crate):
+
 ```sh
 cargo build                        # compile (debug)
 cargo run                          # run with default data dir (~/.local/share/adm-sfa/)
@@ -329,4 +477,16 @@ cargo test                         # run unit tests
 cargo clippy -- -D warnings        # lint; treat warnings as errors
 cargo fmt                          # auto-format all source files
 cargo check                        # fast type-check without producing a binary
+```
+
+Post-restructure (workspace) — the `--workspace` / `-p` forms:
+
+```sh
+cargo build --workspace                      # compile everything
+cargo run -p desktop                         # run the egui app
+cargo run -p desktop -- --data-dir /tmp/test # alternate data dir
+cargo run -p web                             # run the web server (phase 5+)
+cargo test --workspace                       # run all tests across crates
+cargo clippy --workspace -- -D warnings      # lint everything
+cargo fmt --all                              # format all crates
 ```

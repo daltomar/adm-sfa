@@ -7,7 +7,7 @@ use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
 
-static TEMPLATE: &str = include_str!("../../templates/report.typ");
+static TEMPLATE: &str = include_str!("../templates/report.typ");
 
 /// A single named table section to render in the PDF.
 ///

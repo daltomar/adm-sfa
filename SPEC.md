@@ -10,7 +10,10 @@ The application must support: full traceability of every euro and every real fro
 
 ## 2. Core principles
 
-- Single user, single machine — no multi-user sync required.
+- Two users, one machine — no sync. The original desktop app is joined by a
+  web front-end so a second, occasional user can reach the same data over
+  the LAN; both share one SQLite file and one shared password, not per-user
+  accounts. See `CLAUDE.md`'s "Two users, one machine, no sync" constraint.
 - File-on-disk storage for all documents and photos, referenced by path from the database — keeps the database small and the whole project backup-able as one folder.
 - Nothing is ever silently deleted. Document removal is a soft-delete (moved to an archive folder), preserving the audit trail — the sole exception is dropping a still-negotiating purchase, which has no ledger or inventory footprint (see §3.6).
 - Currency conversion happens at exactly one point: the annual EUR→BRL transfer, where the rate is entered manually. EUR and BRL are otherwise independent ledgers.

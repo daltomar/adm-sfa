@@ -3,11 +3,13 @@ use rusqlite::Connection;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
-use crate::db::queries::{documents as docs_qry, settings as settings_qry, transfers as qry};
-use crate::docs_fs;
-use crate::format;
-use crate::model::document::Document;
-use crate::model::transfer::{AnnualTransfer, TransferDraft};
+use adm_sfa_core::db::queries::{
+    documents as docs_qry, settings as settings_qry, transfers as qry,
+};
+use adm_sfa_core::docs_fs;
+use adm_sfa_core::format;
+use adm_sfa_core::model::document::Document;
+use adm_sfa_core::model::transfer::{AnnualTransfer, TransferDraft};
 
 enum Mode {
     List,
@@ -241,8 +243,8 @@ impl TransfersView {
             });
 
         if let (Some(eur), Some(rate)) = (
-            crate::money::parse_amount_input(self.draft.eur_amount_sent_str.trim()),
-            crate::money::parse_amount_input(self.draft.exchange_rate_str.trim()),
+            adm_sfa_core::money::parse_amount_input(self.draft.eur_amount_sent_str.trim()),
+            adm_sfa_core::money::parse_amount_input(self.draft.exchange_rate_str.trim()),
         ) {
             ui.add_space(4.0);
             ui.label(
@@ -260,13 +262,13 @@ impl TransfersView {
         }
 
         let date_text = self.draft.date.trim();
-        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        let date_ok = adm_sfa_core::date::parse_date_input(date_text).is_some();
         if !date_text.is_empty() && !date_ok {
             ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
         }
 
         let eur_text = self.draft.eur_amount_sent_str.trim();
-        let eur_parsed = crate::money::parse_amount_input(eur_text);
+        let eur_parsed = adm_sfa_core::money::parse_amount_input(eur_text);
         let eur_ok = eur_parsed
             .map(|d| d > rust_decimal::Decimal::ZERO)
             .unwrap_or(false);
@@ -281,7 +283,7 @@ impl TransfersView {
             }
         }
         let rate_text = self.draft.exchange_rate_str.trim();
-        let rate_parsed = crate::money::parse_amount_input(rate_text);
+        let rate_parsed = adm_sfa_core::money::parse_amount_input(rate_text);
         let rate_ok = rate_parsed
             .map(|d| d > rust_decimal::Decimal::ZERO)
             .unwrap_or(false);
@@ -557,7 +559,7 @@ impl TransfersView {
                     // the persisted transfer's own ISO date if the draft
                     // is momentarily unparseable mid-edit, and to today's
                     // date as a last resort.
-                    let filing_date = crate::date::parse_date_input(&self.draft.date)
+                    let filing_date = adm_sfa_core::date::parse_date_input(&self.draft.date)
                         .map(|d| d.format("%Y-%m-%d").to_string())
                         .or_else(|| {
                             self.transfers

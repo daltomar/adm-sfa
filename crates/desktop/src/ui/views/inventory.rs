@@ -3,19 +3,19 @@ use rusqlite::Connection;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
-use crate::db::queries::{
+use adm_sfa_core::db::queries::{
     categories as cat_qry, documents as docs_qry, donors as donors_qry, inventory as qry,
     purchases as purchases_qry, settings as settings_qry,
 };
-use crate::docs_fs;
-use crate::format;
-use crate::model::category::Category;
-use crate::model::document::Document;
-use crate::model::donor::{DonorDraft, PhysicalDonation, PhysicalDonationDraft};
-use crate::model::inventory::{
+use adm_sfa_core::docs_fs;
+use adm_sfa_core::format;
+use adm_sfa_core::model::category::Category;
+use adm_sfa_core::model::document::Document;
+use adm_sfa_core::model::donor::{DonorDraft, PhysicalDonation, PhysicalDonationDraft};
+use adm_sfa_core::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
-use crate::model::purchase::{Purchase, PurchaseStatus};
+use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
 
 enum Mode {
     List,
@@ -583,7 +583,7 @@ impl InventoryView {
                 }
 
                 let date_text = nd.date_received.trim();
-                let ok = crate::date::parse_date_input(date_text).is_some();
+                let ok = adm_sfa_core::date::parse_date_input(date_text).is_some();
                 if !date_text.is_empty() && !ok {
                     ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
                 }

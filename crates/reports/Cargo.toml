@@ -1,0 +1,14 @@
+[package]
+name = "reports"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+csv = "1"
+# Data comes in as plain strings (PdfSection { title, headers, rows }) —
+# this crate has no dependency on `core`, no DB access, no aggregation.
+typst-as-lib = { version = "0.16.0", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
+typst        = "0.15.0"
+typst-layout = "0.15.0"
+typst-pdf    = "0.15.0"
+ecow         = "0.2"
