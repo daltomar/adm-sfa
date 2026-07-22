@@ -170,7 +170,7 @@ impl TransfersView {
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
                     if ui.selectable_label(selected, &row).clicked() {
                         self.draft = TransferDraft {
-                            date: self.transfers[i].date.clone(),
+                            date: format::date(&self.transfers[i].date),
                             eur_amount_sent_str: self.transfers[i].eur_amount_sent.to_string(),
                             exchange_rate_str: self.transfers[i].exchange_rate.to_string(),
                             notes: self.transfers[i].notes.clone().unwrap_or_default(),
@@ -259,6 +259,12 @@ impl TransfersView {
             ui.colored_label(egui::Color32::RED, err);
         }
 
+        let date_text = self.draft.date.trim();
+        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        if !date_text.is_empty() && !date_ok {
+            ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
+        }
+
         let eur_text = self.draft.eur_amount_sent_str.trim();
         let eur_parsed = crate::money::parse_amount_input(eur_text);
         let eur_ok = eur_parsed
@@ -289,7 +295,7 @@ impl TransfersView {
                 ui.colored_label(egui::Color32::RED, t!("transfers.error.rate_zero").as_ref());
             }
         }
-        let form_ok = !self.draft.date.trim().is_empty() && eur_ok && rate_ok;
+        let form_ok = date_ok && eur_ok && rate_ok;
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -545,11 +551,26 @@ impl TransfersView {
                     let (path, label, is_temp) = (p.path.clone(), p.label.clone(), p.is_temp);
                     let existing: Vec<String> =
                         self.docs.iter().map(|d| d.filename.clone()).collect();
+                    // Filenames must stay ISO-sortable (T4) regardless of
+                    // what the user has currently typed into the date
+                    // field: prefer the parsed draft date, fall back to
+                    // the persisted transfer's own ISO date if the draft
+                    // is momentarily unparseable mid-edit, and to today's
+                    // date as a last resort.
+                    let filing_date = crate::date::parse_date_input(&self.draft.date)
+                        .map(|d| d.format("%Y-%m-%d").to_string())
+                        .or_else(|| {
+                            self.transfers
+                                .iter()
+                                .find(|t| t.id == edit_id)
+                                .map(|t| t.date.clone())
+                        })
+                        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
                     match docs_fs::file_document(
                         db,
                         &documents_dir,
                         &path,
-                        &self.draft.date,
+                        &filing_date,
                         ("transfer", edit_id),
                         &label,
                         &existing,

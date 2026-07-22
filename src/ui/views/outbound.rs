@@ -180,7 +180,7 @@ impl OutboundView {
                     if ui.selectable_label(selected, &row).clicked() {
                         let ev = &self.events[i];
                         self.draft = OutboundEventDraft {
-                            date: ev.date.clone(),
+                            date: format::date(&ev.date),
                             recipient_project_id: Some(ev.recipient_project_id),
                             cash_amount_brl_str: ev
                                 .cash_amount_brl
@@ -281,16 +281,19 @@ impl OutboundView {
             );
         }
         let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
-        let date_ok = !self.draft.date.trim().is_empty();
+        let date_text = self.draft.date.trim();
+        let date_ok = crate::date::parse_date_input(date_text).is_some();
         let recipient_ok = self.draft.recipient_project_id.is_some();
         let gift_ok = has_cash || !self.selected_item_ids.is_empty();
         let form_ok = date_ok && recipient_ok && cash_ok && gift_ok;
 
-        if !date_ok {
+        if date_text.is_empty() {
             ui.colored_label(
                 egui::Color32::RED,
                 t!("outbound.error.date_required").as_ref(),
             );
+        } else if !date_ok {
+            ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
         }
         if !recipient_ok {
             ui.colored_label(

@@ -170,7 +170,7 @@ impl EurLedgerView {
 
                     if ui.selectable_label(selected, &row_label).clicked() {
                         if tx_type.is_manual() {
-                            let date_c = self.rows[i].date.clone();
+                            let date_c = format::date(&self.rows[i].date);
                             let amount_str = self.rows[i].amount.to_string();
                             let donor_id = self.rows[i].donor_id;
                             let note = self.rows[i].note.clone().unwrap_or_default();
@@ -373,6 +373,12 @@ impl EurLedgerView {
             ui.colored_label(egui::Color32::RED, err);
         }
 
+        let date_text = self.draft.date.trim();
+        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        if !date_text.is_empty() && !date_ok {
+            ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
+        }
+
         let amount_text = self.draft.amount_str.trim();
         let amount_parsed = crate::money::parse_amount_input(amount_text);
         let amount_ok = amount_parsed.map(|d| d > Decimal::ZERO).unwrap_or(false);
@@ -389,7 +395,7 @@ impl EurLedgerView {
                 );
             }
         }
-        let form_ok = !self.draft.date.trim().is_empty() && amount_ok;
+        let form_ok = date_ok && amount_ok;
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {

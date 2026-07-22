@@ -582,7 +582,11 @@ impl InventoryView {
                     });
                 }
 
-                let ok = !nd.date_received.trim().is_empty();
+                let date_text = nd.date_received.trim();
+                let ok = crate::date::parse_date_input(date_text).is_some();
+                if !date_text.is_empty() && !ok {
+                    ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
+                }
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(ok, egui::Button::new(t!("common.create").as_ref()))

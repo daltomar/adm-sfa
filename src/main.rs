@@ -1,5 +1,6 @@
 mod app;
 mod backup;
+mod date;
 mod db;
 mod docs_fs;
 mod format;

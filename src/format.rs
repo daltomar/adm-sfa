@@ -1,13 +1,17 @@
 //! Locale-aware *display* formatting for dates and money amounts
 //! (SPEC.md §6.5, stack-plan.md "Localisation (i18n)"). Never touches
-//! storage or parsing — dates stay ISO `YYYY-MM-DD` in the DB and in date
-//! *input* fields, and amount input parsing (`money::parse_amount_input`)
-//! stays locale-independent per T7. Currency *symbol* is a property of the
-//! ledger, not the locale (T-currency-symbol / SPEC.md §6.5) — this module
-//! only ever formats the bare number; callers place the symbol themselves,
-//! and the symbol's position relative to the number is a translation
-//! concern (the `%{symbol}`/`%{amount}` ordering inside each locale's own
-//! `t!()` template), not something this module decides.
+//! storage or parsing — dates stay ISO `YYYY-MM-DD` in the DB (T1) and in
+//! filenames (T4) regardless of what this module renders on screen; typed
+//! date *input* is parsed separately, by `date::parse_date_input`, and
+//! amount input parsing (`money::parse_amount_input`) stays
+//! locale-independent per T7. Date display itself no longer varies by
+//! locale either — every UI language shows dotted `DD.MM.YYYY`. Currency
+//! *symbol* is a property of the ledger, not the locale
+//! (T-currency-symbol / SPEC.md §6.5) — this module only ever formats the
+//! bare number; callers place the symbol themselves, and the symbol's
+//! position relative to the number is a translation concern (the
+//! `%{symbol}`/`%{amount}` ordering inside each locale's own `t!()`
+//! template), not something this module decides.
 
 use rust_decimal::Decimal;
 
@@ -21,23 +25,28 @@ pub const LOCALES: &[(&str, &str)] = &[
     ("pt-BR", "Português (Brasil)"),
 ];
 
-/// Reformats a raw ISO `YYYY-MM-DD` date for on-screen/PDF display in the
-/// currently active locale. Falls back to the ISO string unchanged if it
+/// Reformats a raw ISO `YYYY-MM-DD` date to dotted `DD.MM.YYYY` for
+/// on-screen/PDF display — the same format in every UI locale (no more
+/// per-locale variation). Falls back to the ISO string unchanged if it
 /// doesn't parse as `YYYY-MM-DD` (defensive only — every date passed in
 /// should already be one, per the DB schema).
 pub fn date(iso: &str) -> String {
     date_for_locale(iso, rust_i18n::locale().as_ref())
 }
 
-/// Same as `date()`, but for an explicitly chosen locale rather than the
+/// Same as `date()`, but takes an explicit locale rather than reading the
 /// ambient UI locale — for report export (SPEC.md §6.3), where the target
 /// language is a parameter the operator picks in the export dialog, never
-/// implicitly read from the UI.
+/// implicitly read from the UI. Output no longer actually varies by
+/// locale (display is uniformly dotted DD.MM.YYYY now), but the explicit
+/// argument is kept so report-generation code paths keep taking locale
+/// explicitly per T3, rather than reaching for the ambient one, should
+/// date display ever need to vary by locale again.
 pub fn date_in(iso: &str, locale: &str) -> String {
     date_for_locale(iso, locale)
 }
 
-fn date_for_locale(iso: &str, locale: &str) -> String {
+fn date_for_locale(iso: &str, _locale: &str) -> String {
     let mut parts = iso.splitn(3, '-');
     let (Some(y), Some(m), Some(d)) = (parts.next(), parts.next(), parts.next()) else {
         return iso.to_string();
@@ -45,11 +54,7 @@ fn date_for_locale(iso: &str, locale: &str) -> String {
     if d.len() != 2 || m.len() != 2 || y.len() != 4 {
         return iso.to_string();
     }
-    match locale {
-        "de" => format!("{d}.{m}.{y}"),
-        "pt-BR" => format!("{d}/{m}/{y}"),
-        _ => iso.to_string(),
-    }
+    format!("{d}.{m}.{y}")
 }
 
 /// Formats a money amount to 2 decimal places with the currently active
@@ -114,8 +119,8 @@ mod tests {
     use rust_decimal_macros::dec;
 
     #[test]
-    fn date_stays_iso_for_english() {
-        assert_eq!(date_for_locale("2026-07-16", "en"), "2026-07-16");
+    fn date_is_dotted_dmy_for_english() {
+        assert_eq!(date_for_locale("2026-07-16", "en"), "16.07.2026");
     }
 
     #[test]
@@ -124,8 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn date_is_slashed_dmy_for_portuguese() {
-        assert_eq!(date_for_locale("2026-07-16", "pt-BR"), "16/07/2026");
+    fn date_is_dotted_dmy_for_portuguese() {
+        assert_eq!(date_for_locale("2026-07-16", "pt-BR"), "16.07.2026");
     }
 
     #[test]
@@ -174,7 +179,7 @@ mod tests {
     #[test]
     fn amount_in_and_date_in_use_the_given_locale_not_the_ambient_one() {
         assert_eq!(amount_in(dec!(1234.5), "de"), "1.234,50");
-        assert_eq!(date_in("2026-07-16", "pt-BR"), "16/07/2026");
+        assert_eq!(date_in("2026-07-16", "pt-BR"), "16.07.2026");
     }
 
     #[test]

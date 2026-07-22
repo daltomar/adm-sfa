@@ -112,13 +112,14 @@ pub fn item_names_by_event(conn: &Connection) -> Result<HashMap<i64, Vec<String>
 }
 
 pub fn insert(conn: &Connection, draft: &OutboundEventDraft, item_ids: &[i64]) -> Result<i64> {
+    let date = parse_date(&draft.date)?;
     let cash_amount = parse_cash(&draft.cash_amount_brl_str);
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "INSERT INTO outbound_event (date, recipient_project_id, cash_amount_brl, notes)
               VALUES (?1, ?2, ?3, ?4)",
         params![
-            draft.date.trim(),
+            date,
             draft.recipient_project_id,
             cash_amount.map(|d| d.to_string()),
             super::opt(&draft.notes),
@@ -130,7 +131,7 @@ pub fn insert(conn: &Connection, draft: &OutboundEventDraft, item_ids: &[i64]) -
         tx.execute(
             "INSERT INTO brl_transaction (date, type, amount, linked_outbound_event_id)
                   VALUES (?1, 'cash_gift_out', ?2, ?3)",
-            params![draft.date.trim(), amount.to_string(), event_id],
+            params![date, amount.to_string(), event_id],
         )?;
     }
     tx.commit()?;
@@ -143,6 +144,7 @@ pub fn update(
     draft: &OutboundEventDraft,
     item_ids: &[i64],
 ) -> Result<()> {
+    let date = parse_date(&draft.date)?;
     let cash_amount = parse_cash(&draft.cash_amount_brl_str);
     let tx = conn.unchecked_transaction()?;
     tx.execute(
@@ -150,7 +152,7 @@ pub fn update(
             SET date = ?1, recipient_project_id = ?2, cash_amount_brl = ?3, notes = ?4
           WHERE id = ?5",
         params![
-            draft.date.trim(),
+            date,
             draft.recipient_project_id,
             cash_amount.map(|d| d.to_string()),
             super::opt(&draft.notes),
@@ -189,7 +191,7 @@ pub fn update(
         tx.execute(
             "INSERT INTO brl_transaction (date, type, amount, linked_outbound_event_id)
                   VALUES (?1, 'cash_gift_out', ?2, ?3)",
-            params![draft.date.trim(), amount.to_string(), id],
+            params![date, amount.to_string(), id],
         )?;
     }
     tx.commit()?;
@@ -217,5 +219,79 @@ fn parse_cash(s: &str) -> Option<Decimal> {
         None
     } else {
         crate::money::parse_amount_input(t)
+    }
+}
+
+fn parse_date(s: &str) -> rusqlite::Result<String> {
+    crate::date::parse_date_input(s)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .ok_or_else(|| {
+            rusqlite::Error::ToSqlConversionFailure(format!("invalid date: {s:?}").into())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::outbound::RecipientProjectDraft;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../../schema.sql"))
+            .unwrap();
+        conn
+    }
+
+    fn draft(recipient_project_id: i64) -> OutboundEventDraft {
+        OutboundEventDraft {
+            date: "2026-01-01".to_string(),
+            recipient_project_id: Some(recipient_project_id),
+            cash_amount_brl_str: String::new(),
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn dotted_date_input_round_trips_to_stored_iso() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let mut d = draft(rp);
+        d.date = "16.07.2026".to_string();
+        let id = insert(&conn, &d, &[]).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT date FROM outbound_event WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "2026-07-16");
+    }
+
+    #[test]
+    fn invalid_date_is_rejected() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let mut d = draft(rp);
+        d.date = "31.02.2026".to_string();
+        assert!(insert(&conn, &d, &[]).is_err());
     }
 }
