@@ -43,6 +43,17 @@ pub struct ReportsView {
     tab: Tab,
     date_from: String,
     date_to: String,
+    /// ISO-normalized `date_from`/`date_to`, recomputed every frame in
+    /// `show_filters` — empty means "no bound", same sentinel `in_range`
+    /// already used before these fields existed. Everything that filters
+    /// by date range reads these, never the raw typed fields directly,
+    /// since `date_from`/`date_to` can hold typed "DD.MM.YYYY" (or
+    /// momentarily invalid input) while every stored `.date` field being
+    /// compared against stays ISO.
+    date_from_iso: String,
+    date_to_iso: String,
+    date_from_invalid: bool,
+    date_to_invalid: bool,
     recipient_filter: Option<i64>,
 
     loaded: bool,
@@ -74,6 +85,10 @@ impl Default for ReportsView {
             tab: Tab::Donors,
             date_from: String::new(),
             date_to: String::new(),
+            date_from_iso: String::new(),
+            date_to_iso: String::new(),
+            date_from_invalid: false,
+            date_to_invalid: false,
             recipient_filter: None,
             loaded: false,
             last_refreshed: None,
@@ -248,6 +263,12 @@ impl ReportsView {
                     .hint_text(t!("common.field.date_hint").as_ref())
                     .desired_width(110.0),
             );
+            let (from_iso, from_invalid) = normalize_filter_date(&self.date_from);
+            let (to_iso, to_invalid) = normalize_filter_date(&self.date_to);
+            self.date_from_iso = from_iso;
+            self.date_to_iso = to_iso;
+            self.date_from_invalid = from_invalid;
+            self.date_to_invalid = to_invalid;
 
             ui.add_space(12.0);
             ui.label(t!("reports.filter.recipient").as_ref());
@@ -276,6 +297,10 @@ impl ReportsView {
             {
                 self.date_from.clear();
                 self.date_to.clear();
+                self.date_from_iso.clear();
+                self.date_to_iso.clear();
+                self.date_from_invalid = false;
+                self.date_to_invalid = false;
                 self.recipient_filter = None;
             }
             if ui.button(t!("reports.button.refresh").as_ref()).clicked() {
@@ -324,6 +349,10 @@ impl ReportsView {
                 self.pdf_path_input = Some(default_path);
             }
         });
+
+        if self.date_from_invalid || self.date_to_invalid {
+            ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
+        }
 
         let mut csv_save = false;
         let mut csv_cancel = false;
@@ -396,14 +425,17 @@ impl ReportsView {
                 self.export_status = Some(Err(t!("common.error.path_required").into_owned()));
             } else {
                 self.pdf_path_input = None;
-                let generated = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let generated_iso = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let generated = format::date_in(&generated_iso, &self.export_locale);
+                let from_display = format::date_in(&self.date_from_iso, &self.export_locale);
+                let to_display = format::date_in(&self.date_to_iso, &self.export_locale);
                 let sections = self.build_pdf_sections(&self.export_locale);
                 self.export_status = Some(
                     crate::reports::pdf::export(
                         &path,
                         &generated,
-                        &self.date_from,
-                        &self.date_to,
+                        &from_display,
+                        &to_display,
                         &sections,
                     )
                     .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
@@ -629,7 +661,9 @@ impl ReportsView {
         let starting_balance: Decimal = self
             .eur_rows
             .iter()
-            .filter(|r| !self.date_from.is_empty() && r.date.as_str() < self.date_from.as_str())
+            .filter(|r| {
+                !self.date_from_iso.is_empty() && r.date.as_str() < self.date_from_iso.as_str()
+            })
             .fold(Decimal::ZERO, |acc, r| {
                 if r.tx_type.is_inflow() {
                     acc + r.amount
@@ -641,7 +675,7 @@ impl ReportsView {
         let period: Vec<&EurTxRow> = self
             .eur_rows
             .iter()
-            .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
+            .filter(|r| in_range(&r.date, &self.date_from_iso, &self.date_to_iso))
             .collect();
 
         let sum_for = |t: EurTxType| -> (i64, Decimal) {
@@ -806,7 +840,9 @@ impl ReportsView {
         let starting_balance: Decimal = self
             .brl_rows
             .iter()
-            .filter(|r| !self.date_from.is_empty() && r.date.as_str() < self.date_from.as_str())
+            .filter(|r| {
+                !self.date_from_iso.is_empty() && r.date.as_str() < self.date_from_iso.as_str()
+            })
             .fold(Decimal::ZERO, |acc, r| {
                 if r.tx_type.is_inflow() {
                     acc + r.amount
@@ -818,7 +854,7 @@ impl ReportsView {
         let period: Vec<&BrlTxRow> = self
             .brl_rows
             .iter()
-            .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
+            .filter(|r| in_range(&r.date, &self.date_from_iso, &self.date_to_iso))
             .collect();
 
         let sum_for = |t: BrlTxType| -> (i64, Decimal) {
@@ -1134,7 +1170,7 @@ impl ReportsView {
         let filtered: Vec<&OutboundEventRow> = self
             .outbound_rows
             .iter()
-            .filter(|e| in_range(&e.date, &self.date_from, &self.date_to))
+            .filter(|e| in_range(&e.date, &self.date_from_iso, &self.date_to_iso))
             .filter(|e| {
                 self.recipient_filter
                     .is_none_or(|rid| e.recipient_project_id == rid)
@@ -1444,7 +1480,7 @@ impl ReportsView {
                 .filter(|r| {
                     r.tx_type == EurTxType::DonationIn
                         && r.donor_id == Some(donor.id)
-                        && in_range(&r.date, &self.date_from, &self.date_to)
+                        && in_range(&r.date, &self.date_from_iso, &self.date_to_iso)
                 })
                 .collect();
             let item_count = self
@@ -1452,7 +1488,7 @@ impl ReportsView {
                 .iter()
                 .filter(|d| {
                     d.donor_id == Some(donor.id)
-                        && in_range(&d.date_received, &self.date_from, &self.date_to)
+                        && in_range(&d.date_received, &self.date_from_iso, &self.date_to_iso)
                 })
                 .count() as i64;
             if cash.is_empty() && item_count == 0 {
@@ -1472,14 +1508,15 @@ impl ReportsView {
             .filter(|r| {
                 r.tx_type == EurTxType::DonationIn
                     && r.donor_id.is_none()
-                    && in_range(&r.date, &self.date_from, &self.date_to)
+                    && in_range(&r.date, &self.date_from_iso, &self.date_to_iso)
             })
             .collect();
         let anon_items = self
             .donations
             .iter()
             .filter(|d| {
-                d.donor_id.is_none() && in_range(&d.date_received, &self.date_from, &self.date_to)
+                d.donor_id.is_none()
+                    && in_range(&d.date_received, &self.date_from_iso, &self.date_to_iso)
             })
             .count() as i64;
         if !anon_cash.is_empty() || anon_items > 0 {
@@ -1504,7 +1541,7 @@ impl ReportsView {
         let rows = self
             .eur_rows
             .iter()
-            .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
+            .filter(|r| in_range(&r.date, &self.date_from_iso, &self.date_to_iso))
             .map(|r| {
                 let description = eur_tx_description(r);
                 let sign = if r.tx_type.is_inflow() { "" } else { "-" };
@@ -1539,7 +1576,7 @@ impl ReportsView {
         let rows = self
             .brl_rows
             .iter()
-            .filter(|r| in_range(&r.date, &self.date_from, &self.date_to))
+            .filter(|r| in_range(&r.date, &self.date_from_iso, &self.date_to_iso))
             .map(|r| {
                 let description = brl_tx_description(r);
                 let sign = if r.tx_type.is_inflow() { "" } else { "-" };
@@ -1609,7 +1646,7 @@ impl ReportsView {
         let rows = self
             .outbound_rows
             .iter()
-            .filter(|e| in_range(&e.date, &self.date_from, &self.date_to))
+            .filter(|e| in_range(&e.date, &self.date_from_iso, &self.date_to_iso))
             .filter(|e| {
                 self.recipient_filter
                     .is_none_or(|rid| e.recipient_project_id == rid)
@@ -1741,7 +1778,7 @@ impl ReportsView {
         let mut entries: Vec<AuditEntry> = Vec::new();
 
         for r in &self.eur_rows {
-            if !in_range(&r.date, &self.date_from, &self.date_to) {
+            if !in_range(&r.date, &self.date_from_iso, &self.date_to_iso) {
                 continue;
             }
             let docs = match r.tx_type {
@@ -1772,7 +1809,7 @@ impl ReportsView {
         }
 
         for r in &self.brl_rows {
-            if !in_range(&r.date, &self.date_from, &self.date_to) {
+            if !in_range(&r.date, &self.date_from_iso, &self.date_to_iso) {
                 continue;
             }
             if let (Some(rid), BrlTxType::CashGiftOut) = (self.recipient_filter, r.tx_type) {
@@ -1814,7 +1851,7 @@ impl ReportsView {
         }
 
         for e in &self.outbound_rows {
-            if !in_range(&e.date, &self.date_from, &self.date_to) {
+            if !in_range(&e.date, &self.date_from_iso, &self.date_to_iso) {
                 continue;
             }
             if let Some(rid) = self.recipient_filter {
@@ -1870,6 +1907,24 @@ fn show_export_locale_picker(ui: &mut egui::Ui, export_locale: &mut String, id_s
 
 fn in_range(date: &str, from: &str, to: &str) -> bool {
     (from.is_empty() || date >= from) && (to.is_empty() || date <= to)
+}
+
+/// Normalizes a typed date-range boundary (may be "DD.MM.YYYY", ISO, empty,
+/// or garbage) to ISO for comparison against stored `.date` fields, which
+/// always stay ISO. Empty input normalizes to "" (in_range's "no bound"
+/// sentinel). Unparseable non-empty input also degrades to "no bound" on
+/// that side rather than blocking the whole report — the caller is
+/// responsible for surfacing the returned `bool` as a visible error so an
+/// invalid boundary doesn't silently widen the report instead of erroring.
+fn normalize_filter_date(raw: &str) -> (String, bool) {
+    let t = raw.trim();
+    if t.is_empty() {
+        return (String::new(), false);
+    }
+    match crate::date::parse_date_input(t) {
+        Some(d) => (d.format("%Y-%m-%d").to_string(), false),
+        None => (String::new(), true),
+    }
 }
 
 fn donor_or_anonymous(name: &Option<String>) -> String {

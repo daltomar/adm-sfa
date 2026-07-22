@@ -20,7 +20,7 @@ pub struct TransferDraft {
 impl Default for TransferDraft {
     fn default() -> Self {
         Self {
-            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            date: chrono::Local::now().format("%d.%m.%Y").to_string(),
             eur_amount_sent_str: String::new(),
             exchange_rate_str: String::new(),
             notes: String::new(),

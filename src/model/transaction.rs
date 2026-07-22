@@ -105,7 +105,7 @@ pub struct EurTxDraft {
 impl Default for EurTxDraft {
     fn default() -> Self {
         Self {
-            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            date: chrono::Local::now().format("%d.%m.%Y").to_string(),
             tx_type: ManualEurTxType::default(),
             amount_str: String::new(),
             donor_id: None,

@@ -32,7 +32,7 @@ impl Default for PhysicalDonationDraft {
     fn default() -> Self {
         Self {
             donor_id: None,
-            date_received: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            date_received: chrono::Local::now().format("%d.%m.%Y").to_string(),
             notes: String::new(),
         }
     }

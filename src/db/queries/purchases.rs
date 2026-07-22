@@ -46,13 +46,14 @@ pub fn list(conn: &Connection) -> Result<Vec<Purchase>> {
 }
 
 pub fn insert(conn: &Connection, draft: &PurchaseDraft) -> Result<i64> {
+    let date = parse_date(&draft.date)?;
     let cost = parse_amount(&draft.cost_str)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "INSERT INTO purchase (date, currency, cost, channel, seller_info, multiple_items, status)
               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            draft.date.trim(),
+            date,
             draft.currency.as_str(),
             cost.to_string(),
             draft.channel.trim(),
@@ -68,12 +69,12 @@ pub fn insert(conn: &Connection, draft: &PurchaseDraft) -> Result<i64> {
             Currency::Eur => tx.execute(
                 "INSERT INTO eur_transaction (date, type, amount, linked_purchase_id)
                       VALUES (?1, 'purchase_out', ?2, ?3)",
-                params![draft.date.trim(), cost.to_string(), purchase_id],
+                params![date, cost.to_string(), purchase_id],
             )?,
             Currency::Brl => tx.execute(
                 "INSERT INTO brl_transaction (date, type, amount, linked_purchase_id)
                       VALUES (?1, 'brazil_purchase_out', ?2, ?3)",
-                params![draft.date.trim(), cost.to_string(), purchase_id],
+                params![date, cost.to_string(), purchase_id],
             )?,
         };
     }
@@ -82,6 +83,7 @@ pub fn insert(conn: &Connection, draft: &PurchaseDraft) -> Result<i64> {
 }
 
 pub fn update(conn: &Connection, id: i64, draft: &PurchaseDraft) -> Result<()> {
+    let date = parse_date(&draft.date)?;
     let cost = parse_amount(&draft.cost_str)?;
     let tx = conn.unchecked_transaction()?;
 
@@ -105,7 +107,7 @@ pub fn update(conn: &Connection, id: i64, draft: &PurchaseDraft) -> Result<()> {
                 multiple_items = ?6, status = ?7
           WHERE id = ?8",
         params![
-            draft.date.trim(),
+            date,
             draft.currency.as_str(),
             cost.to_string(),
             draft.channel.trim(),
@@ -134,12 +136,12 @@ pub fn update(conn: &Connection, id: i64, draft: &PurchaseDraft) -> Result<()> {
             Currency::Eur => tx.execute(
                 "INSERT INTO eur_transaction (date, type, amount, linked_purchase_id)
                       VALUES (?1, 'purchase_out', ?2, ?3)",
-                params![draft.date.trim(), cost.to_string(), id],
+                params![date, cost.to_string(), id],
             )?,
             Currency::Brl => tx.execute(
                 "INSERT INTO brl_transaction (date, type, amount, linked_purchase_id)
                       VALUES (?1, 'brazil_purchase_out', ?2, ?3)",
-                params![draft.date.trim(), cost.to_string(), id],
+                params![date, cost.to_string(), id],
             )?,
         };
     }
@@ -184,6 +186,14 @@ fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
     crate::money::parse_amount_input(s).ok_or_else(|| {
         rusqlite::Error::ToSqlConversionFailure(format!("invalid amount: {s:?}").into())
     })
+}
+
+fn parse_date(s: &str) -> rusqlite::Result<String> {
+    crate::date::parse_date_input(s)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .ok_or_else(|| {
+            rusqlite::Error::ToSqlConversionFailure(format!("invalid date: {s:?}").into())
+        })
 }
 
 fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {
@@ -317,6 +327,28 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn dotted_date_input_round_trips_to_stored_iso() {
+        let conn = test_db();
+        let mut d = draft(PurchaseStatus::Bought, Currency::Eur);
+        d.date = "16.07.2026".to_string();
+        let id = insert(&conn, &d).unwrap();
+        let stored: String = conn
+            .query_row("SELECT date FROM purchase WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, "2026-07-16");
+    }
+
+    #[test]
+    fn invalid_date_is_rejected() {
+        let conn = test_db();
+        let mut d = draft(PurchaseStatus::Bought, Currency::Eur);
+        d.date = "31.02.2026".to_string();
+        assert!(insert(&conn, &d).is_err());
     }
 
     #[test]

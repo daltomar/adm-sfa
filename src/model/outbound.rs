@@ -63,7 +63,7 @@ pub struct OutboundEventDraft {
 impl Default for OutboundEventDraft {
     fn default() -> Self {
         Self {
-            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            date: chrono::Local::now().format("%d.%m.%Y").to_string(),
             recipient_project_id: None,
             cash_amount_brl_str: String::new(),
             notes: String::new(),

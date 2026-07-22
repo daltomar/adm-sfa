@@ -67,14 +67,61 @@ pub fn list_donations(conn: &Connection) -> Result<Vec<PhysicalDonation>> {
 }
 
 pub fn insert_donation(conn: &Connection, draft: &PhysicalDonationDraft) -> Result<i64> {
+    let date_received = parse_date(&draft.date_received)?;
     conn.execute(
         "INSERT INTO physical_donation (donor_id, date_received, notes)
               VALUES (?1, ?2, ?3)",
-        params![
-            draft.donor_id,
-            draft.date_received.trim(),
-            super::opt(&draft.notes)
-        ],
+        params![draft.donor_id, date_received, super::opt(&draft.notes)],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+fn parse_date(s: &str) -> rusqlite::Result<String> {
+    crate::date::parse_date_input(s)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .ok_or_else(|| {
+            rusqlite::Error::ToSqlConversionFailure(format!("invalid date: {s:?}").into())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../../schema.sql"))
+            .unwrap();
+        conn
+    }
+
+    #[test]
+    fn dotted_date_input_round_trips_to_stored_iso() {
+        let conn = test_db();
+        let draft = PhysicalDonationDraft {
+            donor_id: None,
+            date_received: "16.07.2026".to_string(),
+            notes: String::new(),
+        };
+        let id = insert_donation(&conn, &draft).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT date_received FROM physical_donation WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "2026-07-16");
+    }
+
+    #[test]
+    fn invalid_date_is_rejected() {
+        let conn = test_db();
+        let draft = PhysicalDonationDraft {
+            donor_id: None,
+            date_received: "31.02.2026".to_string(),
+            notes: String::new(),
+        };
+        assert!(insert_donation(&conn, &draft).is_err());
+    }
 }

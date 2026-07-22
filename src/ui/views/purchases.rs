@@ -184,7 +184,7 @@ impl PurchasesView {
                     let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
                     if ui.selectable_label(selected, &row).clicked() {
                         self.draft = PurchaseDraft {
-                            date: self.purchases[i].date.clone(),
+                            date: format::date(&self.purchases[i].date),
                             currency: self.purchases[i].currency,
                             cost_str: self.purchases[i].cost.to_string(),
                             channel: self.purchases[i].channel.clone(),
@@ -307,6 +307,12 @@ impl PurchasesView {
             ui.colored_label(egui::Color32::RED, err);
         }
 
+        let date_text = self.draft.date.trim();
+        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        if !date_text.is_empty() && !date_ok {
+            ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
+        }
+
         let cost_text = self.draft.cost_str.trim();
         let cost_parsed = crate::money::parse_amount_input(cost_text);
         let cost_ok = cost_parsed
@@ -322,8 +328,7 @@ impl PurchasesView {
                 ui.colored_label(egui::Color32::RED, t!("purchases.error.cost_zero").as_ref());
             }
         }
-        let form_ok =
-            !self.draft.date.trim().is_empty() && !self.draft.channel.trim().is_empty() && cost_ok;
+        let form_ok = date_ok && !self.draft.channel.trim().is_empty() && cost_ok;
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -695,11 +700,26 @@ impl PurchasesView {
                     let (path, label, is_temp) = (p.path.clone(), p.label.clone(), p.is_temp);
                     let existing: Vec<String> =
                         self.docs.iter().map(|d| d.filename.clone()).collect();
+                    // Filenames must stay ISO-sortable (T4) regardless of
+                    // what the user has currently typed into the date
+                    // field: prefer the parsed draft date, fall back to
+                    // the persisted purchase's own ISO date if the draft
+                    // is momentarily unparseable mid-edit, and to today's
+                    // date as a last resort.
+                    let filing_date = crate::date::parse_date_input(&self.draft.date)
+                        .map(|d| d.format("%Y-%m-%d").to_string())
+                        .or_else(|| {
+                            self.purchases
+                                .iter()
+                                .find(|p| p.id == edit_id)
+                                .map(|p| p.date.clone())
+                        })
+                        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
                     match docs_fs::file_document(
                         db,
                         &documents_dir,
                         &path,
-                        &self.draft.date,
+                        &filing_date,
                         ("purchase", edit_id),
                         &label,
                         &existing,

@@ -79,7 +79,7 @@ pub struct PurchaseDraft {
 impl Default for PurchaseDraft {
     fn default() -> Self {
         Self {
-            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            date: chrono::Local::now().format("%d.%m.%Y").to_string(),
             currency: Currency::Eur,
             cost_str: String::new(),
             channel: String::new(),
