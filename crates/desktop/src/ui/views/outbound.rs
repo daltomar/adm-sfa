@@ -9,6 +9,7 @@ use adm_sfa_core::model::inventory::InventoryItemRow;
 use adm_sfa_core::model::outbound::{
     OutboundEventDraft, OutboundEventRow, RecipientProject, RecipientProjectDraft,
 };
+use adm_sfa_core::service;
 use rust_decimal::Decimal;
 
 enum Mode {
@@ -316,7 +317,7 @@ impl OutboundView {
             {
                 let item_ids: Vec<i64> = self.selected_item_ids.iter().copied().collect();
                 if is_adding {
-                    match qry::insert(db, &self.draft, &item_ids) {
+                    match service::donate_items(db, &self.draft, &item_ids) {
                         Ok(new_id) => {
                             self.mode = Mode::Editing(new_id);
                             self.needs_reload = true;

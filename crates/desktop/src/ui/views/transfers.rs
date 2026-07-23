@@ -10,6 +10,7 @@ use adm_sfa_core::docs_fs;
 use adm_sfa_core::format;
 use adm_sfa_core::model::document::Document;
 use adm_sfa_core::model::transfer::{AnnualTransfer, TransferDraft};
+use adm_sfa_core::service;
 
 enum Mode {
     List,
@@ -362,21 +363,12 @@ impl TransfersView {
         }
 
         if let Some((doc_id, filename)) = remove_doc {
-            match docs_qry::soft_delete(db, doc_id) {
-                Err(e) => {
-                    self.error =
-                        Some(t!("common.doc.error.db_update_failed", error = e).into_owned())
+            match docs_fs::remove_document(db, &documents_dir, doc_id, &filename) {
+                Err(e) => self.error = Some(e),
+                Ok(()) => {
+                    self.docs_needs_reload = true;
+                    self.error = None;
                 }
-                Ok(()) => match docs_fs::soft_delete(&documents_dir, &filename) {
-                    Err(e) => {
-                        self.error =
-                            Some(t!("common.doc.error.file_move_failed", error = e).into_owned())
-                    }
-                    Ok(()) => {
-                        self.docs_needs_reload = true;
-                        self.error = None;
-                    }
-                },
             }
         }
 
@@ -553,26 +545,17 @@ impl TransfersView {
                     let (path, label, is_temp) = (p.path.clone(), p.label.clone(), p.is_temp);
                     let existing: Vec<String> =
                         self.docs.iter().map(|d| d.filename.clone()).collect();
-                    // Filenames must stay ISO-sortable (T4) regardless of
-                    // what the user has currently typed into the date
-                    // field: prefer the parsed draft date, fall back to
-                    // the persisted transfer's own ISO date if the draft
-                    // is momentarily unparseable mid-edit, and to today's
-                    // date as a last resort.
-                    let filing_date = adm_sfa_core::date::parse_date_input(&self.draft.date)
-                        .map(|d| d.format("%Y-%m-%d").to_string())
-                        .or_else(|| {
-                            self.transfers
-                                .iter()
-                                .find(|t| t.id == edit_id)
-                                .map(|t| t.date.clone())
-                        })
-                        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-                    match docs_fs::file_document(
+                    let persisted_date = self
+                        .transfers
+                        .iter()
+                        .find(|t| t.id == edit_id)
+                        .map(|t| t.date.as_str());
+                    match service::attach_document(
                         db,
                         &documents_dir,
                         &path,
-                        &filing_date,
+                        &self.draft.date,
+                        persisted_date,
                         ("transfer", edit_id),
                         &label,
                         &existing,

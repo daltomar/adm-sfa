@@ -17,3 +17,4 @@ pub mod format;
 pub mod model;
 pub mod money;
 pub mod reporting;
+pub mod service;
