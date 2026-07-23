@@ -287,7 +287,11 @@ one compiles, passes tests, and behaves identically.
    (`in_range`, the `*_tx_description` helpers, `donor_or_anonymous`) out
    of `ui/views/reports.rs`. Unify the three `compute_balance` copies into
    one. **Verification:** generate every report before and after and diff
-   the output — byte-identical, or explain the difference.
+   the output — byte-identical, or explain the difference. **Done** — see
+   `crates/core/src/reporting.rs`; a temporary snapshot test confirmed
+   byte-identical output before/after, then was replaced by 14 focused
+   unit tests on the extracted functions. Reviewed by `rust-code-reviewer`
+   (no 🔴 findings; the two 🟡s are logged below, not yet fixed).
 4. **Service layer.** Operation-shaped functions in `core`
    (`create_purchase`, `mark_purchase_bought`, `donate_items`,
    `attach_document`, …). Desktop views call these instead of reaching
@@ -357,11 +361,28 @@ could appear permanently "linked" even after every item claiming it had been
 reassigned elsewhere. Fixed by clearing the other type's id on
 `.changed()` for either radio button.
 
-Also: `compute_balance` is defined identically in `eur_ledger.rs` and
+~~Also: `compute_balance` is defined identically in `eur_ledger.rs` and
 `brl_ledger.rs`, with a third period-scoped variant inline in
-`reports.rs`. `transfers.rs` recomputes `eur * rate = brl` as a preview
-label; the authoritative version is in `db/queries/transfers.rs` and stays
-there. (Target of phase 3, not phase 2 — see below.)
+`reports.rs`.~~ **Fixed in phase 3**: unified into one generic
+`reporting::compute_balance(flows: impl Iterator<Item = (bool, Decimal)>)`,
+called by both ledger views and by the new `eur_summary`/`brl_summary`.
+`transfers.rs` recomputes `eur * rate = brl` as a preview label; the
+authoritative version is in `db/queries/transfers.rs` and stays there —
+this one was never a duplication problem, just a UI preview, so it's out
+of scope for both phases.
+
+**New backlog items found during phase 3's review** (not fixed — test
+coverage gaps in the highest-risk part of that phase, the aggregation
+arithmetic, per `rust-code-reviewer`):
+- `crates/core/src/reporting.rs`'s `eur_summary` has a dedicated test for
+  the pre-range `starting_balance` calculation
+  (`eur_summary_starting_balance_is_the_pre_range_running_total`);
+  `brl_summary` doesn't, even though it's an independently-typed copy of
+  the exact same filter-then-`compute_balance` pattern. Add the BRL
+  equivalent.
+- `build_audit_entries`'s doc-count lookup is only tested via the
+  `linked_purchase_id` branch; the `linked_transfer_id` branch
+  (`EurTxType::TransferToBrlOut` / `BrlTxType::TransferIn`) has no test.
 
 What the audit found *correct* and not to be "improved" during the move:
 `db/queries/*` (parameterized, no business logic), `model/*` (enum

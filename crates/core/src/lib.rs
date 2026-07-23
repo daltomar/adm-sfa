@@ -16,3 +16,4 @@ pub mod docs_fs;
 pub mod format;
 pub mod model;
 pub mod money;
+pub mod reporting;
