@@ -87,6 +87,21 @@ pub fn update(conn: &Connection, id: i64, draft: &PurchaseDraft) -> Result<()> {
     let cost = parse_amount(&draft.cost_str)?;
     let tx = conn.unchecked_transaction()?;
 
+    // Authoritative guard: reject unsetting multiple_items while more than
+    // one inventory item is already linked, regardless of caller — a
+    // client-side check (e.g. the desktop form's Save handler) can offer a
+    // nicer message ahead of time, but this is what actually blocks it.
+    if !draft.multiple_items {
+        if let Some(n) = multiple_items_unset_conflict(&tx, id)? {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                format!(
+                    "cannot mark purchase as single-item: {n} inventory items are already linked"
+                )
+                .into(),
+            ));
+        }
+    }
+
     let current_status_str: String =
         tx.query_row("SELECT status FROM purchase WHERE id = ?1", [id], |row| {
             row.get(0)
@@ -174,6 +189,16 @@ pub fn linked_item_count(conn: &Connection, purchase_id: i64) -> Result<i64> {
         [purchase_id],
         |row| row.get(0),
     )
+}
+
+/// `Some(n)` if unsetting `multiple_items` on this purchase is blocked
+/// because `n` (always > 1) inventory items are already linked to it —
+/// `None` means it's safe to unset. Single implementation shared by the
+/// desktop form's pre-save UX check and `update`'s own authoritative gate
+/// above, so the two can't drift apart.
+pub fn multiple_items_unset_conflict(conn: &Connection, purchase_id: i64) -> Result<Option<i64>> {
+    let n = linked_item_count(conn, purchase_id)?;
+    Ok(if n > 1 { Some(n) } else { None })
 }
 
 fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
@@ -362,5 +387,75 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    fn link_item(conn: &Connection, purchase_id: i64) -> i64 {
+        use crate::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
+        // category.name is UNIQUE — reuse "Decks" across calls in the same
+        // test instead of inserting it again.
+        let cat_id: i64 = conn
+            .query_row("SELECT id FROM category WHERE name = 'Decks'", [], |row| {
+                row.get(0)
+            })
+            .or_else(|_| crate::db::queries::categories::insert(conn, "Decks"))
+            .unwrap();
+        crate::db::queries::inventory::insert(
+            conn,
+            &InventoryItemDraft {
+                name: "Test deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Purchase,
+                source_donation_id: None,
+                source_purchase_id: Some(purchase_id),
+                location: Location::Germany,
+                status: ItemStatus::Available,
+                notes: String::new(),
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cannot_unset_multiple_items_while_more_than_one_item_linked() {
+        let conn = test_db();
+        let mut d = draft(PurchaseStatus::Bought, Currency::Eur);
+        d.multiple_items = true;
+        let id = insert(&conn, &d).unwrap();
+        link_item(&conn, id);
+        link_item(&conn, id);
+
+        let mut edit = d.clone();
+        edit.multiple_items = false;
+        assert!(update(&conn, id, &edit).is_err());
+        // The rejected update must not have partially applied.
+        let stored: i32 = conn
+            .query_row(
+                "SELECT multiple_items FROM purchase WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 1);
+    }
+
+    #[test]
+    fn can_unset_multiple_items_with_at_most_one_item_linked() {
+        let conn = test_db();
+        let mut d = draft(PurchaseStatus::Bought, Currency::Eur);
+        d.multiple_items = true;
+        let id = insert(&conn, &d).unwrap();
+        link_item(&conn, id);
+
+        let mut edit = d.clone();
+        edit.multiple_items = false;
+        update(&conn, id, &edit).unwrap();
+        let stored: i32 = conn
+            .query_row(
+                "SELECT multiple_items FROM purchase WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 0);
     }
 }

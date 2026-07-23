@@ -198,8 +198,27 @@ pub fn update(
     Ok(())
 }
 
+/// Links each item to the event and marks it donated — only if it's
+/// currently `available`. This is the authoritative guard against
+/// double-donating or hijacking a reserved item: the caller (view or,
+/// eventually, an HTTP handler) may pre-filter its own item picker for UX,
+/// but nothing stops a stale selection or an untrusted client from sending
+/// an unavailable id here, so this check has to be the one that actually
+/// blocks it. Runs inside the caller's transaction, so a rejection rolls
+/// back the whole `insert`/`update` (the event row, any earlier releases,
+/// any items already linked earlier in this same loop).
 fn link_items(conn: &Connection, event_id: i64, item_ids: &[i64]) -> Result<()> {
     for item_id in item_ids {
+        let status: String = conn.query_row(
+            "SELECT status FROM inventory_item WHERE id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )?;
+        if status != "available" {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                format!("item {item_id} is not available (status: {status:?})").into(),
+            ));
+        }
         conn.execute(
             "INSERT INTO outbound_event_item (outbound_event_id, inventory_item_id)
                   VALUES (?1, ?2)",
@@ -233,6 +252,7 @@ fn parse_date(s: &str) -> rusqlite::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
     use crate::model::outbound::RecipientProjectDraft;
 
     fn test_db() -> Connection {
@@ -240,6 +260,115 @@ mod tests {
         conn.execute_batch(include_str!("../../../schema.sql"))
             .unwrap();
         conn
+    }
+
+    fn test_item(conn: &Connection, status: ItemStatus) -> i64 {
+        let cat_id = crate::db::queries::categories::insert(conn, "Decks").unwrap();
+        crate::db::queries::inventory::insert(
+            conn,
+            &InventoryItemDraft {
+                name: "Test deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Donation,
+                source_donation_id: None,
+                source_purchase_id: None,
+                location: Location::Germany,
+                status,
+                notes: String::new(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn item_status(conn: &Connection, item_id: i64) -> String {
+        conn.query_row(
+            "SELECT status FROM inventory_item WHERE id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn linking_an_available_item_marks_it_donated() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let item_id = test_item(&conn, ItemStatus::Available);
+        insert(&conn, &draft(rp), &[item_id]).unwrap();
+        assert_eq!(item_status(&conn, item_id), "donated");
+    }
+
+    #[test]
+    fn linking_an_already_donated_item_is_rejected_and_rolls_back() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let already_donated = test_item(&conn, ItemStatus::Donated);
+        assert!(insert(&conn, &draft(rp), &[already_donated]).is_err());
+        // The whole insert (including the outbound_event row itself) must
+        // have rolled back, not just the item link.
+        let event_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM outbound_event", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(event_count, 0);
+        assert_eq!(item_status(&conn, already_donated), "donated");
+    }
+
+    #[test]
+    fn linking_a_reserved_item_is_rejected() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let reserved = test_item(&conn, ItemStatus::Reserved);
+        assert!(insert(&conn, &draft(rp), &[reserved]).is_err());
+        assert_eq!(item_status(&conn, reserved), "reserved");
+    }
+
+    #[test]
+    fn update_can_keep_the_same_previously_linked_item() {
+        // The item gets released to 'available' before re-linking, so
+        // keeping the same selection on an edit must not be rejected as
+        // "not available" by the guard that now runs inside link_items.
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let item_id = test_item(&conn, ItemStatus::Available);
+        let event_id = insert(&conn, &draft(rp), &[item_id]).unwrap();
+        update(&conn, event_id, &draft(rp), &[item_id]).unwrap();
+        assert_eq!(item_status(&conn, item_id), "donated");
     }
 
     fn draft(recipient_project_id: i64) -> OutboundEventDraft {

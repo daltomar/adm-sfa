@@ -349,12 +349,13 @@ impl PurchasesView {
                         Err(e) => self.error = Some(e.to_string()),
                     }
                 } else if let Some(id) = edit_id {
-                    // Guard: disallow removing the multiple_items flag when
-                    // more than one inventory item is already linked.
+                    // Nice translated pre-check ahead of the Save round trip
+                    // — `qry::update` enforces the same rule authoritatively
+                    // (via the same `multiple_items_unset_conflict`) for any
+                    // caller, so this is UX only, not the real guard.
                     let blocked = if !self.draft.multiple_items {
-                        match qry::linked_item_count(db, id) {
-                            Ok(n) if n > 1 => Some(n),
-                            Ok(_) => None,
+                        match qry::multiple_items_unset_conflict(db, id) {
+                            Ok(conflict) => conflict,
                             Err(e) => {
                                 self.error = Some(e.to_string());
                                 return;

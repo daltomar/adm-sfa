@@ -302,28 +302,53 @@ one compiles, passes tests, and behaves identically.
    `WantedBy=multi-user.target` (the machine is not always on). Nightly
    `sqlite3 .backup` + rsync of `documents/` off the machine.
 
-### Known domain-logic-in-view debt (target of phase 2)
+### Known domain-logic-in-view debt (phase 2 — fixed)
 
-From an audit of the pre-restructure codebase. These are cross-row
-invariants with no DB constraint or query-layer guard behind them:
+From an audit of the pre-restructure codebase. These were cross-row
+invariants with no DB constraint or query-layer guard behind them —
+all three now fixed in `crates/core/src/db/queries/{outbound,purchases,
+inventory}.rs`, reviewed by `rust-code-reviewer` (no 🔴 findings):
 
-- `db/queries/outbound.rs::link_items` unconditionally sets any passed
-  item id to `donated` with no status check. The only thing preventing a
-  double-donation or hijack of a reserved item is a client-side
-  `.filter()` in `outbound.rs::show_item_picker`. **Fix at the query
-  layer**, not the view.
-- "Can't unset `multiple_items` while >1 inventory items are linked" is
-  checked inside the Save button's click handler in `purchases.rs`.
-- `purchase_source_conflict` ("a single-item purchase backs at most one
+- ~~`db/queries/outbound.rs::link_items` unconditionally sets any passed
+  item id to `donated` with no status check.~~ **Fixed**: `link_items` now
+  rejects any item that isn't currently `available`, inside the same
+  transaction as the event insert/update, so a rejection rolls back
+  everything (event row, prior releases, earlier-in-loop links too) —
+  verified against `rusqlite::Transaction`'s drop-rolls-back-by-default
+  behavior, not assumed.
+- ~~"Can't unset `multiple_items` while >1 inventory items are linked" is
+  checked inside the Save button's click handler in `purchases.rs`.~~
+  **Fixed**: `purchases::update` now calls a new
+  `multiple_items_unset_conflict` authoritatively before writing; the
+  desktop view's pre-save check calls the same function for its message
+  instead of re-implementing the condition.
+- ~~`purchase_source_conflict` ("a single-item purchase backs at most one
   inventory item") is implemented *twice, independently*, in
-  `inventory.rs` — once for save validation, once for the picker's
-  grey-out. Collapse to one implementation in `core`.
+  `inventory.rs`.~~ **Fixed**: collapsed to one shared predicate in the
+  view (`purchase_source_blocked`, used by both the picker's grey-out and
+  the pre-save check) plus a new authoritative DB-backed
+  `inventory::purchase_source_conflict` wired into `insert`/`update`.
+
+**New backlog item found during phase 2's review** (not fixed — pre-existing,
+adjacent to but not covered by the `link_items` guard above): the inventory
+item edit form lets a user set `status` directly via a radio group
+(`crates/desktop/src/ui/views/inventory.rs`), with no check against whether
+the item has an `outbound_event_item` link. So the `link_items` guard is
+airtight against being called with a non-`available` item, but someone can
+still edit a `donated` item's status back to `available` through the plain
+item form, then re-link it to a *second* outbound event — two donation
+records for the same physical item, bypassing the guard from a different
+entry point. Needs a deliberate decision before phase 5 exposes this over
+HTTP: block editing status away from `donated` when an
+`outbound_event_item` row exists, or keep it as an intentional manual-
+override escape hatch. Not blocking any current phase; flagged here so it
+isn't lost.
 
 Also: `compute_balance` is defined identically in `eur_ledger.rs` and
 `brl_ledger.rs`, with a third period-scoped variant inline in
 `reports.rs`. `transfers.rs` recomputes `eur * rate = brl` as a preview
 label; the authoritative version is in `db/queries/transfers.rs` and stays
-there.
+there. (Target of phase 3, not phase 2 — see below.)
 
 What the audit found *correct* and not to be "improved" during the move:
 `db/queries/*` (parameterized, no business logic), `model/*` (enum

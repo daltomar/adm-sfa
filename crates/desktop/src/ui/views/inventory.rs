@@ -665,12 +665,10 @@ impl InventoryView {
         };
 
         // Purchases that are single-item and already linked to a *different* item.
-        let blocked: std::collections::HashSet<i64> = self
-            .items
+        let blocked: std::collections::HashSet<i64> = purchases
             .iter()
-            .filter(|item| edit_id != Some(item.id))
-            .filter_map(|item| item.source_purchase_id)
-            .filter(|&pid| purchases.iter().any(|p| p.id == pid && !p.multiple_items))
+            .map(|p| p.id)
+            .filter(|&pid| self.purchase_source_blocked(pid, edit_id))
             .collect();
 
         let selected_label = self
@@ -702,26 +700,38 @@ impl InventoryView {
             });
     }
 
+    /// True if `pid` is a single-item purchase (`multiple_items = false`)
+    /// already linked to a different inventory item than `edit_id` — i.e.
+    /// cannot be selected/kept as this item's purchase source. Single
+    /// implementation shared by the picker's grey-out (`show_purchase_source`)
+    /// and the pre-save validation below — was two independent copies of
+    /// this same condition before. Reads already-loaded in-memory data for
+    /// cheap per-frame UI use; `inventory_qry::purchase_source_conflict`
+    /// enforces the identical rule authoritatively, fresh from the DB, at
+    /// insert/update time for any caller, not just this view.
+    fn purchase_source_blocked(&self, pid: i64, edit_id: Option<i64>) -> bool {
+        let Some(p) = self.purchases.iter().find(|p| p.id == pid) else {
+            return false;
+        };
+        if p.multiple_items {
+            return false;
+        }
+        self.items
+            .iter()
+            .any(|item| edit_id != Some(item.id) && item.source_purchase_id == Some(pid))
+    }
+
     fn purchase_source_conflict(&self, edit_id: Option<i64>) -> Option<String> {
         if self.draft.source_type != SourceType::Purchase {
             return None;
         }
         let pid = self.draft.source_purchase_id?;
-        // If pid is not in the cache the FK constraint in SQLite will catch it at insert/update.
-        let p = self.purchases.iter().find(|p| p.id == pid)?;
-        if p.multiple_items {
+        if !self.purchase_source_blocked(pid, edit_id) {
             return None;
         }
-        let already_used = self
-            .items
-            .iter()
-            .filter(|item| edit_id != Some(item.id))
-            .any(|item| item.source_purchase_id == Some(pid));
-        if already_used {
-            Some(t!("inventory.error.purchase_conflict", channel = p.channel).into_owned())
-        } else {
-            None
-        }
+        // If pid is not in the cache the FK constraint in SQLite will catch it at insert/update.
+        let p = self.purchases.iter().find(|p| p.id == pid)?;
+        Some(t!("inventory.error.purchase_conflict", channel = p.channel).into_owned())
     }
 
     fn show_documents(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
