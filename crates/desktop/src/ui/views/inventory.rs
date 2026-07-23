@@ -370,16 +370,27 @@ impl InventoryView {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(t!("common.field.source").as_ref()).strong());
         ui.horizontal(|ui| {
-            ui.radio_value(
+            let to_donation = ui.radio_value(
                 &mut self.draft.source_type,
                 SourceType::Donation,
                 t!("status.source_type.donation").as_ref(),
             );
-            ui.radio_value(
+            let to_purchase = ui.radio_value(
                 &mut self.draft.source_type,
                 SourceType::Purchase,
                 t!("status.source_type.purchase").as_ref(),
             );
+            // Switching source type must clear the other type's id — left
+            // stale otherwise (e.g. a Purchase-sourced item switched to
+            // Donation kept its old source_purchase_id, so the purchase
+            // still counted it as linked even though the item no longer
+            // claims that source).
+            if to_donation.changed() {
+                self.draft.source_purchase_id = None;
+            }
+            if to_purchase.changed() {
+                self.draft.source_donation_id = None;
+            }
         });
         ui.add_space(4.0);
 

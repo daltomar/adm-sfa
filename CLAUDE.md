@@ -329,20 +329,33 @@ inventory}.rs`, reviewed by `rust-code-reviewer` (no 🔴 findings):
   the pre-save check) plus a new authoritative DB-backed
   `inventory::purchase_source_conflict` wired into `insert`/`update`.
 
-**New backlog item found during phase 2's review** (not fixed — pre-existing,
-adjacent to but not covered by the `link_items` guard above): the inventory
-item edit form lets a user set `status` directly via a radio group
-(`crates/desktop/src/ui/views/inventory.rs`), with no check against whether
-the item has an `outbound_event_item` link. So the `link_items` guard is
-airtight against being called with a non-`available` item, but someone can
-still edit a `donated` item's status back to `available` through the plain
-item form, then re-link it to a *second* outbound event — two donation
-records for the same physical item, bypassing the guard from a different
-entry point. Needs a deliberate decision before phase 5 exposes this over
-HTTP: block editing status away from `donated` when an
-`outbound_event_item` row exists, or keep it as an intentional manual-
-override escape hatch. Not blocking any current phase; flagged here so it
-isn't lost.
+**New backlog item found during phase 2's review, confirmed and widened by
+manual testing after the phase 2 commit** (not fixed — pre-existing, adjacent
+to but not covered by the `link_items` guard above): a `donated` inventory
+item has **no locked fields at all** in the edit form
+(`crates/desktop/src/ui/views/inventory.rs`) — not just `status` (the
+originally-flagged case: editing it back to `available` lets the item be
+re-linked to a *second* outbound event, producing two donation records for
+one physical item), but every other field too, including reassigning the
+item's `source_type`/`source_donation_id`/`source_purchase_id` entirely
+after the fact. Needs a deliberate decision before phase 5 exposes this over
+HTTP: what should stay editable on a `donated` item (notes? category?) versus
+what should lock (status; source; anything that feeds a ledger/reconciliation
+figure) — full lock, or an intentional manual-override escape hatch with a
+confirmation step. Not blocking any current phase; flagged here so it isn't
+lost.
+
+**Related bug found and fixed during the same manual testing pass**: switching
+an item's source-type radio button (Donation ↔ Purchase) in the edit form
+left the *other* type's id field stale instead of clearing it — e.g.
+switching a Purchase-sourced item to Donation kept its old
+`source_purchase_id` set, so the DB ended up with `source_type = 'donation'`
+*and* a `source_purchase_id` still pointing at the old purchase. That stale
+id is exactly what `purchases::linked_item_count` (and this phase's new
+`multiple_items_unset_conflict`) counts against, so an unrelated purchase
+could appear permanently "linked" even after every item claiming it had been
+reassigned elsewhere. Fixed by clearing the other type's id on
+`.changed()` for either radio button.
 
 Also: `compute_balance` is defined identically in `eur_ledger.rs` and
 `brl_ledger.rs`, with a third period-scoped variant inline in
