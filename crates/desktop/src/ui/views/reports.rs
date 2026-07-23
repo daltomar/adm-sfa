@@ -14,7 +14,11 @@ use adm_sfa_core::db::queries::{
 use adm_sfa_core::model::donor::{Donor, PhysicalDonation};
 use adm_sfa_core::model::inventory::{InventoryItemRow, SourceType};
 use adm_sfa_core::model::outbound::{OutboundEventRow, RecipientProject};
-use adm_sfa_core::model::transaction::{BrlTxRow, BrlTxType, EurTxRow, EurTxType};
+use adm_sfa_core::model::transaction::{BrlTxRow, EurTxRow, EurTxType};
+use adm_sfa_core::reporting::{
+    self, brl_tx_description, build_audit_entries, build_donor_rows, donor_or_anonymous,
+    eur_tx_description, in_range, outbound_audit_text, AuditEntry, DonorRow,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -111,87 +115,9 @@ impl Default for ReportsView {
     }
 }
 
-struct DonorRow {
-    name: String,
-    cash_count: i64,
-    cash_total: Decimal,
-    item_count: i64,
-}
-
-struct AuditEntry {
-    date: String,
-    /// EUR/BRL rows only: pre-resolved at the ambient UI locale (via
-    /// `r.tx_type.label()` for `kind`; `ledger` is always the fixed
-    /// currency code "EUR"/"BRL", never translated). A disclosed, minor
-    /// limitation — unlike everything else in this struct, this doesn't
-    /// follow an export's explicit chosen locale. `None` for outbound rows,
-    /// which use `outbound` below instead: those needed a real fix (not
-    /// just a disclosed limitation) since Ledger/Type/Description are full
-    /// locale-sensitive prose there, not a single enum label.
-    ledger_kind: Option<(String, String)>,
-    /// EUR/BRL only (donor name / purchase channel / note — mostly DB user
-    /// data, not translated prose, see `eur_tx_description`/
-    /// `brl_tx_description`). Empty for outbound rows.
-    description: String,
-    /// Outbound rows only — raw pieces, not pre-formatted text, so each
-    /// consumer (on-screen table vs CSV vs PDF) can build Ledger/Type/
-    /// Description in its own target locale via `outbound_audit_text()`
-    /// instead of a value baked once at whichever locale was ambient when
-    /// `build_audit_entries` ran.
-    outbound: Option<OutboundAuditInfo>,
-    amount: Option<AuditAmount>,
-    docs: i64,
-}
-
-struct OutboundAuditInfo {
-    item_count: i64,
-    recipient_name: String,
-    cash: Option<Decimal>,
-}
-
-struct AuditAmount {
-    sign: &'static str,
-    symbol: &'static str,
-    value: Decimal,
-}
-
-/// Builds an outbound audit row's Ledger/Type/Description text in an
-/// explicit `locale` — fixes a bug where this used to be baked once inside
-/// `build_audit_entries` at the ambient UI locale, so a CSV/PDF export
-/// chosen in a different language still showed these three columns in
-/// whatever language happened to be active in the UI at the time.
-fn outbound_audit_text(
-    info: &OutboundAuditInfo,
-    locale: &str,
-    fmt_cash: impl Fn(Decimal) -> String,
-) -> (String, String, String) {
-    let ledger = t!("sidebar.outbound", locale = locale).into_owned();
-    let kind = t!("status.source_type.donation", locale = locale).into_owned();
-    let mut description = if info.item_count == 1 {
-        t!(
-            "reports.audit.outbound_desc_one",
-            locale = locale,
-            recipient = info.recipient_name.as_str()
-        )
-        .into_owned()
-    } else {
-        t!(
-            "reports.audit.outbound_desc_other",
-            locale = locale,
-            count = info.item_count,
-            recipient = info.recipient_name.as_str()
-        )
-        .into_owned()
-    };
-    if let Some(cash) = info.cash {
-        description.push_str(&t!(
-            "reports.audit.outbound_cash_suffix",
-            locale = locale,
-            cash = fmt_cash(cash)
-        ));
-    }
-    (ledger, kind, description)
-}
+// DonorRow, AuditEntry, OutboundAuditInfo, AuditAmount, and
+// outbound_audit_text moved to `adm_sfa_core::reporting` (phase 3) —
+// imported above.
 
 impl ReportsView {
     pub fn invalidate(&mut self) {
@@ -652,41 +578,7 @@ impl ReportsView {
         ui.label(egui::RichText::new(t!("reports.tab.eur").as_ref()).strong());
         ui.add_space(6.0);
 
-        let starting_balance: Decimal = self
-            .eur_rows
-            .iter()
-            .filter(|r| {
-                !self.date_from_iso.is_empty() && r.date.as_str() < self.date_from_iso.as_str()
-            })
-            .fold(Decimal::ZERO, |acc, r| {
-                if r.tx_type.is_inflow() {
-                    acc + r.amount
-                } else {
-                    acc - r.amount
-                }
-            });
-
-        let period: Vec<&EurTxRow> = self
-            .eur_rows
-            .iter()
-            .filter(|r| in_range(&r.date, &self.date_from_iso, &self.date_to_iso))
-            .collect();
-
-        let sum_for = |t: EurTxType| -> (i64, Decimal) {
-            let matching: Vec<&&EurTxRow> = period.iter().filter(|r| r.tx_type == t).collect();
-            (
-                matching.len() as i64,
-                matching.iter().map(|r| r.amount).sum(),
-            )
-        };
-
-        let (don_count, don_total) = sum_for(EurTxType::DonationIn);
-        let (sf_count, sf_total) = sum_for(EurTxType::SelfFundingIn);
-        let (pur_count, pur_total) = sum_for(EurTxType::PurchaseOut);
-        let (tr_count, tr_total) = sum_for(EurTxType::TransferToBrlOut);
-
-        let net = don_total + sf_total - pur_total - tr_total;
-        let ending_balance = starting_balance + net;
+        let s = reporting::eur_summary(&self.eur_rows, &self.date_from_iso, &self.date_to_iso);
 
         egui::Grid::new("eur_summary_grid")
             .num_columns(3)
@@ -698,23 +590,23 @@ impl ReportsView {
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.donations_in").as_ref());
-                ui.label(don_count.to_string());
-                ui.label(format::amount(don_total));
+                ui.label(s.donation_count.to_string());
+                ui.label(format::amount(s.donation_total));
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.self_funding_in").as_ref());
-                ui.label(sf_count.to_string());
-                ui.label(format::amount(sf_total));
+                ui.label(s.self_funding_count.to_string());
+                ui.label(format::amount(s.self_funding_total));
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.purchases_out").as_ref());
-                ui.label(pur_count.to_string());
-                ui.label(format::amount(pur_total));
+                ui.label(s.purchase_count.to_string());
+                ui.label(format::amount(s.purchase_total));
                 ui.end_row();
 
                 ui.label(t!("reports.eur.row.transfers_out").as_ref());
-                ui.label(tr_count.to_string());
-                ui.label(format::amount(tr_total));
+                ui.label(s.transfer_count.to_string());
+                ui.label(format::amount(s.transfer_total));
                 ui.end_row();
             });
 
@@ -724,16 +616,16 @@ impl ReportsView {
         ui.label(
             t!(
                 "reports.eur.starting_balance",
-                amount = format::amount(starting_balance)
+                amount = format::amount(s.starting_balance)
             )
             .into_owned(),
         );
-        ui.label(t!("reports.eur.net_for_period", amount = format::amount(net)).into_owned());
+        ui.label(t!("reports.eur.net_for_period", amount = format::amount(s.net)).into_owned());
         ui.label(
             egui::RichText::new(
                 t!(
                     "reports.eur.ending_balance",
-                    amount = format::amount(ending_balance)
+                    amount = format::amount(s.ending_balance)
                 )
                 .into_owned(),
             )
@@ -831,40 +723,7 @@ impl ReportsView {
         ui.label(egui::RichText::new(t!("reports.tab.brl").as_ref()).strong());
         ui.add_space(6.0);
 
-        let starting_balance: Decimal = self
-            .brl_rows
-            .iter()
-            .filter(|r| {
-                !self.date_from_iso.is_empty() && r.date.as_str() < self.date_from_iso.as_str()
-            })
-            .fold(Decimal::ZERO, |acc, r| {
-                if r.tx_type.is_inflow() {
-                    acc + r.amount
-                } else {
-                    acc - r.amount
-                }
-            });
-
-        let period: Vec<&BrlTxRow> = self
-            .brl_rows
-            .iter()
-            .filter(|r| in_range(&r.date, &self.date_from_iso, &self.date_to_iso))
-            .collect();
-
-        let sum_for = |t: BrlTxType| -> (i64, Decimal) {
-            let matching: Vec<&&BrlTxRow> = period.iter().filter(|r| r.tx_type == t).collect();
-            (
-                matching.len() as i64,
-                matching.iter().map(|r| r.amount).sum(),
-            )
-        };
-
-        let (tr_count, tr_total) = sum_for(BrlTxType::TransferIn);
-        let (pur_count, pur_total) = sum_for(BrlTxType::BrazilPurchaseOut);
-        let (gift_count, gift_total) = sum_for(BrlTxType::CashGiftOut);
-
-        let net = tr_total - pur_total - gift_total;
-        let ending_balance = starting_balance + net;
+        let s = reporting::brl_summary(&self.brl_rows, &self.date_from_iso, &self.date_to_iso);
 
         egui::Grid::new("brl_summary_grid")
             .num_columns(3)
@@ -876,18 +735,18 @@ impl ReportsView {
                 ui.end_row();
 
                 ui.label(t!("reports.brl.row.transfer_in").as_ref());
-                ui.label(tr_count.to_string());
-                ui.label(format::amount(tr_total));
+                ui.label(s.transfer_in_count.to_string());
+                ui.label(format::amount(s.transfer_in_total));
                 ui.end_row();
 
                 ui.label(t!("reports.brl.row.purchases_out").as_ref());
-                ui.label(pur_count.to_string());
-                ui.label(format::amount(pur_total));
+                ui.label(s.purchase_count.to_string());
+                ui.label(format::amount(s.purchase_total));
                 ui.end_row();
 
                 ui.label(t!("reports.brl.row.gifts_out").as_ref());
-                ui.label(gift_count.to_string());
-                ui.label(format::amount(gift_total));
+                ui.label(s.gift_count.to_string());
+                ui.label(format::amount(s.gift_total));
                 ui.end_row();
             });
 
@@ -897,16 +756,16 @@ impl ReportsView {
         ui.label(
             t!(
                 "reports.brl.starting_balance",
-                amount = format::amount(starting_balance)
+                amount = format::amount(s.starting_balance)
             )
             .into_owned(),
         );
-        ui.label(t!("reports.brl.net_for_period", amount = format::amount(net)).into_owned());
+        ui.label(t!("reports.brl.net_for_period", amount = format::amount(s.net)).into_owned());
         ui.label(
             egui::RichText::new(
                 t!(
                     "reports.brl.ending_balance",
-                    amount = format::amount(ending_balance)
+                    amount = format::amount(s.ending_balance)
                 )
                 .into_owned(),
             )
@@ -1466,63 +1325,13 @@ impl ReportsView {
     }
 
     fn build_donor_rows(&self) -> Vec<DonorRow> {
-        let mut rows: Vec<DonorRow> = Vec::new();
-        for donor in &self.donors {
-            let cash: Vec<&EurTxRow> = self
-                .eur_rows
-                .iter()
-                .filter(|r| {
-                    r.tx_type == EurTxType::DonationIn
-                        && r.donor_id == Some(donor.id)
-                        && in_range(&r.date, &self.date_from_iso, &self.date_to_iso)
-                })
-                .collect();
-            let item_count = self
-                .donations
-                .iter()
-                .filter(|d| {
-                    d.donor_id == Some(donor.id)
-                        && in_range(&d.date_received, &self.date_from_iso, &self.date_to_iso)
-                })
-                .count() as i64;
-            if cash.is_empty() && item_count == 0 {
-                continue;
-            }
-            let cash_total: Decimal = cash.iter().map(|r| r.amount).sum();
-            rows.push(DonorRow {
-                name: donor.name.clone(),
-                cash_count: cash.len() as i64,
-                cash_total,
-                item_count,
-            });
-        }
-        let anon_cash: Vec<&EurTxRow> = self
-            .eur_rows
-            .iter()
-            .filter(|r| {
-                r.tx_type == EurTxType::DonationIn
-                    && r.donor_id.is_none()
-                    && in_range(&r.date, &self.date_from_iso, &self.date_to_iso)
-            })
-            .collect();
-        let anon_items = self
-            .donations
-            .iter()
-            .filter(|d| {
-                d.donor_id.is_none()
-                    && in_range(&d.date_received, &self.date_from_iso, &self.date_to_iso)
-            })
-            .count() as i64;
-        if !anon_cash.is_empty() || anon_items > 0 {
-            let cash_total: Decimal = anon_cash.iter().map(|r| r.amount).sum();
-            rows.push(DonorRow {
-                name: t!("common.anonymous").into_owned(),
-                cash_count: anon_cash.len() as i64,
-                cash_total,
-                item_count: anon_items,
-            });
-        }
-        rows
+        build_donor_rows(
+            &self.donors,
+            &self.eur_rows,
+            &self.donations,
+            &self.date_from_iso,
+            &self.date_to_iso,
+        )
     }
 
     fn csv_data_eur(&self, locale: &str, for_csv: bool) -> (Vec<String>, Vec<Vec<String>>) {
@@ -1769,107 +1578,15 @@ impl ReportsView {
     }
 
     fn build_audit_entries(&self) -> Vec<AuditEntry> {
-        let mut entries: Vec<AuditEntry> = Vec::new();
-
-        for r in &self.eur_rows {
-            if !in_range(&r.date, &self.date_from_iso, &self.date_to_iso) {
-                continue;
-            }
-            let docs = match r.tx_type {
-                EurTxType::PurchaseOut => r
-                    .linked_purchase_id
-                    .and_then(|id| self.doc_counts.get(&("purchase".to_string(), id)).copied())
-                    .unwrap_or(0),
-                EurTxType::TransferToBrlOut => r
-                    .linked_transfer_id
-                    .and_then(|id| self.doc_counts.get(&("transfer".to_string(), id)).copied())
-                    .unwrap_or(0),
-                _ => 0,
-            };
-            let description = eur_tx_description(r);
-            let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
-            entries.push(AuditEntry {
-                date: r.date.clone(),
-                ledger_kind: Some(("EUR".to_string(), r.tx_type.label())),
-                description,
-                outbound: None,
-                amount: Some(AuditAmount {
-                    sign,
-                    symbol: "€",
-                    value: r.amount,
-                }),
-                docs,
-            });
-        }
-
-        for r in &self.brl_rows {
-            if !in_range(&r.date, &self.date_from_iso, &self.date_to_iso) {
-                continue;
-            }
-            if let (Some(rid), BrlTxType::CashGiftOut) = (self.recipient_filter, r.tx_type) {
-                let matches = self
-                    .outbound_rows
-                    .iter()
-                    .find(|e| Some(e.id) == r.linked_outbound_event_id)
-                    .map(|e| e.recipient_project_id == rid)
-                    .unwrap_or(false);
-                if !matches {
-                    continue;
-                }
-            }
-            let docs = match r.tx_type {
-                BrlTxType::BrazilPurchaseOut => r
-                    .linked_purchase_id
-                    .and_then(|id| self.doc_counts.get(&("purchase".to_string(), id)).copied())
-                    .unwrap_or(0),
-                BrlTxType::TransferIn => r
-                    .linked_transfer_id
-                    .and_then(|id| self.doc_counts.get(&("transfer".to_string(), id)).copied())
-                    .unwrap_or(0),
-                BrlTxType::CashGiftOut => 0,
-            };
-            let description = brl_tx_description(r);
-            let sign = if r.tx_type.is_inflow() { "+" } else { "-" };
-            entries.push(AuditEntry {
-                date: r.date.clone(),
-                ledger_kind: Some(("BRL".to_string(), r.tx_type.label())),
-                description,
-                outbound: None,
-                amount: Some(AuditAmount {
-                    sign,
-                    symbol: "R$",
-                    value: r.amount,
-                }),
-                docs,
-            });
-        }
-
-        for e in &self.outbound_rows {
-            if !in_range(&e.date, &self.date_from_iso, &self.date_to_iso) {
-                continue;
-            }
-            if let Some(rid) = self.recipient_filter {
-                if e.recipient_project_id != rid {
-                    continue;
-                }
-            }
-            let outbound_cash = e.cash_amount_brl.filter(|&cash| cash > Decimal::ZERO);
-            entries.push(AuditEntry {
-                date: e.date.clone(),
-                ledger_kind: None,
-                description: String::new(),
-                outbound: Some(OutboundAuditInfo {
-                    item_count: e.item_count,
-                    recipient_name: e.recipient_name.clone(),
-                    cash: outbound_cash,
-                }),
-                amount: None,
-                docs: 0,
-            });
-        }
-
-        entries.sort_by(|a, b| b.date.cmp(&a.date));
-        entries
+        build_audit_entries(
+            &self.eur_rows,
+            &self.brl_rows,
+            &self.outbound_rows,
+            &self.doc_counts,
+            &self.date_from_iso,
+            &self.date_to_iso,
+            self.recipient_filter,
+        )
     }
 }
 
@@ -1899,13 +1616,9 @@ fn show_export_locale_picker(ui: &mut egui::Ui, export_locale: &mut String, id_s
     });
 }
 
-fn in_range(date: &str, from: &str, to: &str) -> bool {
-    (from.is_empty() || date >= from) && (to.is_empty() || date <= to)
-}
-
 /// Normalizes a typed date-range boundary (may be "DD.MM.YYYY", ISO, empty,
 /// or garbage) to ISO for comparison against stored `.date` fields, which
-/// always stay ISO. Empty input normalizes to "" (in_range's "no bound"
+/// always stay ISO. Empty input normalizes to "" (`in_range`'s "no bound"
 /// sentinel). Unparseable non-empty input also degrades to "no bound" on
 /// that side rather than blocking the whole report — the caller is
 /// responsible for surfacing the returned `bool` as a visible error so an
@@ -1918,31 +1631,6 @@ fn normalize_filter_date(raw: &str) -> (String, bool) {
     match adm_sfa_core::date::parse_date_input(t) {
         Some(d) => (d.format("%Y-%m-%d").to_string(), false),
         None => (String::new(), true),
-    }
-}
-
-fn donor_or_anonymous(name: &Option<String>) -> String {
-    name.clone()
-        .unwrap_or_else(|| t!("common.anonymous").into_owned())
-}
-
-fn eur_tx_description(r: &EurTxRow) -> String {
-    match r.tx_type {
-        EurTxType::DonationIn => r
-            .donor_name
-            .clone()
-            .unwrap_or_else(|| t!("common.anonymous").into_owned()),
-        EurTxType::SelfFundingIn => r.note.clone().unwrap_or_default(),
-        EurTxType::PurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-        EurTxType::TransferToBrlOut => t!("reports.tx.eur_to_brl_transfer").into_owned(),
-    }
-}
-
-fn brl_tx_description(r: &BrlTxRow) -> String {
-    match r.tx_type {
-        BrlTxType::TransferIn => t!("reports.tx.eur_to_brl_transfer").into_owned(),
-        BrlTxType::BrazilPurchaseOut => r.purchase_channel.clone().unwrap_or_default(),
-        BrlTxType::CashGiftOut => r.recipient_name.clone().unwrap_or_default(),
     }
 }
 

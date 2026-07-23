@@ -6,6 +6,7 @@ use rust_i18n::t;
 use adm_sfa_core::db::queries::brl_ledger as qry;
 use adm_sfa_core::format;
 use adm_sfa_core::model::transaction::{BrlTxRow, BrlTxType};
+use adm_sfa_core::reporting::compute_balance;
 
 enum Mode {
     List,
@@ -41,7 +42,8 @@ impl BrlLedgerView {
         if self.needs_reload {
             match qry::list(db) {
                 Ok(rows) => {
-                    self.balance = compute_balance(&rows);
+                    self.balance =
+                        compute_balance(rows.iter().map(|r| (r.tx_type.is_inflow(), r.amount)));
                     self.rows = rows;
                     self.needs_reload = false;
                 }
@@ -233,16 +235,6 @@ impl BrlLedgerView {
             }
         }
     }
-}
-
-fn compute_balance(rows: &[BrlTxRow]) -> Decimal {
-    rows.iter().fold(Decimal::ZERO, |acc, r| {
-        if r.tx_type.is_inflow() {
-            acc + r.amount
-        } else {
-            acc - r.amount
-        }
-    })
 }
 
 fn row_desc(row: &BrlTxRow) -> String {
