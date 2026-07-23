@@ -1,7 +1,7 @@
 use crate::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 
 pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
     let mut stmt = conn.prepare(
@@ -90,6 +90,7 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
 }
 
 pub fn insert(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {
+    check_purchase_source(conn, draft, None)?;
     conn.execute(
         "INSERT INTO inventory_item
                 (name, category_id, source_type, source_donation_id, source_purchase_id,
@@ -110,6 +111,7 @@ pub fn insert(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {
 }
 
 pub fn update(conn: &Connection, id: i64, draft: &InventoryItemDraft) -> Result<()> {
+    check_purchase_source(conn, draft, Some(id))?;
     conn.execute(
         "UPDATE inventory_item
             SET name = ?1, category_id = ?2, source_type = ?3,
@@ -129,6 +131,61 @@ pub fn update(conn: &Connection, id: i64, draft: &InventoryItemDraft) -> Result<
         ],
     )?;
     Ok(())
+}
+
+fn check_purchase_source(
+    conn: &Connection,
+    draft: &InventoryItemDraft,
+    edit_id: Option<i64>,
+) -> Result<()> {
+    if draft.source_type != SourceType::Purchase {
+        return Ok(());
+    }
+    let Some(pid) = draft.source_purchase_id else {
+        return Ok(());
+    };
+    if let Some(channel) = purchase_source_conflict(conn, pid, edit_id)? {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            format!("purchase ({channel}) is single-item and already linked to another item")
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// `Some(channel)` — the conflicting purchase's channel — if linking
+/// `purchase_id` to an inventory item would violate "a single-item
+/// purchase backs at most one inventory item": the purchase has
+/// `multiple_items = false` and is already linked to a different item.
+/// `edit_id` is the item being edited (excluded from "already linked"),
+/// `None` when creating a new item. Authoritative: called by `insert`/
+/// `update` above so the rule holds for any caller, not just the desktop
+/// form's own pre-save check and picker grey-out (which read the same
+/// rule off already-loaded in-memory data for UX, see
+/// `InventoryView::purchase_source_blocked` in `desktop`).
+pub fn purchase_source_conflict(
+    conn: &Connection,
+    purchase_id: i64,
+    edit_id: Option<i64>,
+) -> Result<Option<String>> {
+    let multiple_items: i64 = conn.query_row(
+        "SELECT multiple_items FROM purchase WHERE id = ?1",
+        [purchase_id],
+        |row| row.get(0),
+    )?;
+    if multiple_items != 0 {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT p.channel
+           FROM inventory_item i
+           JOIN purchase p ON p.id = i.source_purchase_id
+          WHERE i.source_purchase_id = ?1 AND i.id != ?2
+          LIMIT 1",
+        params![purchase_id, edit_id.unwrap_or(-1)],
+        |row| row.get(0),
+    )
+    .optional()
 }
 
 fn invalid_enum(col: usize, val: &str) -> rusqlite::Error {
@@ -218,5 +275,61 @@ mod tests {
 
         assert_eq!(donated.acquired_date.as_deref(), Some("2026-01-05"));
         assert_eq!(bought.acquired_date.as_deref(), Some("2026-02-10"));
+    }
+
+    fn purchase(conn: &Connection, multiple_items: bool) -> i64 {
+        purchases::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-02-10".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap()
+    }
+
+    fn item_draft(cat_id: i64, purchase_id: i64) -> InventoryItemDraft {
+        InventoryItemDraft {
+            name: "Deck".to_string(),
+            category_id: Some(cat_id),
+            source_type: SourceType::Purchase,
+            source_donation_id: None,
+            source_purchase_id: Some(purchase_id),
+            location: Location::Germany,
+            status: ItemStatus::Available,
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn second_item_on_a_single_item_purchase_is_rejected() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+        assert!(insert(&conn, &item_draft(cat_id, purchase_id)).is_err());
+    }
+
+    #[test]
+    fn second_item_on_a_multiple_items_purchase_is_allowed() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, true);
+        insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+        insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+    }
+
+    #[test]
+    fn editing_the_item_already_linked_to_a_single_item_purchase_does_not_conflict_with_itself() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        let item_id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+        update(&conn, item_id, &item_draft(cat_id, purchase_id)).unwrap();
     }
 }
