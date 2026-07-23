@@ -49,10 +49,12 @@ there.
   negotiation status, inline "+ New donor", permanent itemized inventory
   table, native screenshot capture) are all shipped. Next candidates are
   Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
-- **In progress: workspace restructure + web front-end.** See "Workspace
-  restructure and web front-end" below. The desktop app must keep working
-  and behaving identically at every phase boundary. Tag `v1.0-desktop`
-  marks the pre-restructure state.
+- **In progress: workspace restructure + web front-end — phases 1–4 of 6
+  done, on `main`.** See "Workspace restructure and web front-end" below
+  for the full phase list, what each one did, and backlog items its review
+  surfaced. Remaining: phase 5 (web crate) and phase 6 (deployment). The
+  desktop app has kept working and behaving identically at every phase
+  boundary so far. Tag `v1.0-desktop` marks the pre-restructure state.
 
 ## Purchase `multiple_items` flag (implemented)
 
