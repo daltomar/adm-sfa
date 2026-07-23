@@ -1,0 +1,23 @@
+[package]
+# Package name is NOT literally "core" — that would shadow Rust's own
+# sysroot `core` crate in the extern prelude of every crate that depends on
+# this one (verified: `use core::mem;` inside `desktop` silently resolves to
+# this crate instead of `::core` once a dependency named `core` exists).
+# The directory stays `crates/core/` per CLAUDE.md's target layout; only the
+# compiled package/crate identifier differs.
+name = "adm_sfa_core"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+rust-i18n = { workspace = true }
+dirs = { workspace = true }
+zip = "8"
+walkdir = "2"
+
+[dev-dependencies]
+rust_decimal_macros = { workspace = true }

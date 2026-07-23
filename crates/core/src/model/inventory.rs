@@ -14,6 +14,7 @@ impl Location {
 
     // Inherent method returning Option rather than impl std::str::FromStr,
     // consistent with the other domain enums in this codebase.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "germany" => Some(Location::Germany),
@@ -49,6 +50,7 @@ impl ItemStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "available" => Some(ItemStatus::Available),
@@ -84,6 +86,7 @@ impl SourceType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "donation" => Some(SourceType::Donation),

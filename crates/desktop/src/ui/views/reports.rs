@@ -5,16 +5,16 @@ use rust_decimal::Decimal;
 use rust_i18n::t;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::format;
+use adm_sfa_core::format;
 
-use crate::db::queries::{
+use adm_sfa_core::db::queries::{
     brl_ledger as brl_qry, documents as documents_qry, donors as donors_qry, eur_ledger as eur_qry,
     inventory as inventory_qry, outbound as outbound_qry,
 };
-use crate::model::donor::{Donor, PhysicalDonation};
-use crate::model::inventory::{InventoryItemRow, SourceType};
-use crate::model::outbound::{OutboundEventRow, RecipientProject};
-use crate::model::transaction::{BrlTxRow, BrlTxType, EurTxRow, EurTxType};
+use adm_sfa_core::model::donor::{Donor, PhysicalDonation};
+use adm_sfa_core::model::inventory::{InventoryItemRow, SourceType};
+use adm_sfa_core::model::outbound::{OutboundEventRow, RecipientProject};
+use adm_sfa_core::model::transaction::{BrlTxRow, BrlTxType, EurTxRow, EurTxType};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -386,7 +386,7 @@ impl ReportsView {
                     Tab::AuditTrail => self.csv_data_audit_trail(&locale, true),
                 };
                 self.export_status = Some(
-                    crate::reports::csv::write(&path, &headers, &rows)
+                    reports::csv::write(&path, &headers, &rows)
                         .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
                         .map_err(|e| e.to_string()),
                 );
@@ -431,15 +431,9 @@ impl ReportsView {
                 let to_display = format::date_in(&self.date_to_iso, &self.export_locale);
                 let sections = self.build_pdf_sections(&self.export_locale);
                 self.export_status = Some(
-                    crate::reports::pdf::export(
-                        &path,
-                        &generated,
-                        &from_display,
-                        &to_display,
-                        &sections,
-                    )
-                    .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
-                    .map_err(|e| e.to_string()),
+                    reports::pdf::export(&path, &generated, &from_display, &to_display, &sections)
+                        .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
+                        .map_err(|e| e.to_string()),
                 );
             }
         } else if pdf_cancel {
@@ -1733,7 +1727,7 @@ impl ReportsView {
     /// §6.3) — the operator's choice in the export dialog, never the
     /// ambient UI locale. Unlike CSV, PDF numbers follow `locale` too
     /// (`for_csv = false` on every shared `csv_data_*` call).
-    fn build_pdf_sections(&self, locale: &str) -> Vec<crate::reports::pdf::PdfSection> {
+    fn build_pdf_sections(&self, locale: &str) -> Vec<reports::pdf::PdfSection> {
         let (dh, dr) = self.csv_data_donors(locale, false);
         let (eh, er) = self.csv_data_eur(locale, false);
         let (bh, br) = self.csv_data_brl(locale, false);
@@ -1741,32 +1735,32 @@ impl ReportsView {
         let (oh, or_) = self.csv_data_outbound(locale, false);
         let (ah, ar) = self.csv_data_audit_trail(locale, false);
         vec![
-            crate::reports::pdf::PdfSection {
+            reports::pdf::PdfSection {
                 title: t!("reports.pdf.section.donor", locale = locale).into_owned(),
                 headers: dh,
                 rows: dr,
             },
-            crate::reports::pdf::PdfSection {
+            reports::pdf::PdfSection {
                 title: t!("reports.pdf.section.eur", locale = locale).into_owned(),
                 headers: eh,
                 rows: er,
             },
-            crate::reports::pdf::PdfSection {
+            reports::pdf::PdfSection {
                 title: t!("reports.pdf.section.brl", locale = locale).into_owned(),
                 headers: bh,
                 rows: br,
             },
-            crate::reports::pdf::PdfSection {
+            reports::pdf::PdfSection {
                 title: t!("sidebar.inventory", locale = locale).into_owned(),
                 headers: ih,
                 rows: ir,
             },
-            crate::reports::pdf::PdfSection {
+            reports::pdf::PdfSection {
                 title: t!("reports.pdf.section.outbound", locale = locale).into_owned(),
                 headers: oh,
                 rows: or_,
             },
-            crate::reports::pdf::PdfSection {
+            reports::pdf::PdfSection {
                 title: t!("reports.pdf.section.audit", locale = locale).into_owned(),
                 headers: ah,
                 rows: ar,
@@ -1921,7 +1915,7 @@ fn normalize_filter_date(raw: &str) -> (String, bool) {
     if t.is_empty() {
         return (String::new(), false);
     }
-    match crate::date::parse_date_input(t) {
+    match adm_sfa_core::date::parse_date_input(t) {
         Some(d) => (d.format("%Y-%m-%d").to_string(), false),
         None => (String::new(), true),
     }
@@ -1955,7 +1949,7 @@ fn brl_tx_description(r: &BrlTxRow) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::outbound::OutboundEventRow;
+    use adm_sfa_core::model::outbound::OutboundEventRow;
 
     fn outbound_fixture() -> ReportsView {
         ReportsView {

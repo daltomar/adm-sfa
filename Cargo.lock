@@ -18,26 +18,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "adm-sfa"
+name = "adm_sfa_core"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "csv",
  "dirs",
- "ecow",
- "eframe",
- "egui_extras",
  "rusqlite",
  "rusqlite_migration",
  "rust-i18n",
  "rust_decimal",
  "rust_decimal_macros",
- "serde",
- "serde_json",
- "typst",
- "typst-as-lib",
- "typst-layout",
- "typst-pdf",
  "walkdir",
  "zip",
 ]
@@ -906,6 +896,21 @@ name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
+
+[[package]]
+name = "desktop"
+version = "0.1.0"
+dependencies = [
+ "adm_sfa_core",
+ "chrono",
+ "dirs",
+ "eframe",
+ "egui_extras",
+ "reports",
+ "rusqlite",
+ "rust-i18n",
+ "rust_decimal",
+]
 
 [[package]]
 name = "digest"
@@ -3652,6 +3657,18 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "reports"
+version = "0.1.0"
+dependencies = [
+ "csv",
+ "ecow",
+ "typst",
+ "typst-as-lib",
+ "typst-layout",
+ "typst-pdf",
+]
 
 [[package]]
 name = "resvg"

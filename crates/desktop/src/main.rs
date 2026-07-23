@@ -1,26 +1,20 @@
 mod app;
-mod backup;
-mod date;
-mod db;
-mod docs_fs;
-mod format;
-mod model;
-mod money;
-mod reports;
 mod screenshot;
 mod ui;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // Compile-time locale catalogues, embedded into the binary (SPEC.md §6,
 // stack-plan.md "Localisation (i18n)"). English is both the source and the
 // fallback locale (SPEC.md §6.6 / CLAUDE.md T5): a missing key in de/pt-BR
-// falls back to its en.yml value rather than rendering blank.
-rust_i18n::i18n!("locales", fallback = "en");
+// falls back to its en.yml value rather than rendering blank. `locales/`
+// lives at the workspace root (not inside this crate) so a future `web`
+// crate can embed the same catalogue via an equivalent relative path.
+rust_i18n::i18n!("../../locales", fallback = "en");
 
 fn main() -> eframe::Result<()> {
     let data_dir = parse_data_dir();
-    ensure_dirs(&data_dir);
+    adm_sfa_core::config::ensure_dirs(&data_dir);
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -45,12 +39,5 @@ fn parse_data_dir() -> PathBuf {
         }
         i += 1;
     }
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("adm-sfa")
-}
-
-fn ensure_dirs(data_dir: &Path) {
-    std::fs::create_dir_all(data_dir.join("documents/_deleted"))
-        .expect("failed to create data directories");
+    adm_sfa_core::config::default_data_dir()
 }

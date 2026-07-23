@@ -4,8 +4,10 @@ use eframe::egui;
 use rusqlite::Connection;
 use rust_i18n::t;
 
-use crate::db::queries::{categories as cat_qry, documents as docs_qry, settings as settings_qry};
-use crate::model::category::Category;
+use adm_sfa_core::db::queries::{
+    categories as cat_qry, documents as docs_qry, settings as settings_qry,
+};
+use adm_sfa_core::model::category::Category;
 
 pub struct SettingsView {
     categories: Vec<Category>,
@@ -112,7 +114,7 @@ impl SettingsView {
     /// routed through `t!()` for the same reason donor/recipient names
     /// aren't: they're proper nouns, not UI chrome.
     fn show_locale_panel(&mut self, ui: &mut egui::Ui, db: &Connection) {
-        use crate::format::LOCALES;
+        use adm_sfa_core::format::LOCALES;
 
         ui.label(egui::RichText::new(t!("settings.locale.heading").as_ref()).strong());
         ui.add_space(4.0);
@@ -545,7 +547,7 @@ impl SettingsView {
             } else {
                 self.backup_path_input = None;
                 self.backup_status = Some(
-                    crate::backup::backup_to_zip(data_dir, &path)
+                    adm_sfa_core::backup::backup_to_zip(data_dir, &path)
                         .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
                         .map_err(|e| e.to_string()),
                 );

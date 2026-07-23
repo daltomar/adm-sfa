@@ -3,10 +3,10 @@ use rusqlite::Connection;
 use rust_i18n::t;
 use std::collections::HashSet;
 
-use crate::db::queries::{inventory as inventory_qry, outbound as qry};
-use crate::format;
-use crate::model::inventory::InventoryItemRow;
-use crate::model::outbound::{
+use adm_sfa_core::db::queries::{inventory as inventory_qry, outbound as qry};
+use adm_sfa_core::format;
+use adm_sfa_core::model::inventory::InventoryItemRow;
+use adm_sfa_core::model::outbound::{
     OutboundEventDraft, OutboundEventRow, RecipientProject, RecipientProjectDraft,
 };
 use rust_decimal::Decimal;
@@ -270,7 +270,7 @@ impl OutboundView {
             if t.is_empty() {
                 Some(Decimal::ZERO)
             } else {
-                crate::money::parse_amount_input(t)
+                adm_sfa_core::money::parse_amount_input(t)
             }
         };
         let cash_ok = cash_amount.is_some();
@@ -282,7 +282,7 @@ impl OutboundView {
         }
         let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
         let date_text = self.draft.date.trim();
-        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        let date_ok = adm_sfa_core::date::parse_date_input(date_text).is_some();
         let recipient_ok = self.draft.recipient_project_id.is_some();
         let gift_ok = has_cash || !self.selected_item_ids.is_empty();
         let form_ok = date_ok && recipient_ok && cash_ok && gift_ok;
@@ -447,7 +447,7 @@ impl OutboundView {
             .inventory_items
             .iter()
             .filter(|item| {
-                item.status == crate::model::inventory::ItemStatus::Available
+                item.status == adm_sfa_core::model::inventory::ItemStatus::Available
                     || self.selected_item_ids.contains(&item.id)
             })
             .collect();

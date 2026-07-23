@@ -3,10 +3,10 @@ use rusqlite::Connection;
 use rust_decimal::Decimal;
 use rust_i18n::t;
 
-use crate::db::queries::{donors as donors_qry, eur_ledger as qry};
-use crate::format;
-use crate::model::donor::DonorDraft;
-use crate::model::transaction::{EurTxDraft, EurTxRow, EurTxType, ManualEurTxType};
+use adm_sfa_core::db::queries::{donors as donors_qry, eur_ledger as qry};
+use adm_sfa_core::format;
+use adm_sfa_core::model::donor::DonorDraft;
+use adm_sfa_core::model::transaction::{EurTxDraft, EurTxRow, EurTxType, ManualEurTxType};
 
 enum Mode {
     List,
@@ -374,13 +374,13 @@ impl EurLedgerView {
         }
 
         let date_text = self.draft.date.trim();
-        let date_ok = crate::date::parse_date_input(date_text).is_some();
+        let date_ok = adm_sfa_core::date::parse_date_input(date_text).is_some();
         if !date_text.is_empty() && !date_ok {
             ui.colored_label(egui::Color32::RED, t!("common.error.invalid_date").as_ref());
         }
 
         let amount_text = self.draft.amount_str.trim();
-        let amount_parsed = crate::money::parse_amount_input(amount_text);
+        let amount_parsed = adm_sfa_core::money::parse_amount_input(amount_text);
         let amount_ok = amount_parsed.map(|d| d > Decimal::ZERO).unwrap_or(false);
         if !amount_text.is_empty() {
             if amount_parsed.is_none() {
