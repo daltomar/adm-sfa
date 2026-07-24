@@ -49,10 +49,12 @@ there.
   negotiation status, inline "+ New donor", permanent itemized inventory
   table, native screenshot capture) are all shipped. Next candidates are
   Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
-- **In progress: workspace restructure + web front-end.** See "Workspace
-  restructure and web front-end" below. The desktop app must keep working
-  and behaving identically at every phase boundary. Tag `v1.0-desktop`
-  marks the pre-restructure state.
+- **In progress: workspace restructure + web front-end — phases 1–4 of 6
+  done, on `main`.** See "Workspace restructure and web front-end" below
+  for the full phase list, what each one did, and backlog items its review
+  surfaced. Remaining: phase 5 (web crate) and phase 6 (deployment). The
+  desktop app has kept working and behaving identically at every phase
+  boundary so far. Tag `v1.0-desktop` marks the pre-restructure state.
 
 ## Purchase `multiple_items` flag (implemented)
 
@@ -295,7 +297,17 @@ one compiles, passes tests, and behaves identically.
 4. **Service layer.** Operation-shaped functions in `core`
    (`create_purchase`, `mark_purchase_bought`, `donate_items`,
    `attach_document`, …). Desktop views call these instead of reaching
-   into `db::queries` directly.
+   into `db::queries` directly. **Done** — see `crates/core/src/service.rs`
+   plus `docs_fs::remove_document` (a real ordering fix: soft-deleting a
+   document now moves the file *before* marking the DB row deleted, not
+   after — the old order could leave an orphaned live file permanently
+   unreachable from the UI, silently overwritable by a later upload
+   reusing the same generated filename) and a new `outbound::require_gift`
+   guard (an event needs at least one item or cash, previously only
+   enforced by the desktop Save button). Reviewed by `rust-code-reviewer`;
+   the one 🟡 that mattered (doc-removal errors had regressed to hardcoded
+   English, losing German/Portuguese translation) was fixed before commit
+   — the rest are logged below, not fixed.
 5. **Web crate.** axum + server-rendered templates over the service layer.
    Multipart upload replacing drag-and-drop; file serving for
    `documents/`; single shared password + session cookie.
@@ -383,6 +395,33 @@ arithmetic, per `rust-code-reviewer`):
 - `build_audit_entries`'s doc-count lookup is only tested via the
   `linked_purchase_id` branch; the `linked_transfer_id` branch
   (`EurTxType::TransferToBrlOut` / `BrlTxType::TransferIn`) has no test.
+
+**New backlog items found during phase 4's review** (not fixed — per
+`rust-code-reviewer`):
+- `service::drop_negotiating_purchase`'s test only covers the happy path,
+  not the partial-failure/stop-on-first-error behavior that's the entire
+  reason it was extracted (confirmed correct by reading the code — the `?`
+  in its per-document loop short-circuits before the purchase row gets
+  deleted — just not exercised by a test that induces a mid-loop failure).
+- `outbound.rs`'s edit path still calls `db::queries::outbound::update`
+  directly rather than through a `service::*` wrapper — only the create
+  path got `donate_items`. Both run the identical `require_gift` guard, so
+  this is a minor asymmetry against phase 4's "views call service functions
+  instead of `db::queries` directly" goal. Decide whether a
+  `service::update_donation` should exist before `web` needs the same
+  operation, or whether `update` staying un-wrapped is fine.
+- `docs_fs::generate_filename`'s collision check only consults currently
+  *active* filenames for a record, not anything already in `_deleted/` — so
+  re-attaching a same-day, same-default-label document after removing the
+  original can regenerate the same filename, which then hits
+  `document.filename`'s `UNIQUE` constraint (schema-wide, not scoped by
+  `deleted`) and surfaces a confusing raw SQLite error instead of silently
+  overwriting anything (verified: no data-loss risk, just a bad error
+  message for a plausible legitimate action). Pre-existing, not introduced
+  by phase 4 — `remove_document`'s idempotency check just happened to be
+  the thing that surfaced it during review. Fix direction: either have
+  `generate_filename` also consult `_deleted/` filenames, or namespace
+  `_deleted/` by document id so collisions can't occur at all.
 
 What the audit found *correct* and not to be "improved" during the move:
 `db/queries/*` (parameterized, no business logic), `model/*` (enum

@@ -10,6 +10,7 @@ use adm_sfa_core::docs_fs;
 use adm_sfa_core::format;
 use adm_sfa_core::model::document::Document;
 use adm_sfa_core::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
+use adm_sfa_core::service;
 
 enum Mode {
     List,
@@ -339,7 +340,7 @@ impl PurchasesView {
                 .clicked()
             {
                 if is_adding {
-                    match qry::insert(db, &self.draft) {
+                    match service::create_purchase(db, &self.draft) {
                         Ok(new_id) => {
                             self.mode = Mode::Editing(new_id);
                             self.docs_needs_reload = true;
@@ -403,9 +404,7 @@ impl PurchasesView {
                     .clicked()
                 {
                     if let Some(id) = edit_id {
-                        let mut bought_draft = self.draft.clone();
-                        bought_draft.status = PurchaseStatus::Bought;
-                        match qry::update(db, id, &bought_draft) {
+                        match service::mark_purchase_bought(db, id, &self.draft) {
                             Ok(()) => {
                                 self.draft.status = PurchaseStatus::Bought;
                                 self.needs_reload = true;
@@ -449,24 +448,7 @@ impl PurchasesView {
     fn drop_negotiating_purchase(&mut self, db: &Connection, id: i64, data_dir: &Path) {
         let documents_dir = data_dir.join("documents");
         self.discard_pending_doc();
-        for doc in self.docs.clone() {
-            if let Err(e) = docs_qry::soft_delete(db, doc.id) {
-                self.error = Some(t!("common.doc.error.db_update_failed", error = e).into_owned());
-                self.confirm_drop = false;
-                // Reload so a retry only re-attempts docs not yet soft-deleted
-                // (list_for_record excludes deleted=1 rows) instead of
-                // re-running fs::rename on a file that's already moved.
-                self.docs_needs_reload = true;
-                return;
-            }
-            if let Err(e) = docs_fs::soft_delete(&documents_dir, &doc.filename) {
-                self.error = Some(t!("common.doc.error.file_move_failed", error = e).into_owned());
-                self.confirm_drop = false;
-                self.docs_needs_reload = true;
-                return;
-            }
-        }
-        match qry::delete(db, id) {
+        match service::drop_negotiating_purchase(db, &documents_dir, id) {
             Ok(()) => {
                 self.mode = Mode::List;
                 self.needs_reload = true;
@@ -475,8 +457,10 @@ impl PurchasesView {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(e.to_string());
+                self.error = Some(e);
                 self.confirm_drop = false;
+                // Reload so a retry only re-attempts docs still active
+                // (list_for_record excludes deleted=1 rows).
                 self.docs_needs_reload = true;
             }
         }
@@ -509,21 +493,12 @@ impl PurchasesView {
         }
 
         if let Some((doc_id, filename)) = remove_doc {
-            match docs_qry::soft_delete(db, doc_id) {
-                Err(e) => {
-                    self.error =
-                        Some(t!("common.doc.error.db_update_failed", error = e).into_owned())
+            match docs_fs::remove_document(db, &documents_dir, doc_id, &filename) {
+                Err(e) => self.error = Some(e),
+                Ok(()) => {
+                    self.docs_needs_reload = true;
+                    self.error = None;
                 }
-                Ok(()) => match docs_fs::soft_delete(&documents_dir, &filename) {
-                    Err(e) => {
-                        self.error =
-                            Some(t!("common.doc.error.file_move_failed", error = e).into_owned())
-                    }
-                    Ok(()) => {
-                        self.docs_needs_reload = true;
-                        self.error = None;
-                    }
-                },
             }
         }
 
@@ -703,26 +678,17 @@ impl PurchasesView {
                     let (path, label, is_temp) = (p.path.clone(), p.label.clone(), p.is_temp);
                     let existing: Vec<String> =
                         self.docs.iter().map(|d| d.filename.clone()).collect();
-                    // Filenames must stay ISO-sortable (T4) regardless of
-                    // what the user has currently typed into the date
-                    // field: prefer the parsed draft date, fall back to
-                    // the persisted purchase's own ISO date if the draft
-                    // is momentarily unparseable mid-edit, and to today's
-                    // date as a last resort.
-                    let filing_date = adm_sfa_core::date::parse_date_input(&self.draft.date)
-                        .map(|d| d.format("%Y-%m-%d").to_string())
-                        .or_else(|| {
-                            self.purchases
-                                .iter()
-                                .find(|p| p.id == edit_id)
-                                .map(|p| p.date.clone())
-                        })
-                        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-                    match docs_fs::file_document(
+                    let persisted_date = self
+                        .purchases
+                        .iter()
+                        .find(|p| p.id == edit_id)
+                        .map(|p| p.date.as_str());
+                    match service::attach_document(
                         db,
                         &documents_dir,
                         &path,
-                        &filing_date,
+                        &self.draft.date,
+                        persisted_date,
                         ("purchase", edit_id),
                         &label,
                         &existing,

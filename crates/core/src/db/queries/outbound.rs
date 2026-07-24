@@ -114,6 +114,7 @@ pub fn item_names_by_event(conn: &Connection) -> Result<HashMap<i64, Vec<String>
 pub fn insert(conn: &Connection, draft: &OutboundEventDraft, item_ids: &[i64]) -> Result<i64> {
     let date = parse_date(&draft.date)?;
     let cash_amount = parse_cash(&draft.cash_amount_brl_str);
+    require_gift(item_ids, cash_amount)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "INSERT INTO outbound_event (date, recipient_project_id, cash_amount_brl, notes)
@@ -146,6 +147,7 @@ pub fn update(
 ) -> Result<()> {
     let date = parse_date(&draft.date)?;
     let cash_amount = parse_cash(&draft.cash_amount_brl_str);
+    require_gift(item_ids, cash_amount)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "UPDATE outbound_event
@@ -239,6 +241,21 @@ fn parse_cash(s: &str) -> Option<Decimal> {
     } else {
         crate::money::parse_amount_input(t)
     }
+}
+
+/// Authoritative guard: an outbound event needs at least one item or a
+/// positive cash amount, or it's a no-op donation to nobody. Previously
+/// this was only checked client-side (`outbound.rs`'s `gift_ok`/`form_ok`
+/// gate on the desktop Save button) — nothing stopped a caller that isn't
+/// the desktop UI from creating an empty event.
+fn require_gift(item_ids: &[i64], cash_amount: Option<Decimal>) -> rusqlite::Result<()> {
+    let has_cash = cash_amount.map(|d| d > Decimal::ZERO).unwrap_or(false);
+    if item_ids.is_empty() && !has_cash {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            "an outbound event needs at least one item or a cash amount".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_date(s: &str) -> rusqlite::Result<String> {
@@ -395,6 +412,7 @@ mod tests {
         .unwrap();
         let mut d = draft(rp);
         d.date = "16.07.2026".to_string();
+        d.cash_amount_brl_str = "5.00".to_string();
         let id = insert(&conn, &d, &[]).unwrap();
         let stored: String = conn
             .query_row(
@@ -421,6 +439,58 @@ mod tests {
         .unwrap();
         let mut d = draft(rp);
         d.date = "31.02.2026".to_string();
+        assert!(insert(&conn, &d, &[]).is_err());
+    }
+
+    #[test]
+    fn an_event_with_no_items_and_no_cash_is_rejected() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        assert!(insert(&conn, &draft(rp), &[]).is_err());
+    }
+
+    #[test]
+    fn a_cash_only_gift_with_no_items_is_allowed() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let mut d = draft(rp);
+        d.cash_amount_brl_str = "10.00".to_string();
+        insert(&conn, &d, &[]).unwrap();
+    }
+
+    #[test]
+    fn a_zero_cash_amount_with_no_items_is_still_rejected() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let mut d = draft(rp);
+        d.cash_amount_brl_str = "0.00".to_string();
         assert!(insert(&conn, &d, &[]).is_err());
     }
 }

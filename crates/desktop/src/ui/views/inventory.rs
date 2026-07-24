@@ -16,6 +16,7 @@ use adm_sfa_core::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
+use adm_sfa_core::service;
 
 enum Mode {
     List,
@@ -771,21 +772,12 @@ impl InventoryView {
         }
 
         if let Some((doc_id, filename)) = remove_doc {
-            match docs_qry::soft_delete(db, doc_id) {
-                Err(e) => {
-                    self.error =
-                        Some(t!("common.doc.error.db_update_failed", error = e).into_owned())
+            match docs_fs::remove_document(db, &documents_dir, doc_id, &filename) {
+                Err(e) => self.error = Some(e),
+                Ok(()) => {
+                    self.docs_needs_reload = true;
+                    self.error = None;
                 }
-                Ok(()) => match docs_fs::soft_delete(&documents_dir, &filename) {
-                    Err(e) => {
-                        self.error =
-                            Some(t!("common.doc.error.file_move_failed", error = e).into_owned())
-                    }
-                    Ok(()) => {
-                        self.docs_needs_reload = true;
-                        self.error = None;
-                    }
-                },
             }
         }
 
@@ -962,14 +954,17 @@ impl InventoryView {
                     let (path, label, is_temp) = (p.path.clone(), p.label.clone(), p.is_temp);
                     let existing: Vec<String> =
                         self.docs.iter().map(|d| d.filename.clone()).collect();
-                    // Items have no single "date" field of their own; use today's date
-                    // so filenames stay chronologically sortable at attach time.
-                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    match docs_fs::file_document(
+                    // Items have no single "date" field of their own — an
+                    // empty draft input and no persisted date both fall
+                    // through `service::attach_document`'s fallback chain
+                    // to today's date, so filenames stay chronologically
+                    // sortable at attach time.
+                    match service::attach_document(
                         db,
                         &documents_dir,
                         &path,
-                        &today,
+                        "",
+                        None,
                         ("item", edit_id),
                         &label,
                         &existing,

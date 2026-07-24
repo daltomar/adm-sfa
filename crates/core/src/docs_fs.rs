@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use rusqlite::Connection;
+use rust_i18n::t;
 
 use crate::db::queries::documents as docs_qry;
 
@@ -76,9 +77,40 @@ pub fn soft_delete(documents_dir: &Path, filename: &str) -> std::io::Result<()> 
     )
 }
 
+/// Soft-deletes a document: moves its file to `documents/_deleted/`, *then*
+/// marks the DB row deleted — file first, DB second, deliberately. Doing it
+/// in this order (rather than DB-then-file, as every call site used to do
+/// inline) means a failure partway through leaves the file still live but
+/// the DB row still active too, which self-heals on retry. The reverse
+/// order is worse: if the DB commit succeeds but the file move then fails,
+/// the row is marked deleted (so `list_for_record` stops returning it —
+/// nothing in the UI can reach it to retry) while the file is still sitting
+/// live in `documents/`, unreachable *and* still occupying its generated
+/// filename — a later document reusing that same generated name would
+/// silently overwrite it.
+///
+/// Idempotent: if the file's already at the `_deleted/` path (e.g. this is
+/// a retry after the DB step failed last time), the move is skipped rather
+/// than erroring on a missing source file.
+pub fn remove_document(
+    conn: &Connection,
+    documents_dir: &Path,
+    doc_id: i64,
+    filename: &str,
+) -> Result<(), String> {
+    let already_moved = documents_dir.join("_deleted").join(filename).is_file();
+    if !already_moved {
+        soft_delete(documents_dir, filename)
+            .map_err(|e| t!("common.doc.error.file_move_failed", error = e).into_owned())?;
+    }
+    docs_qry::soft_delete(conn, doc_id)
+        .map_err(|e| t!("common.doc.error.db_update_failed", error = e).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn no_collision() {
@@ -135,5 +167,80 @@ mod tests {
         assert_eq!(db_filename, filename);
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn setup_attached_doc(tag: &str) -> (Connection, PathBuf, String, i64) {
+        let conn = test_db();
+        let tmp = std::env::temp_dir().join(format!(
+            "adm-sfa-remove-document-test-{tag}-{}",
+            std::process::id()
+        ));
+        let documents_dir = tmp.join("documents");
+        std::fs::create_dir_all(documents_dir.join("_deleted")).unwrap();
+        let src = tmp.join("source.png");
+        std::fs::write(&src, b"fake png bytes").unwrap();
+        let filename = file_document(
+            &conn,
+            &documents_dir,
+            &src,
+            "2026-06-30",
+            ("purchase", 1),
+            "ad",
+            &[],
+        )
+        .unwrap();
+        let doc_id: i64 = conn
+            .query_row(
+                "SELECT id FROM document WHERE filename = ?1",
+                [&filename],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (conn, documents_dir, filename, doc_id)
+    }
+
+    fn is_deleted(conn: &Connection, doc_id: i64) -> bool {
+        conn.query_row(
+            "SELECT deleted FROM document WHERE id = ?1",
+            [doc_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+            != 0
+    }
+
+    #[test]
+    fn remove_document_moves_the_file_and_marks_it_deleted() {
+        let (conn, documents_dir, filename, doc_id) = setup_attached_doc("basic");
+
+        remove_document(&conn, &documents_dir, doc_id, &filename).unwrap();
+
+        assert!(
+            !documents_dir.join(&filename).is_file(),
+            "must leave the live dir"
+        );
+        assert!(documents_dir.join("_deleted").join(&filename).is_file());
+        assert!(is_deleted(&conn, doc_id));
+
+        std::fs::remove_dir_all(documents_dir.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn remove_document_is_idempotent_when_the_file_was_already_moved() {
+        // Simulates a retry after a previous attempt's DB step failed: the
+        // file is already sitting in `_deleted/`, but the row is still
+        // active. Must not error trying to move an already-moved file.
+        let (conn, documents_dir, filename, doc_id) = setup_attached_doc("retry");
+        std::fs::rename(
+            documents_dir.join(&filename),
+            documents_dir.join("_deleted").join(&filename),
+        )
+        .unwrap();
+
+        remove_document(&conn, &documents_dir, doc_id, &filename).unwrap();
+
+        assert!(is_deleted(&conn, doc_id));
+
+        std::fs::remove_dir_all(documents_dir.parent().unwrap()).ok();
     }
 }
