@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Donors</h1>
+<p><a class="button" href="/donors/new">+ New donor</a></p>
+<table>
+<thead>
+<tr><th>Name</th><th>Contact info</th></tr>
+</thead>
+<tbody>
+{% for d in donors %}
+<tr>
+  <td><a href="/donors/{{ d.id }}/edit">{{ d.name }}</a></td>
+  <td>{{ d.contact_info }}</td>
+</tr>
+{% else %}
+<tr><td colspan="2">No donors yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

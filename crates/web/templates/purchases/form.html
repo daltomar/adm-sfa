@@ -1,0 +1,104 @@
+{% extends "layout.html" %}
+{% block content %}
+{% if let Some(id) = id %}
+<h1>Edit purchase</h1>
+{% else %}
+<h1>New purchase</h1>
+{% endif %}
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/purchases/{{ id }}{% else %}/purchases{% endif %}">
+  <div class="field">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" value="{{ draft.date }}" required>
+  </div>
+  <div class="field">
+    <label for="currency">Currency</label>
+    <select id="currency" name="currency">
+      <option value="EUR" {% if draft.currency.as_str() == "EUR" %}selected{% endif %}>EUR</option>
+      <option value="BRL" {% if draft.currency.as_str() == "BRL" %}selected{% endif %}>BRL</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="cost_str">Cost</label>
+    <input type="text" id="cost_str" name="cost_str" value="{{ draft.cost_str }}" required>
+  </div>
+  <div class="field">
+    <label for="channel">Channel</label>
+    <input type="text" id="channel" name="channel" value="{{ draft.channel }}" required>
+  </div>
+  <div class="field">
+    <label for="seller_info">Seller info</label>
+    <textarea id="seller_info" name="seller_info" rows="2">{{ draft.seller_info }}</textarea>
+  </div>
+  <div class="field">
+    <label>
+      <input type="checkbox" name="multiple_items" {% if draft.multiple_items %}checked{% endif %}>
+      Multiple items (this purchase can back more than one inventory item)
+    </label>
+  </div>
+  {% if id.is_none() %}
+  <div class="field">
+    <label>
+      <input type="checkbox" name="negotiating">
+      Start as negotiating (no ledger entry until marked bought)
+    </label>
+  </div>
+  {% endif %}
+  <div class="actions">
+    <button type="submit">Save</button>
+    <a class="button secondary" href="/purchases">Cancel</a>
+  </div>
+</form>
+
+{% if let Some(id) = id %}
+  {% if is_negotiating %}
+  <div class="actions">
+    <form method="post" action="/purchases/{{ id }}/mark-bought">
+      <button type="submit">Mark as bought</button>
+    </form>
+    <form method="post" action="/purchases/{{ id }}/drop"
+          onsubmit="return confirm('Permanently delete this negotiating purchase? This cannot be undone.');">
+      <button type="submit" class="danger">Drop negotiating purchase</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <h2>Documents</h2>
+  <table>
+    <thead><tr><th>Label</th><th>File</th><th></th></tr></thead>
+    <tbody>
+    {% for doc in documents %}
+    <tr>
+      <td>{{ doc.label }}</td>
+      <td><a href="/documents/{{ doc.filename }}" target="_blank">{{ doc.filename }}</a></td>
+      <td>
+        <form class="inline" method="post" action="/purchases/{{ id }}/documents/{{ doc.id }}/delete"
+              onsubmit="return confirm('Remove this document?');">
+          <button type="submit" class="danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3">No documents attached.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Attach a document</h3>
+  <form method="post" action="/purchases/{{ id }}/documents" enctype="multipart/form-data">
+    <div class="field">
+      <label for="label">Label</label>
+      <input type="text" id="label" name="label" placeholder="e.g. ad, receipt, chat">
+    </div>
+    <div class="field">
+      <label for="file">File</label>
+      <input type="file" id="file" name="file" required>
+    </div>
+    <button type="submit">Upload</button>
+  </form>
+{% endif %}
+{% endblock %}

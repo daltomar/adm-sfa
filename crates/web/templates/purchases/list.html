@@ -1,0 +1,23 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Purchases</h1>
+<p><a class="button" href="/purchases/new">+ New purchase</a></p>
+<table>
+<thead>
+<tr><th>Date</th><th>Channel</th><th>Cost</th><th>Status</th><th>Multi-item</th></tr>
+</thead>
+<tbody>
+{% for p in purchases %}
+<tr>
+  <td>{{ p.date_display }}</td>
+  <td><a href="/purchases/{{ p.id }}/edit">{{ p.channel }}</a></td>
+  <td>{{ p.currency_symbol }} {{ p.cost_display }}</td>
+  <td>{{ p.status_label }}</td>
+  <td>{% if p.multiple_items %}yes{% else %}—{% endif %}</td>
+</tr>
+{% else %}
+<tr><td colspan="5">No purchases yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

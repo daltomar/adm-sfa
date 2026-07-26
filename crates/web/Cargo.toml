@@ -1,0 +1,25 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "adm-sfa-web"
+path = "src/main.rs"
+
+[dependencies]
+adm_sfa_core = { path = "../core" }
+reports = { path = "../reports" }
+
+axum = { version = "0.8", features = ["multipart"] }
+axum-extra = { version = "0.10", features = ["cookie-signed"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6", features = ["fs"] }
+askama = "0.12"
+serde = { version = "1", features = ["derive"] }
+subtle = "2"
+
+rusqlite = { workspace = true }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+rust-i18n = { workspace = true }
