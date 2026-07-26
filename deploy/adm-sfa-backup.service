@@ -1,0 +1,27 @@
+[Unit]
+Description=adm-sfa nightly backup (sqlite3 .backup + rsync of documents/)
+
+[Service]
+Type=oneshot
+User=adm-sfa
+Group=adm-sfa
+
+# Same data root as adm-sfa-web.service — TODO: fill in the same <DATA_DIR>.
+Environment=ADM_SFA_DATA_DIR=<DATA_DIR>
+# TODO: local staging dir for DB snapshots before they're rsync'd off-box,
+# e.g. <DATA_DIR>/../adm-sfa-backup-staging (must NOT be under
+# ReadWritePaths-restricted paths adm-sfa-web.service doesn't also need —
+# this service has its own ReadWritePaths below, independent of the web
+# unit's).
+Environment=ADM_SFA_BACKUP_DIR=<BACKUP_STAGING_DIR>
+# TODO: rsync destination — another host, NAS, etc. Must be reachable
+# non-interactively (SSH key in adm-sfa's home, or rsync daemon auth) since
+# this runs unattended overnight.
+Environment=ADM_SFA_BACKUP_REMOTE=<user@remote-host:/path/adm-sfa-backups>
+
+ExecStart=/usr/local/bin/adm-sfa-backup.sh
+
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=<DATA_DIR> <BACKUP_STAGING_DIR>
+NoNewPrivileges=true
