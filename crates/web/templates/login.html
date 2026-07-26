@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>adm-sfa — Log in</title>
+<style>
+  body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f4f4f4; }
+  form { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 280px; }
+  h1 { font-size: 1.2rem; margin-top: 0; }
+  input[type=password] { width: 100%; padding: 0.5rem; box-sizing: border-box; margin-bottom: 1rem; }
+  button { width: 100%; background: #2b3a4a; color: #fff; border: none; padding: 0.6rem; border-radius: 4px; cursor: pointer; }
+  .error { color: #a30000; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>adm-sfa</h1>
+  {% if let Some(msg) = error %}
+  <div class="error">{{ msg }}</div>
+  {% endif %}
+  <input type="password" name="password" placeholder="Shared password" autofocus required>
+  <button type="submit">Log in</button>
+</form>
+</body>
+</html>

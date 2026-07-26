@@ -49,10 +49,12 @@ there.
   negotiation status, inline "+ New donor", permanent itemized inventory
   table, native screenshot capture) are all shipped. Next candidates are
   Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
-- **In progress: workspace restructure + web front-end — phases 1–4 of 6
-  done, on `main`.** See "Workspace restructure and web front-end" below
-  for the full phase list, what each one did, and backlog items its review
-  surfaced. Remaining: phase 5 (web crate) and phase 6 (deployment). The
+- **In progress: workspace restructure + web front-end — phases 1–5 of 6
+  done** (phase 5 not yet merged to `main` — see below). See "Workspace
+  restructure and web front-end" below for the full phase list, what each
+  one did, and backlog items its review surfaced. Phase 5 shipped a
+  deliberately reduced scope: only Purchases and Donors ported to `web`,
+  seven sections still backlog. Remaining: phase 6 (deployment). The
   desktop app has kept working and behaving identically at every phase
   boundary so far. Tag `v1.0-desktop` marks the pre-restructure state.
 
@@ -310,7 +312,30 @@ one compiles, passes tests, and behaves identically.
    — the rest are logged below, not fixed.
 5. **Web crate.** axum + server-rendered templates over the service layer.
    Multipart upload replacing drag-and-drop; file serving for
-   `documents/`; single shared password + session cookie.
+   `documents/`; single shared password + session cookie. **Done, reduced
+   scope** — see `crates/web/` (new binary `adm-sfa-web`, Askama 0.12
+   templates under `crates/web/templates/`). Only two of the desktop's nine
+   sections were ported this pass — Purchases (the "rich" section: full
+   CRUD, negotiating→bought lifecycle via `service::mark_purchase_bought`,
+   document upload/removal via `service::attach_document`/
+   `docs_fs::remove_document`) and Donors (a simple CRUD section) — the
+   remaining seven (EUR/BRL Ledger, Transfers, Inventory, Outbound, Reports,
+   Settings) are backlog for a later session, per explicit scope-reduction
+   choice ("skeleton + 1–2 sections first" over "full parity in one
+   session"). Auth: single shared password from `ADM_SFA_WEB_PASSWORD`
+   (constant-time compare via `subtle`), signed session cookie
+   (`axum-extra`'s `SignedCookieJar`, `HttpOnly` + `SameSite=Strict`, no
+   per-user identity — matches the "two users, one machine, no sync"
+   constraint). `AppState.db` is a single `Connection` behind a plain
+   `Mutex` (not a pool), matching `desktop`'s single-`Connection` shape;
+   `AppState::conn()` recovers from mutex poisoning rather than panicking
+   the whole server on one bad request. Binds to `127.0.0.1:8080` by
+   default (LAN-wide binding deferred to phase 6). Reviewed by
+   `rust-code-reviewer`: no 🔴 findings; three 🟡s (silent error-swallowing
+   in `mark_bought`/`remove_document`/`attach_document`'s no-file case,
+   temp-upload filename collisions under concurrent requests, mutex-poison
+   panic risk) fixed before commit — the remaining 🟡/🟢s are logged below,
+   not fixed.
 6. **Deployment.** systemd unit, own `adm-sfa` user, `WorkingDirectory` at
    the data root, hardening (`PrivateTmp`, `ProtectSystem=strict`,
    `ReadWritePaths` scoped to the data dir, `NoNewPrivileges`), bind to
@@ -422,6 +447,58 @@ arithmetic, per `rust-code-reviewer`):
   the thing that surfaced it during review. Fix direction: either have
   `generate_filename` also consult `_deleted/` filenames, or namespace
   `_deleted/` by document id so collisions can't occur at all.
+
+**New backlog items found during phase 5's review** (not fixed — per
+`rust-code-reviewer`; the three 🟡s that *were* fixed before commit are
+described in the phase 5 summary above, not repeated here):
+- The multipart upload's `label` field (`crates/web/src/routes/
+  purchases.rs::attach_document`) is arbitrary free text with no allow-list
+  check against `document_label` — desktop restricts the equivalent field to
+  a `ComboBox`. Verified live that a path-traversal payload (`label=../../
+  ../../tmp/.../pwned`) does *not* escape `documents_dir` today, but only as
+  an accident of how `docs_fs::generate_filename` concatenates
+  `{date}_{record_type}-{record_id}_{label}` (the date/record prefix means
+  `label` can never be the first path segment, and `fs::copy` doesn't
+  auto-create missing directories) — not a validated guarantee. Per
+  CLAUDE.md's own "business rules live in core" rule, this belongs in
+  `core` (validate `label` against `docs_qry::labels(conn)`, or reject `/`,
+  `\`, NUL outright) rather than trusted-by-convention in each UI caller,
+  since an HTTP client can send anything.
+- `crates/web` has zero automated tests (`cargo test -p web` → 0). Given
+  this crate's whole job is an auth gate and untrusted multipart handling,
+  `auth::password_matches`/`require_auth` and `attach_document`'s edge cases
+  are the highest-value first targets.
+- `routes/purchases.rs`'s `edit_form`/`update`/`mark_bought`/
+  `attach_document`/`remove_document` (and `donors.rs::edit_form`) each
+  re-fetch the full `purchases_qry::list()`/`donors_qry::list()` and
+  `.find(|x| x.id == id)` rather than a targeted single-row lookup — fine at
+  this data scale, repeated ~5x in one file. A `purchases_qry::get(conn,
+  id)` / `donors_qry::get(conn, id)` in `core` (which `web`, unlike
+  `desktop`'s stateful views, actually needs per-request) would remove the
+  duplication; `crates/web/src/routes/purchases.rs::draft_from_purchase`
+  and `purchase_form_error_response` already consolidate the
+  draft-construction and error-rendering halves of the same duplication.
+- `crates/web/src/main.rs::parse_data_dir` duplicates `crates/desktop/src/
+  main.rs`'s hand-rolled `--data-dir` parsing verbatim — candidate to move
+  into `adm_sfa_core::config` alongside `default_data_dir()`.
+- `/logout` (`crates/web/src/routes/login.rs`) is a plain `GET`, trivially
+  triggerable cross-site (e.g. an `<img>` tag) to force-end a session. Low
+  impact (ends a session, no data effect) but conventionally should be a
+  `POST`.
+- The session cookie has no explicit `Max-Age`/`Expires` (browser-session
+  cookie) — combined with the signing key being regenerated fresh per
+  process start, a long-lived open tab stays authenticated indefinitely
+  between server restarts. Likely fine for this threat model; flagged so
+  it's a decision, not an oversight.
+- Web templates and route handlers use hardcoded English strings — no
+  `t!()` calls anywhere in `crates/web`, a deliberate, temporary violation
+  of T2 for this reduced-scope pass. Needs i18n wiring before `web` is
+  considered done, not just before it's exposed off-LAN.
+- No PDF/CSV export wired into `web` yet (Reports section isn't ported at
+  all this pass).
+- Session mechanism restart-invalidates-all-sessions tradeoff (see phase 5
+  summary above) — revisit if restarts turn out to be more frequent than
+  expected once this is in real use.
 
 What the audit found *correct* and not to be "improved" during the move:
 `db/queries/*` (parameterized, no business logic), `model/*` (enum
