@@ -1,0 +1,55 @@
+{% extends "layout.html" %}
+{% block content %}
+{% if let Some(id) = id %}
+<h1>Edit EUR ledger entry</h1>
+{% else %}
+<h1>New EUR ledger entry</h1>
+{% endif %}
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/eur-ledger/{{ id }}{% else %}/eur-ledger{% endif %}">
+  {% if let Some(lbl) = type_label %}
+  <div class="field">
+    <label>Type</label>
+    <div>{{ lbl }}</div>
+  </div>
+  {% else %}
+  <div class="field">
+    <label>Type</label>
+    <label><input type="radio" name="tx_type" value="donation_in" checked> Donation</label>
+    <label><input type="radio" name="tx_type" value="self_funding_in"> Self-funding</label>
+  </div>
+  {% endif %}
+  <div class="field">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" value="{{ date }}" required>
+  </div>
+  <div class="field">
+    <label for="amount_str">Amount (&euro;)</label>
+    <input type="text" id="amount_str" name="amount_str" value="{{ amount_str }}" required>
+  </div>
+  {% if show_donor %}
+  <div class="field">
+    <label for="donor_id">Donor</label>
+    <select id="donor_id" name="donor_id">
+      <option value="">&mdash; none &mdash;</option>
+      {% for d in donors %}
+      <option value="{{ d.0 }}" {% if d.2 %}selected{% endif %}>{{ d.1 }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">Only used for Donation entries &mdash; ignored if Self-funding is selected. Need a new donor first? <a href="/donors/new">Add one</a>.</p>
+  </div>
+  {% endif %}
+  <div class="field">
+    <label for="note">Note</label>
+    <textarea id="note" name="note" rows="3">{{ note }}</textarea>
+  </div>
+  <div class="actions">
+    <button type="submit">Save</button>
+    <a class="button secondary" href="/eur-ledger">Cancel</a>
+  </div>
+</form>
+{% endblock %}

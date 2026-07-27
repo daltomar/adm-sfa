@@ -76,3 +76,60 @@ pub struct DonorFormTemplate {
     pub draft: adm_sfa_core::model::donor::DonorDraft,
     pub error: Option<String>,
 }
+
+pub struct EurLedgerRow {
+    pub id: i64,
+    pub date_display: String,
+    pub type_label: String,
+    pub sign: &'static str,
+    pub amount_display: String,
+    pub desc: String,
+    /// Only manual entries (Donation/Self-funding) link to an edit form —
+    /// purchase- and transfer-linked entries are auto-created and read-only
+    /// here, same as desktop.
+    pub editable: bool,
+}
+
+#[derive(Template)]
+#[template(path = "eur_ledger/list.html")]
+pub struct EurLedgerListTemplate {
+    pub rows: Vec<EurLedgerRow>,
+    pub balance_display: String,
+    pub balance_positive: bool,
+}
+
+#[derive(Template)]
+#[template(path = "eur_ledger/form.html")]
+pub struct EurTxFormTemplate {
+    pub id: Option<i64>,
+    pub date: String,
+    /// `None` when adding (radios shown, both choices possible); `Some(label)`
+    /// when editing an existing manual entry (type is fixed after creation).
+    pub type_label: Option<String>,
+    /// Whether the donor field should be shown: always true when adding
+    /// (the chosen radio isn't known until submit, so both fields render and
+    /// the server ignores donor_id if self-funding was submitted); only true
+    /// when editing a donation entry.
+    pub show_donor: bool,
+    pub amount_str: String,
+    /// (donor id, donor name, whether this donor is the currently selected one).
+    pub donors: Vec<(i64, String, bool)>,
+    pub note: String,
+    pub error: Option<String>,
+}
+
+pub struct BrlLedgerRow {
+    pub date_display: String,
+    pub type_label: String,
+    pub sign: &'static str,
+    pub amount_display: String,
+    pub desc: String,
+}
+
+#[derive(Template)]
+#[template(path = "brl_ledger/list.html")]
+pub struct BrlLedgerListTemplate {
+    pub rows: Vec<BrlLedgerRow>,
+    pub balance_display: String,
+    pub balance_positive: bool,
+}
