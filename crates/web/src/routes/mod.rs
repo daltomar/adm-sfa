@@ -5,4 +5,5 @@ pub mod inventory;
 pub mod login;
 pub mod outbound;
 pub mod purchases;
+pub mod reports;
 pub mod transfers;

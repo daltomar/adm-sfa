@@ -288,3 +288,34 @@ pub struct RecipientsTemplate {
     pub recipients: Vec<RecipientRow>,
     pub error: Option<String>,
 }
+
+pub struct TabLink {
+    pub label: &'static str,
+    pub href: String,
+    pub active: bool,
+}
+
+/// A label/value pair for the small stats panel shown above the EUR/BRL
+/// tabs' detail table — e.g. ("Donations (3)", "€ 450.00"). `None` for the
+/// other four tabs (Donors, Inventory, Outbound, Audit Trail), which are
+/// just a table with no separate aggregate panel.
+pub struct SummaryLine {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Template)]
+#[template(path = "reports/index.html")]
+pub struct ReportsTemplate {
+    pub tabs: Vec<TabLink>,
+    pub active_tab: &'static str,
+    pub date_from: String,
+    pub date_to: String,
+    pub recipient_id: Option<i64>,
+    /// (recipient id, name, whether this is the currently selected filter).
+    pub recipients: Vec<(i64, String, bool)>,
+    pub summary: Vec<SummaryLine>,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub error: Option<String>,
+}
