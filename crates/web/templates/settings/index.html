@@ -1,0 +1,67 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Settings</h1>
+<p class="hint">Category and document-label management only &mdash; the report language picker, screenshot-capture command, and manual backup button are desktop-only (see the app's own notes on why).</p>
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<h2>Categories</h2>
+<table>
+<thead><tr><th>Name</th><th></th><th></th></tr></thead>
+<tbody>
+{% for c in categories %}
+<tr>
+  <td>
+    <form class="inline" method="post" action="/settings/categories/{{ c.0 }}">
+      <input type="text" name="name" value="{{ c.1 }}" style="width: 220px;">
+      <button type="submit">Save</button>
+    </form>
+  </td>
+  <td>
+    <form class="inline" method="post" action="/settings/categories/{{ c.0 }}/delete"
+          onsubmit="return confirm('Delete this category?');">
+      <button type="submit" class="danger">Delete</button>
+    </form>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="2">No categories yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<form method="post" action="/settings/categories" style="margin-top: 0.6rem;">
+  <input type="text" name="name" placeholder="New category name" style="width: 220px;" required>
+  <button type="submit">Add category</button>
+</form>
+
+<h2 style="margin-top: 2rem;">Document labels</h2>
+<table>
+<thead><tr><th>Name</th><th></th><th></th></tr></thead>
+<tbody>
+{% for l in labels %}
+<tr>
+  <td>
+    <form class="inline" method="post" action="/settings/labels/{{ l.0 }}">
+      <input type="text" name="name" value="{{ l.1 }}" style="width: 220px;">
+      <button type="submit">Save</button>
+    </form>
+  </td>
+  <td>
+    <form class="inline" method="post" action="/settings/labels/{{ l.0 }}/delete"
+          onsubmit="return confirm('Delete this label? Documents already using it keep their label text.');">
+      <button type="submit" class="danger">Delete</button>
+    </form>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="2">No document labels yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<form method="post" action="/settings/labels" style="margin-top: 0.6rem;">
+  <input type="text" name="name" placeholder="New label name" style="width: 220px;" required>
+  <button type="submit">Add label</button>
+</form>
+{% endblock %}

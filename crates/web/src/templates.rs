@@ -319,3 +319,11 @@ pub struct ReportsTemplate {
     pub rows: Vec<Vec<String>>,
     pub error: Option<String>,
 }
+
+#[derive(Template)]
+#[template(path = "settings/index.html")]
+pub struct SettingsTemplate {
+    pub categories: Vec<(i64, String)>,
+    pub labels: Vec<(i64, String)>,
+    pub error: Option<String>,
+}

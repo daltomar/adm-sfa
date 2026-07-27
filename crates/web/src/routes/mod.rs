@@ -6,4 +6,5 @@ pub mod login;
 pub mod outbound;
 pub mod purchases;
 pub mod reports;
+pub mod settings;
 pub mod transfers;
