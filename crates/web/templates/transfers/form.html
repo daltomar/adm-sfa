@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+{% block content %}
+{% if let Some(id) = id %}
+<h1>Edit transfer</h1>
+{% else %}
+<h1>New transfer</h1>
+{% endif %}
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/transfers/{{ id }}{% else %}/transfers{% endif %}">
+  <div class="field">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" value="{{ date }}" required>
+  </div>
+  <div class="field">
+    <label for="eur_amount_sent_str">EUR sent</label>
+    <input type="text" id="eur_amount_sent_str" name="eur_amount_sent_str" value="{{ eur_amount_sent_str }}" required>
+  </div>
+  <div class="field">
+    <label for="exchange_rate_str">Exchange rate (EUR &rarr; BRL)</label>
+    <input type="text" id="exchange_rate_str" name="exchange_rate_str" value="{{ exchange_rate_str }}" placeholder="e.g. 5.5" required>
+  </div>
+  {% if let Some(preview) = brl_preview %}
+  <p class="hint">BRL received: R$ {{ preview }}</p>
+  {% endif %}
+  <div class="field">
+    <label for="notes">Notes</label>
+    <textarea id="notes" name="notes" rows="3">{{ notes }}</textarea>
+  </div>
+  <div class="actions">
+    <button type="submit">Save</button>
+    <a class="button secondary" href="/transfers">Cancel</a>
+  </div>
+</form>
+
+{% if let Some(id) = id %}
+  <h2>Documents</h2>
+  <table>
+    <thead><tr><th>Label</th><th>File</th><th></th></tr></thead>
+    <tbody>
+    {% for doc in documents %}
+    <tr>
+      <td>{{ doc.label }}</td>
+      <td><a href="/documents/{{ doc.filename }}" target="_blank">{{ doc.filename }}</a></td>
+      <td>
+        <form class="inline" method="post" action="/transfers/{{ id }}/documents/{{ doc.id }}/delete"
+              onsubmit="return confirm('Remove this document?');">
+          <button type="submit" class="danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3">No documents attached.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Attach a document</h3>
+  <form method="post" action="/transfers/{{ id }}/documents" enctype="multipart/form-data">
+    <div class="field">
+      <label for="label">Label</label>
+      <input type="text" id="label" name="label" placeholder="e.g. bank receipt">
+    </div>
+    <div class="field">
+      <label for="file">File</label>
+      <input type="file" id="file" name="file" required>
+    </div>
+    <button type="submit">Upload</button>
+  </form>
+{% endif %}
+{% endblock %}

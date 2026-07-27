@@ -133,3 +133,34 @@ pub struct BrlLedgerListTemplate {
     pub balance_display: String,
     pub balance_positive: bool,
 }
+
+pub struct TransferRow {
+    pub id: i64,
+    pub date_display: String,
+    pub eur_display: String,
+    pub brl_display: String,
+    pub rate_display: String,
+}
+
+#[derive(Template)]
+#[template(path = "transfers/list.html")]
+pub struct TransfersListTemplate {
+    pub transfers: Vec<TransferRow>,
+}
+
+#[derive(Template)]
+#[template(path = "transfers/form.html")]
+pub struct TransferFormTemplate {
+    pub id: Option<i64>,
+    pub date: String,
+    pub eur_amount_sent_str: String,
+    pub exchange_rate_str: String,
+    pub notes: String,
+    /// Live EUR*rate preview, shown when both fields currently parse —
+    /// mirrors desktop's own non-authoritative preview label
+    /// (`ui/views/transfers.rs`); the authoritative BRL amount is computed
+    /// in `core::db::queries::transfers` at save time.
+    pub brl_preview: Option<String>,
+    pub error: Option<String>,
+    pub documents: Vec<adm_sfa_core::model::document::Document>,
+}
