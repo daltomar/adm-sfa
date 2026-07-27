@@ -144,6 +144,24 @@ fn check_purchase_source(
     let Some(pid) = draft.source_purchase_id else {
         return Ok(());
     };
+    // Negotiating purchases have no ledger row yet (see CLAUDE.md "Purchase
+    // negotiation status") — desktop's `show_purchase_source` and web's
+    // `purchase_options` both already exclude negotiating purchases from
+    // the picker, but that was UI-only until now: nothing here re-checked
+    // status, so a crafted request bypassing the picker (or a future
+    // caller that isn't a form at all) could link an item to a purchase
+    // that was never confirmed bought.
+    let status: String = conn
+        .query_row("SELECT status FROM purchase WHERE id = ?1", [pid], |row| {
+            row.get(0)
+        })
+        .optional()?
+        .unwrap_or_else(|| "bought".to_string()); // missing row: FK catches it at insert/update.
+    if status != "bought" {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            "purchase is still negotiating and has no confirmed cost yet".into(),
+        ));
+    }
     if let Some(channel) = purchase_source_conflict(conn, pid, edit_id)? {
         return Err(rusqlite::Error::ToSqlConversionFailure(
             format!("purchase ({channel}) is single-item and already linked to another item")
@@ -331,5 +349,58 @@ mod tests {
         let purchase_id = purchase(&conn, false);
         let item_id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
         update(&conn, item_id, &item_draft(cat_id, purchase_id)).unwrap();
+    }
+
+    #[test]
+    fn negotiating_purchase_cannot_be_used_as_a_source() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchases::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-02-10".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Negotiating,
+            },
+        )
+        .unwrap();
+        assert!(insert(&conn, &item_draft(cat_id, purchase_id)).is_err());
+    }
+
+    #[test]
+    fn marking_a_purchase_bought_makes_it_usable_as_a_source() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchases::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-02-10".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Negotiating,
+            },
+        )
+        .unwrap();
+        assert!(insert(&conn, &item_draft(cat_id, purchase_id)).is_err());
+
+        let bought = PurchaseDraft {
+            date: "2026-02-10".to_string(),
+            currency: Currency::Eur,
+            cost_str: "50.00".to_string(),
+            channel: "Kleinanzeigen".to_string(),
+            seller_info: String::new(),
+            multiple_items: false,
+            status: PurchaseStatus::Bought,
+        };
+        purchases::update(&conn, purchase_id, &bought).unwrap();
+
+        insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
     }
 }

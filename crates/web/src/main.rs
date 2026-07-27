@@ -47,6 +47,7 @@ async fn main() {
         .merge(routes::eur_ledger::router())
         .merge(routes::brl_ledger::router())
         .merge(routes::transfers::router())
+        .merge(routes::inventory::router())
         .nest_service("/documents", ServeDir::new(&documents_dir))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

@@ -164,3 +164,76 @@ pub struct TransferFormTemplate {
     pub error: Option<String>,
     pub documents: Vec<adm_sfa_core::model::document::Document>,
 }
+
+pub struct InventoryRow {
+    pub id: i64,
+    pub name: String,
+    pub category_name: String,
+    pub location_label: &'static str,
+    pub status_label: &'static str,
+    pub source_desc: String,
+}
+
+#[derive(Template)]
+#[template(path = "inventory/list.html")]
+pub struct InventoryListTemplate {
+    pub items: Vec<InventoryRow>,
+}
+
+pub struct CategoryOption {
+    pub id: i64,
+    pub name: String,
+    pub selected: bool,
+}
+
+pub struct DonationOption {
+    pub id: i64,
+    pub label: String,
+    pub selected: bool,
+}
+
+pub struct PurchaseOption {
+    pub id: i64,
+    pub label: String,
+    pub selected: bool,
+    /// A single-item purchase already linked to a *different* inventory
+    /// item — mirrors desktop's `purchase_source_blocked` grey-out. Shown
+    /// as a disabled `<option>` rather than omitted, so it's clear the
+    /// purchase exists but can't be picked, same as desktop.
+    pub blocked: bool,
+}
+
+#[derive(Template)]
+#[template(path = "inventory/form.html")]
+pub struct InventoryFormTemplate {
+    pub id: Option<i64>,
+    pub name: String,
+    /// "germany" or "brazil" — compared directly in the template rather
+    /// than via a bool-per-option, since Askama handles a plain string
+    /// `==` in an expression fine (see `purchases/form.html`'s
+    /// `draft.currency.as_str() == "EUR"`).
+    pub location: String,
+    pub status: String,
+    /// "donation" or "purchase".
+    pub source_type: String,
+    pub categories: Vec<CategoryOption>,
+    pub donations: Vec<DonationOption>,
+    pub purchases: Vec<PurchaseOption>,
+    pub notes: String,
+    pub error: Option<String>,
+    pub documents: Vec<adm_sfa_core::model::document::Document>,
+}
+
+pub struct DonationRow {
+    pub date_display: String,
+    pub donor_display: String,
+}
+
+#[derive(Template)]
+#[template(path = "inventory/donations.html")]
+pub struct DonationsTemplate {
+    pub donations: Vec<DonationRow>,
+    pub date: String,
+    pub donors: Vec<(i64, String)>,
+    pub error: Option<String>,
+}
