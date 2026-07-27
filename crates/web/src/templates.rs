@@ -237,3 +237,54 @@ pub struct DonationsTemplate {
     pub donors: Vec<(i64, String)>,
     pub error: Option<String>,
 }
+
+pub struct OutboundRow {
+    pub id: i64,
+    pub date_display: String,
+    pub recipient_name: String,
+    pub summary: String,
+}
+
+#[derive(Template)]
+#[template(path = "outbound/list.html")]
+pub struct OutboundListTemplate {
+    pub events: Vec<OutboundRow>,
+}
+
+pub struct RecipientOption {
+    pub id: i64,
+    pub name: String,
+    pub selected: bool,
+}
+
+pub struct ItemOption {
+    pub id: i64,
+    pub label: String,
+    pub selected: bool,
+}
+
+#[derive(Template)]
+#[template(path = "outbound/form.html")]
+pub struct OutboundFormTemplate {
+    pub id: Option<i64>,
+    pub date: String,
+    pub recipients: Vec<RecipientOption>,
+    pub cash_amount_brl_str: String,
+    pub notes: String,
+    pub items: Vec<ItemOption>,
+    pub error: Option<String>,
+}
+
+pub struct RecipientRow {
+    pub name: String,
+    pub contact_info: String,
+    pub location: String,
+    pub active: bool,
+}
+
+#[derive(Template)]
+#[template(path = "outbound/recipients.html")]
+pub struct RecipientsTemplate {
+    pub recipients: Vec<RecipientRow>,
+    pub error: Option<String>,
+}

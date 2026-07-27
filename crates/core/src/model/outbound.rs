@@ -3,10 +3,7 @@ use rust_decimal::Decimal;
 pub struct RecipientProject {
     pub id: i64,
     pub name: String,
-    // contact_info/location stored in DB; displayed when Settings is implemented
-    #[allow(dead_code)]
     pub contact_info: Option<String>,
-    #[allow(dead_code)]
     pub location: Option<String>,
     pub active: bool,
 }

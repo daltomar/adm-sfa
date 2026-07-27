@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% block content %}
+{% if let Some(id) = id %}
+<h1>Edit outbound event</h1>
+{% else %}
+<h1>New outbound event</h1>
+{% endif %}
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/outbound/{{ id }}{% else %}/outbound{% endif %}">
+  <div class="field">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" value="{{ date }}" required>
+  </div>
+  <div class="field">
+    <label for="recipient_project_id">Recipient project</label>
+    <select id="recipient_project_id" name="recipient_project_id" required>
+      <option value="">&mdash; choose one &mdash;</option>
+      {% for r in recipients %}
+      <option value="{{ r.id }}" {% if r.selected %}selected{% endif %}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">Don't see the recipient you need? <a href="/outbound/recipients">Add one</a> (opens a separate page &mdash; come back and pick it from the list after).</p>
+  </div>
+  <div class="field">
+    <label for="cash_amount_brl_str">Cash gift (R$, optional)</label>
+    <input type="text" id="cash_amount_brl_str" name="cash_amount_brl_str" value="{{ cash_amount_brl_str }}" placeholder="leave blank if none">
+  </div>
+  <div class="field">
+    <label for="notes">Notes</label>
+    <textarea id="notes" name="notes" rows="3">{{ notes }}</textarea>
+  </div>
+
+  <div class="field">
+    <label>Items donated</label>
+    <p class="hint">Only Available items are listed (plus any already linked to this event). An event needs at least one item or a cash amount.</p>
+    {% if items.is_empty() %}
+    <p class="hint">No eligible inventory items.</p>
+    {% endif %}
+    {% for i in items %}
+    <label style="display: block;">
+      <input type="checkbox" name="item_ids" value="{{ i.id }}" {% if i.selected %}checked{% endif %}>
+      {{ i.label }}
+    </label>
+    {% endfor %}
+  </div>
+
+  <div class="actions">
+    <button type="submit">Save</button>
+    <a class="button secondary" href="/outbound">Cancel</a>
+  </div>
+</form>
+{% endblock %}
