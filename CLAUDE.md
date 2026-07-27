@@ -49,14 +49,19 @@ there.
   negotiation status, inline "+ New donor", permanent itemized inventory
   table, native screenshot capture) are all shipped. Next candidates are
   Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
-- **In progress: workspace restructure + web front-end — phases 1–5 of 6
-  done** (phase 5 not yet merged to `main` — see below). See "Workspace
+- **All 6 planned phases of the workspace restructure + web front-end are
+  done, on `main`** (as of this branch — see below). See "Workspace
   restructure and web front-end" below for the full phase list, what each
-  one did, and backlog items its review surfaced. Phase 5 shipped a
-  deliberately reduced scope: only Purchases and Donors ported to `web`,
-  seven sections still backlog. Remaining: phase 6 (deployment). The
-  desktop app has kept working and behaving identically at every phase
-  boundary so far. Tag `v1.0-desktop` marks the pre-restructure state.
+  one did, and backlog items its review surfaced. Two things remain
+  deliberately open, not oversights: (1) phase 5 shipped a reduced scope —
+  only Purchases and Donors are ported to `web`, seven sections are
+  logged as backlog for future small sessions; (2) phase 6 shipped
+  deployment *templates* (`deploy/`) — nothing has actually been installed
+  on a real machine from within a session, since that requires editing
+  system files/creating a system user/configuring a firewall on a specific
+  host. The desktop app has kept working and behaving identically at every
+  phase boundary so far. Tag `v1.0-desktop` marks the pre-restructure
+  state.
 
 ## Purchase `multiple_items` flag (implemented)
 
@@ -341,7 +346,23 @@ one compiles, passes tests, and behaves identically.
    `ReadWritePaths` scoped to the data dir, `NoNewPrivileges`), bind to
    the LAN IP with a firewall rule scoped to the subnet,
    `WantedBy=multi-user.target` (the machine is not always on). Nightly
-   `sqlite3 .backup` + rsync of `documents/` off the machine.
+   `sqlite3 .backup` + rsync of `documents/` off the machine. **Done** —
+   artifacts under `deploy/` (`adm-sfa-web.service`,
+   `adm-sfa-backup.service` + `adm-sfa-backup.timer`, `backup.sh`); see
+   "Deploying the web service" below for the install sequence. These are
+   templates with `<PLACEHOLDER>` values (data dir, LAN IP, backup
+   destination) — none of it has been applied to a real machine from this
+   session, since doing so means editing system files, creating a system
+   user, and configuring a firewall on a specific host this session has no
+   access to. Verified only via `systemd-analyze verify` against copies
+   with placeholders substituted for dummy real paths — confirms the unit
+   syntax is sound, not that it behaves correctly once installed for real.
+   One decision made explicitly, not assumed: desktop's existing data
+   directory stays where it is (its current default under the interactive
+   user's home) rather than migrating to a system location like
+   `/var/lib/adm-sfa` — the dedicated `adm-sfa` service user gets group
+   access to that existing path instead, so there's no one-time data
+   migration and desktop's launch command doesn't change.
 
 ### Known domain-logic-in-view debt (phase 2 — fixed)
 
@@ -520,6 +541,75 @@ views (`donors.rs`, `settings.rs`).
 - PDF export (`typst-as-lib`) runs server-side in `web` and returns a
   download response.
 
+### Deploying the web service
+
+Templates live in `deploy/`: `adm-sfa-web.service`, `adm-sfa-backup.service`
++ `adm-sfa-backup.timer`, `backup.sh`. Every `<PLACEHOLDER>` in the `.service`
+files must be filled in for your actual machine before installing — none of
+this has been applied anywhere; see the phase 6 note above for why.
+
+**Design choice already made for you**: desktop's existing data directory
+(its current default, `~/.local/share/adm-sfa` under whichever interactive
+user runs it — confirm with that user's actual home dir, not assumed) stays
+exactly where it is. The dedicated `adm-sfa` service user gets *group*
+access to that same path rather than the data migrating to a system
+location like `/var/lib/adm-sfa`. If that's wrong for your setup, the
+`.service` files' `<DATA_DIR>`/`ReadWritePaths` placeholders are the only
+thing that needs to change — nothing else in this section assumes one path
+over the other.
+
+1. **Create the service user and share data access via group, not by
+   changing ownership** (changing ownership would break the interactive
+   user's own read/write access to their existing data):
+   ```sh
+   sudo useradd --system --no-create-home --shell /usr/sbin/nologin adm-sfa
+   sudo usermod -aG <interactive-user's-primary-group> adm-sfa
+   chmod -R g+rwX ~<interactive-user>/.local/share/adm-sfa
+   # new files/dirs created afterward need the setgid bit to keep inheriting
+   # group-write, or the desktop app's own umask needs to leave group-write on:
+   find ~<interactive-user>/.local/share/adm-sfa -type d -exec chmod g+s {} \;
+   ```
+2. **Build and install the binary**:
+   ```sh
+   cargo build --release -p web
+   sudo install -m 755 target/release/adm-sfa-web /usr/local/bin/adm-sfa-web
+   sudo install -m 755 deploy/backup.sh /usr/local/bin/adm-sfa-backup.sh
+   ```
+3. **Password file** — see "Setting `ADM_SFA_WEB_PASSWORD`" above for how to
+   pick one; for the systemd deployment specifically:
+   ```sh
+   sudo mkdir -p /etc/adm-sfa
+   sudo sh -c 'printf "ADM_SFA_WEB_PASSWORD=your-password-here\n" > /etc/adm-sfa/web-password.env'
+   sudo chmod 600 /etc/adm-sfa/web-password.env
+   sudo chown root:root /etc/adm-sfa/web-password.env
+   ```
+4. **Fill in the `<PLACEHOLDER>`s** in `deploy/adm-sfa-web.service` and
+   `deploy/adm-sfa-backup.service` (data dir, LAN IP, backup staging dir,
+   backup remote destination), then install the units:
+   ```sh
+   sudo cp deploy/adm-sfa-web.service deploy/adm-sfa-backup.service deploy/adm-sfa-backup.timer /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now adm-sfa-web.service
+   sudo systemctl enable --now adm-sfa-backup.timer
+   ```
+5. **Firewall — scope to the LAN subnet, not just the bind address.**
+   Binding `ADM_SFA_WEB_BIND` to the LAN interface IP (not `0.0.0.0`) is one
+   layer; the firewall rule is what actually restricts *which hosts* on
+   that interface can reach it. Example using `ufw` (adapt for
+   `nftables`/`iptables` if that's what the machine uses):
+   ```sh
+   sudo ufw allow from <LAN_SUBNET e.g. 192.168.1.0/24> to any port 8080 proto tcp
+   ```
+6. **Verify**: `sudo systemctl status adm-sfa-web` should show active
+   (running); `curl http://<LAN_IP>:8080/login` from another machine on the
+   subnet should get the login page; from outside the subnet it should time
+   out or be refused.
+
+`adm-sfa-backup.service`'s remote destination needs to be reachable
+non-interactively overnight (SSH key in `adm-sfa`'s environment, or an
+rsync-daemon target) — there's no prompt-for-credentials path in a
+`Type=oneshot` unit triggered by a timer.
+
 ## How to work in this repo
 
 1. On starting a session, read `SPEC.md` and `stack-plan.md` in full before
@@ -665,3 +755,41 @@ cargo test --workspace                       # run all tests across crates
 cargo clippy --workspace -- -D warnings      # lint everything
 cargo fmt --all                              # format all crates
 ```
+
+### Setting `ADM_SFA_WEB_PASSWORD`
+
+`web` refuses to start without it (`crates/web/src/main.rs`) — there is no
+default and no fallback. It's the single shared password for the whole app
+(no per-user accounts, no DB storage, no hashing — see phase 5's summary
+above), so treat it like any other shared secret: not on the command line
+(shell history), not committed anywhere.
+
+For a one-off dev run — POSIX `sh`/dash doesn't support bash's `read -s`, so
+hide the input via `stty` directly instead (this is what `read -s` does
+internally anyway, and it works in any shell):
+
+```sh
+stty -echo; printf 'Password: '; read ADM_SFA_WEB_PASSWORD; stty echo; printf '\n'
+export ADM_SFA_WEB_PASSWORD
+cargo run -p web
+```
+
+(bash/zsh users can use the shorter `read -s ADM_SFA_WEB_PASSWORD` if
+preferred — just not portable to `sh`/dash.)
+
+For a longer-running instance on the Linux machine, before phase 6 wires up
+a systemd `EnvironmentFile=`, use a permission-restricted env file instead
+of exporting it by hand each time:
+
+```sh
+mkdir -p ~/.config/adm-sfa
+printf 'ADM_SFA_WEB_PASSWORD=your-password-here\n' > ~/.config/adm-sfa/web.env
+chmod 600 ~/.config/adm-sfa/web.env         # world/group-readable defeats the point
+
+set -a; . ~/.config/adm-sfa/web.env; set +a   # "." not "source" — POSIX sh doesn't have `source`
+cargo run -p web
+```
+
+`ADM_SFA_WEB_BIND` (default `127.0.0.1:8080`, LAN-wide binding deferred to
+phase 6) and `ADM_SFA_DATA_DIR` / `--data-dir` (same convention as
+`desktop`) are the other two environment knobs `web` reads at startup.

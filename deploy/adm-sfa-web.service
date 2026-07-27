@@ -1,0 +1,43 @@
+[Unit]
+Description=adm-sfa web front-end
+After=network.target
+
+[Service]
+Type=simple
+User=adm-sfa
+Group=adm-sfa
+
+# TODO: replace <DATA_DIR> with the desktop app's actual existing data root
+# on this machine, e.g. /home/<your-interactive-user>/.local/share/adm-sfa
+# (run `adm-sfa --data-dir` unset and check its default, or look for
+# adm-sfa.db, if unsure). Web and desktop must point at the exact same
+# path — see CLAUDE.md's "core takes its data root as configuration"
+# constraint and the phase 6 deployment section for the group-sharing
+# setup this depends on.
+Environment=ADM_SFA_DATA_DIR=<DATA_DIR>
+WorkingDirectory=<DATA_DIR>
+
+# TODO: replace <LAN_IP> with this machine's actual LAN interface address
+# (binding to a specific address, not 0.0.0.0, is one layer of scoping;
+# the firewall rule in CLAUDE.md's phase 6 section is the layer that
+# actually restricts by subnet).
+Environment=ADM_SFA_WEB_BIND=<LAN_IP>:8080
+
+# Root-owned, mode 600, containing a single line:
+#   ADM_SFA_WEB_PASSWORD=...
+# systemd (running as root) reads this before dropping to User=adm-sfa, so
+# the adm-sfa account itself never needs read access to the file on disk.
+EnvironmentFile=/etc/adm-sfa/web-password.env
+
+ExecStart=/usr/local/bin/adm-sfa-web
+Restart=on-failure
+RestartSec=5
+
+# Hardening — see CLAUDE.md phase 6.
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=<DATA_DIR>
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
