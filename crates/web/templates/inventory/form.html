@@ -1,0 +1,110 @@
+{% extends "layout.html" %}
+{% block content %}
+{% if let Some(id) = id %}
+<h1>Edit inventory item</h1>
+{% else %}
+<h1>New inventory item</h1>
+{% endif %}
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/inventory/{{ id }}{% else %}/inventory{% endif %}">
+  <div class="field">
+    <label for="name">Name</label>
+    <input type="text" id="name" name="name" value="{{ name }}" required autofocus>
+  </div>
+  <div class="field">
+    <label for="category_id">Category</label>
+    <select id="category_id" name="category_id" required>
+      <option value="">&mdash; choose one &mdash;</option>
+      {% for c in categories %}
+      <option value="{{ c.id }}" {% if c.selected %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label>Location</label>
+    <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %}> Germany</label>
+    <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %}> Brazil</label>
+  </div>
+  <div class="field">
+    <label>Status</label>
+    <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %}> Available</label>
+    <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %}> Reserved</label>
+    <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %}> Donated</label>
+  </div>
+  <div class="field">
+    <label for="notes">Notes</label>
+    <textarea id="notes" name="notes" rows="3">{{ notes }}</textarea>
+  </div>
+
+  <div class="field">
+    <label>Source</label>
+    <label><input type="radio" name="source_type" value="donation" {% if source_type == "donation" %}checked{% endif %}> Donation</label>
+    <label><input type="radio" name="source_type" value="purchase" {% if source_type == "purchase" %}checked{% endif %}> Purchase</label>
+  </div>
+  <div class="field">
+    <label for="source_donation_id">Donation</label>
+    <select id="source_donation_id" name="source_donation_id">
+      <option value="">&mdash; choose one &mdash;</option>
+      {% for d in donations %}
+      <option value="{{ d.id }}" {% if d.selected %}selected{% endif %}>{{ d.label }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">Only used when Source is Donation. Don't see the donation you need? <a href="/inventory/donations">Add one</a> (opens a separate page &mdash; come back and pick it from the list after).</p>
+  </div>
+  <div class="field">
+    <label for="source_purchase_id">Purchase</label>
+    <select id="source_purchase_id" name="source_purchase_id">
+      <option value="">&mdash; choose one &mdash;</option>
+      {% for p in purchases %}
+      <option value="{{ p.id }}" {% if p.blocked %}disabled{% endif %} {% if p.selected %}selected{% endif %}>{{ p.label }}{% if p.blocked %} (in use){% endif %}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">Only used when Source is Purchase. Negotiating purchases aren't listed &mdash; only ones marked Bought.</p>
+  </div>
+
+  <div class="actions">
+    <button type="submit">Save</button>
+    <a class="button secondary" href="/inventory">Cancel</a>
+  </div>
+</form>
+
+{% if let Some(id) = id %}
+  <h2>Documents</h2>
+  <table>
+    <thead><tr><th>Label</th><th>File</th><th></th></tr></thead>
+    <tbody>
+    {% for doc in documents %}
+    <tr>
+      <td>{{ doc.label }}</td>
+      <td><a href="/documents/{{ doc.filename }}" target="_blank">{{ doc.filename }}</a></td>
+      <td>
+        <form class="inline" method="post" action="/inventory/{{ id }}/documents/{{ doc.id }}/delete"
+              onsubmit="return confirm('Remove this document?');">
+          <button type="submit" class="danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3">No documents attached.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Attach a document</h3>
+  <form method="post" action="/inventory/{{ id }}/documents" enctype="multipart/form-data">
+    <div class="field">
+      <label for="label">Label</label>
+      <input type="text" id="label" name="label" placeholder="e.g. photo">
+    </div>
+    <div class="field">
+      <label for="file">File</label>
+      <input type="file" id="file" name="file" required>
+    </div>
+    <button type="submit">Upload</button>
+  </form>
+{% endif %}
+{% endblock %}

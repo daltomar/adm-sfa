@@ -1,0 +1,23 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Inventory</h1>
+<p><a class="button" href="/inventory/new">+ New item</a></p>
+<table>
+<thead>
+<tr><th>Name</th><th>Category</th><th>Location</th><th>Status</th><th>Source</th></tr>
+</thead>
+<tbody>
+{% for i in items %}
+<tr>
+  <td><a href="/inventory/{{ i.id }}/edit">{{ i.name }}</a></td>
+  <td>{{ i.category_name }}</td>
+  <td>{{ i.location_label }}</td>
+  <td>{{ i.status_label }}</td>
+  <td>{{ i.source_desc }}</td>
+</tr>
+{% else %}
+<tr><td colspan="5">No inventory items yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

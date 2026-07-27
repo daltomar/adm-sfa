@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>BRL Ledger</h1>
+<p class="balance {% if balance_positive %}balance-pos{% else %}balance-neg{% endif %}">
+  Balance: R$ {{ balance_display }}
+</p>
+<p class="hint">Every entry here is created automatically by Purchases, Transfers, or Outbound &mdash; nothing on this page is directly editable.</p>
+<table>
+<thead>
+<tr><th>Date</th><th>Type</th><th>Description</th><th>Amount</th></tr>
+</thead>
+<tbody>
+{% for r in rows %}
+<tr>
+  <td>{{ r.date_display }}</td>
+  <td>{{ r.type_label }}</td>
+  <td>{{ r.desc }}</td>
+  <td>{{ r.sign }}R$ {{ r.amount_display }}</td>
+</tr>
+{% else %}
+<tr><td colspan="4">No entries yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

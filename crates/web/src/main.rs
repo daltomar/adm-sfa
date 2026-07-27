@@ -44,6 +44,13 @@ async fn main() {
         .route("/", get(|| async { Redirect::to("/purchases") }))
         .merge(routes::purchases::router())
         .merge(routes::donors::router())
+        .merge(routes::eur_ledger::router())
+        .merge(routes::brl_ledger::router())
+        .merge(routes::transfers::router())
+        .merge(routes::inventory::router())
+        .merge(routes::outbound::router())
+        .merge(routes::reports::router())
+        .merge(routes::settings::router())
         .nest_service("/documents", ServeDir::new(&documents_dir))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

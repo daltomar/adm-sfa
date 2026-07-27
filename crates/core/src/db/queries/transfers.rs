@@ -39,7 +39,7 @@ pub fn insert(conn: &Connection, draft: &TransferDraft) -> Result<i64> {
     let date = parse_date(&draft.date)?;
     let eur_amount = parse_amount(&draft.eur_amount_sent_str)?;
     let rate = parse_amount(&draft.exchange_rate_str)?;
-    let brl_amount = eur_amount * rate;
+    let brl_amount = checked_multiply(eur_amount, rate)?;
 
     let tx = conn.unchecked_transaction()?;
     tx.execute(
@@ -73,7 +73,7 @@ pub fn update(conn: &Connection, id: i64, draft: &TransferDraft) -> Result<()> {
     let date = parse_date(&draft.date)?;
     let eur_amount = parse_amount(&draft.eur_amount_sent_str)?;
     let rate = parse_amount(&draft.exchange_rate_str)?;
-    let brl_amount = eur_amount * rate;
+    let brl_amount = checked_multiply(eur_amount, rate)?;
 
     let tx = conn.unchecked_transaction()?;
     tx.execute(
@@ -113,16 +113,40 @@ pub fn update(conn: &Connection, id: i64, draft: &TransferDraft) -> Result<()> {
     Ok(())
 }
 
+/// `Decimal`'s `Mul` panics on overflow rather than returning an error —
+/// both inputs are already validated as positive by `parse_amount`, but
+/// neither has a magnitude ceiling, so a deliberately huge (but still
+/// individually valid) amount/rate pair could otherwise crash the request
+/// instead of producing a clean "invalid input" response.
+fn checked_multiply(eur_amount: Decimal, rate: Decimal) -> rusqlite::Result<Decimal> {
+    eur_amount.checked_mul(rate).ok_or_else(|| {
+        rusqlite::Error::ToSqlConversionFailure(
+            format!("amount \u{d7} rate overflows: {eur_amount} \u{d7} {rate}").into(),
+        )
+    })
+}
+
 fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
     s.parse::<Decimal>().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
     })
 }
 
+/// Desktop's form only lets Save be clicked once both the EUR amount and the
+/// exchange rate parse to positive numbers (`ui/views/transfers.rs`'s
+/// `eur_ok`/`rate_ok` gates) — not backed by an authoritative check here
+/// until now, same gap as `eur_ledger::parse_amount` (see its doc comment)
+/// and now reachable the same way once `web` gained a transfers route.
 fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
-    crate::money::parse_amount_input(s).ok_or_else(|| {
+    let amount = crate::money::parse_amount_input(s).ok_or_else(|| {
         rusqlite::Error::ToSqlConversionFailure(format!("invalid amount: {s:?}").into())
-    })
+    })?;
+    if amount <= Decimal::ZERO {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            format!("amount must be positive: {s:?}").into(),
+        ));
+    }
+    Ok(amount)
 }
 
 fn parse_date(s: &str) -> rusqlite::Result<String> {
@@ -174,6 +198,44 @@ mod tests {
         let conn = test_db();
         let mut d = draft();
         d.date = "31.02.2026".to_string();
+        assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn zero_or_negative_eur_amount_is_rejected() {
+        let conn = test_db();
+        let mut d = draft();
+        d.eur_amount_sent_str = "0".to_string();
+        assert!(insert(&conn, &d).is_err());
+        d.eur_amount_sent_str = "-100".to_string();
+        assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn zero_or_negative_exchange_rate_is_rejected() {
+        let conn = test_db();
+        let mut d = draft();
+        d.exchange_rate_str = "0".to_string();
+        assert!(insert(&conn, &d).is_err());
+        d.exchange_rate_str = "-5.5".to_string();
+        assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn negative_amount_is_rejected_on_update() {
+        let conn = test_db();
+        let id = insert(&conn, &draft()).unwrap();
+        let mut d = draft();
+        d.eur_amount_sent_str = "-100".to_string();
+        assert!(update(&conn, id, &d).is_err());
+    }
+
+    #[test]
+    fn amount_times_rate_overflow_is_rejected_not_a_panic() {
+        let conn = test_db();
+        let mut d = draft();
+        d.eur_amount_sent_str = "79228162514264337593543950335".to_string(); // Decimal::MAX
+        d.exchange_rate_str = "2".to_string();
         assert!(insert(&conn, &d).is_err());
     }
 }

@@ -102,10 +102,21 @@ fn parse_decimal(col: usize, s: &str) -> rusqlite::Result<Decimal> {
     })
 }
 
+/// Desktop's manual-entry form only ever lets Save be clicked once the typed
+/// amount parses to a positive number (`ui/views/eur_ledger.rs`'s `amount_ok`
+/// gate) — that was never backed by an authoritative check here, so it was a
+/// UI-only rule an HTTP client could bypass entirely once `web` gained a
+/// route that calls `insert`/`update` directly. Enforced here instead.
 fn parse_amount(s: &str) -> rusqlite::Result<Decimal> {
-    crate::money::parse_amount_input(s).ok_or_else(|| {
+    let amount = crate::money::parse_amount_input(s).ok_or_else(|| {
         rusqlite::Error::ToSqlConversionFailure(format!("invalid amount: {s:?}").into())
-    })
+    })?;
+    if amount <= Decimal::ZERO {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            format!("amount must be positive: {s:?}").into(),
+        ));
+    }
+    Ok(amount)
 }
 
 fn parse_date(s: &str) -> rusqlite::Result<String> {
@@ -160,6 +171,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, "2026-07-16");
+    }
+
+    #[test]
+    fn zero_amount_is_rejected() {
+        let conn = test_db();
+        let mut d = draft();
+        d.amount_str = "0".to_string();
+        assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn negative_amount_is_rejected() {
+        let conn = test_db();
+        let mut d = draft();
+        d.amount_str = "-50.00".to_string();
+        assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn negative_amount_is_rejected_on_update() {
+        let conn = test_db();
+        let id = insert(&conn, &draft()).unwrap();
+        let mut d = draft();
+        d.amount_str = "-50.00".to_string();
+        assert!(update(&conn, id, &d).is_err());
     }
 
     #[test]

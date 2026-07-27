@@ -50,18 +50,21 @@ there.
   table, native screenshot capture) are all shipped. Next candidates are
   Dashboard content (optional, `SPEC.md §5.5`) or whatever's raised fresh.
 - **All 6 planned phases of the workspace restructure + web front-end are
-  done, on `main`** (as of this branch — see below). See "Workspace
-  restructure and web front-end" below for the full phase list, what each
-  one did, and backlog items its review surfaced. Two things remain
-  deliberately open, not oversights: (1) phase 5 shipped a reduced scope —
-  only Purchases and Donors are ported to `web`, seven sections are
-  logged as backlog for future small sessions; (2) phase 6 shipped
-  deployment *templates* (`deploy/`) — nothing has actually been installed
-  on a real machine from within a session, since that requires editing
-  system files/creating a system user/configuring a firewall on a specific
-  host. The desktop app has kept working and behaving identically at every
-  phase boundary so far. Tag `v1.0-desktop` marks the pre-restructure
-  state.
+  done, on `main`**, and phase 5's originally-deferred backlog (the
+  remaining seven of `web`'s nine sections) has since been completed too,
+  on branch `phase-5-web-remaining-sections` — see "Workspace restructure
+  and web front-end" below for the full phase list, what each one did, and
+  backlog items its reviews surfaced. `web` now has full section parity
+  with `desktop`: Purchases, Donors, EUR Ledger, BRL Ledger, Transfers,
+  Inventory, Outbound, Reports (on-screen + CSV/PDF export), and Settings
+  (category/label CRUD; locale picker, screenshot command, and manual
+  backup stay desktop-only, each for a documented reason). One thing
+  remains deliberately open, not an oversight: phase 6 shipped deployment
+  *templates* (`deploy/`) — nothing has actually been installed on a real
+  machine from within a session, since that requires editing system
+  files/creating a system user/configuring a firewall on a specific host.
+  The desktop app has kept working and behaving identically at every phase
+  boundary so far. Tag `v1.0-desktop` marks the pre-restructure state.
 
 ## Purchase `multiple_items` flag (implemented)
 
@@ -317,30 +320,77 @@ one compiles, passes tests, and behaves identically.
    — the rest are logged below, not fixed.
 5. **Web crate.** axum + server-rendered templates over the service layer.
    Multipart upload replacing drag-and-drop; file serving for
-   `documents/`; single shared password + session cookie. **Done, reduced
-   scope** — see `crates/web/` (new binary `adm-sfa-web`, Askama 0.12
-   templates under `crates/web/templates/`). Only two of the desktop's nine
-   sections were ported this pass — Purchases (the "rich" section: full
-   CRUD, negotiating→bought lifecycle via `service::mark_purchase_bought`,
-   document upload/removal via `service::attach_document`/
-   `docs_fs::remove_document`) and Donors (a simple CRUD section) — the
-   remaining seven (EUR/BRL Ledger, Transfers, Inventory, Outbound, Reports,
-   Settings) are backlog for a later session, per explicit scope-reduction
-   choice ("skeleton + 1–2 sections first" over "full parity in one
-   session"). Auth: single shared password from `ADM_SFA_WEB_PASSWORD`
-   (constant-time compare via `subtle`), signed session cookie
-   (`axum-extra`'s `SignedCookieJar`, `HttpOnly` + `SameSite=Strict`, no
-   per-user identity — matches the "two users, one machine, no sync"
-   constraint). `AppState.db` is a single `Connection` behind a plain
-   `Mutex` (not a pool), matching `desktop`'s single-`Connection` shape;
-   `AppState::conn()` recovers from mutex poisoning rather than panicking
-   the whole server on one bad request. Binds to `127.0.0.1:8080` by
-   default (LAN-wide binding deferred to phase 6). Reviewed by
-   `rust-code-reviewer`: no 🔴 findings; three 🟡s (silent error-swallowing
-   in `mark_bought`/`remove_document`/`attach_document`'s no-file case,
-   temp-upload filename collisions under concurrent requests, mutex-poison
-   panic risk) fixed before commit — the remaining 🟡/🟢s are logged below,
-   not fixed.
+   `documents/`; single shared password + session cookie. **Done, full
+   section parity** — see `crates/web/` (new binary `adm-sfa-web`, Askama
+   0.12 templates under `crates/web/templates/`). Shipped in two passes:
+   first Purchases (the "rich" section: full CRUD, negotiating→bought
+   lifecycle via `service::mark_purchase_bought`, document upload/removal
+   via `service::attach_document`/`docs_fs::remove_document`) and Donors (a
+   simple CRUD section), as an explicit scope reduction ("skeleton + 1–2
+   sections first" over "full parity in one session"); then, in a later
+   session on branch `phase-5-web-remaining-sections`, the remaining seven
+   — EUR Ledger, BRL Ledger, Transfers, Inventory, Outbound, Reports,
+   Settings — each its own reviewed commit. Auth: single shared password
+   from `ADM_SFA_WEB_PASSWORD` (constant-time compare via `subtle`), signed
+   session cookie (`axum-extra`'s `SignedCookieJar`, `HttpOnly` +
+   `SameSite=Strict`, no per-user identity — matches the "two users, one
+   machine, no sync" constraint). `AppState.db` is a single `Connection`
+   behind a plain `Mutex` (not a pool), matching `desktop`'s
+   single-`Connection` shape; `AppState::conn()` recovers from mutex
+   poisoning rather than panicking the whole server on one bad request.
+   Binds to `127.0.0.1:8080` by default (LAN-wide binding deferred to phase
+   6).
+
+   The first pass was reviewed by `rust-code-reviewer` with no 🔴 findings;
+   three 🟡s (silent error-swallowing in `mark_bought`/`remove_document`/
+   `attach_document`'s no-file case, temp-upload filename collisions under
+   concurrent requests, mutex-poison panic risk) were fixed before commit.
+   The second pass's seven sections were each reviewed independently, and
+   three real 🔴-equivalent gaps were found and fixed along the way — all
+   in the same category: a business rule that was previously enforced only
+   in `desktop`'s UI (or not enforced anywhere authoritative at all), now
+   reachable by an untrusted HTTP client for the first time because `web`
+   gained a route that calls the same `core` query directly:
+   - `eur_ledger::insert`/`update` and `transfers::insert`/`update` had no
+     amount-positivity check in `core` — only desktop's Save-button
+     gating. A crafted POST could write a negative or zero "donation"
+     straight into the ledger. Fixed in `core::db::queries::{eur_ledger,
+     transfers}`, with regression tests. The `transfers` fix also caught a
+     `Decimal` multiplication overflow panic (`eur_amount * rate` used the
+     panicking `*` operator with no ceiling on either input) — switched to
+     `checked_mul` in both `core` and the web route's own preview label.
+   - `inventory::check_purchase_source` never checked a purchase's
+     `negotiating`/`bought` status, only `multiple_items` and existing
+     links — both `desktop`'s and `web`'s pickers already excluded
+     negotiating purchases from the dropdown, but that was UI-only. A
+     crafted POST could link an inventory item straight to a negotiating
+     purchase (no ledger row, cost unconfirmed). Fixed authoritatively in
+     `core::db::queries::inventory::check_purchase_source`, with
+     regression tests; verified live that the same crafted request is
+     rejected over HTTP now.
+   - `crates/web/src/routes/reports.rs::export_csv` spliced the `tab`
+     query param into a temp file path with only an emptiness check, not
+     the same `TABS` allowlist the on-screen route already used — a
+     crafted `tab=../../../whatever` could steer `reports::csv::write`'s
+     destination outside the OS temp dir. Fixed by validating `tab` the
+     same way both routes now; verified live that the exploit payload
+     writes nothing outside the temp dir. The same review pass also added
+     the crate's established `AtomicU64` per-request-uniqueness pattern to
+     the report-export temp filenames (previously only disambiguated by
+     tab + process id, a collision risk under concurrent exports) and
+     stopped silently swallowing a failed temp-file read into an empty
+     download.
+
+   One 🟡 surfaced in the Settings review and deliberately left open, not
+   fixed: `categories::insert`/`update` and `documents::insert_label`/
+   `update_label` have no server-side non-empty-name check (only an HTML
+   `required` attribute, trivially bypassed) — verified live that a raw
+   POST with an empty name inserts a blank category that then shows up in
+   every category picker. This is the same shape as an existing,
+   previously-unflagged gap in `donors.rs`'s `donor.name` — real, but
+   shared pre-existing-shaped debt spanning multiple already-shipped
+   sections rather than something unique to Settings, so it's logged below
+   rather than fixed as a one-off.
 6. **Deployment.** systemd unit, own `adm-sfa` user, `WorkingDirectory` at
    the data root, hardening (`PrivateTmp`, `ProtectSystem=strict`,
    `ReadWritePaths` scoped to the data dir, `NoNewPrivileges`), bind to
@@ -473,9 +523,11 @@ arithmetic, per `rust-code-reviewer`):
 `rust-code-reviewer`; the three 🟡s that *were* fixed before commit are
 described in the phase 5 summary above, not repeated here):
 - The multipart upload's `label` field (`crates/web/src/routes/
-  purchases.rs::attach_document`) is arbitrary free text with no allow-list
-  check against `document_label` — desktop restricts the equivalent field to
-  a `ComboBox`. Verified live that a path-traversal payload (`label=../../
+  purchases.rs::attach_document`, and — confirmed still true after the
+  second pass — the identical shape in `transfers.rs`/`inventory.rs`'s own
+  `attach_document`) is arbitrary free text with no allow-list check
+  against `document_label` — desktop restricts the equivalent field to a
+  `ComboBox`. Verified live that a path-traversal payload (`label=../../
   ../../tmp/.../pwned`) does *not* escape `documents_dir` today, but only as
   an accident of how `docs_fs::generate_filename` concatenates
   `{date}_{record_type}-{record_id}_{label}` (the date/record prefix means
@@ -485,20 +537,22 @@ described in the phase 5 summary above, not repeated here):
   `core` (validate `label` against `docs_qry::labels(conn)`, or reject `/`,
   `\`, NUL outright) rather than trusted-by-convention in each UI caller,
   since an HTTP client can send anything.
-- `crates/web` has zero automated tests (`cargo test -p web` → 0). Given
-  this crate's whole job is an auth gate and untrusted multipart handling,
-  `auth::password_matches`/`require_auth` and `attach_document`'s edge cases
-  are the highest-value first targets.
-- `routes/purchases.rs`'s `edit_form`/`update`/`mark_bought`/
-  `attach_document`/`remove_document` (and `donors.rs::edit_form`) each
-  re-fetch the full `purchases_qry::list()`/`donors_qry::list()` and
-  `.find(|x| x.id == id)` rather than a targeted single-row lookup — fine at
-  this data scale, repeated ~5x in one file. A `purchases_qry::get(conn,
-  id)` / `donors_qry::get(conn, id)` in `core` (which `web`, unlike
-  `desktop`'s stateful views, actually needs per-request) would remove the
-  duplication; `crates/web/src/routes/purchases.rs::draft_from_purchase`
-  and `purchase_form_error_response` already consolidate the
-  draft-construction and error-rendering halves of the same duplication.
+- `crates/web` has zero automated tests (`cargo test -p web` → 0), still
+  true after the second pass — every section's route handlers were instead
+  verified via live manual smoke-testing (`curl` against a running
+  instance) per commit, not committed as regression tests. Given this
+  crate's whole job is an auth gate and untrusted multipart/form handling,
+  `auth::password_matches`/`require_auth` and the various `attach_document`
+  edge cases remain the highest-value first targets.
+- The "re-fetch the full list and `.find(|x| x.id == id)` rather than a
+  targeted single-row lookup" pattern flagged in `purchases.rs`/`donors.rs`
+  after the first pass is now the established convention across every
+  section added in the second pass too (`eur_ledger.rs`, `transfers.rs`,
+  `inventory.rs`, `outbound.rs`, `reports.rs` — the last of which does this
+  8x per request in `ReportsData::load`). Fine at this data scale and
+  reviewed as such each time, but a `get(conn, id)` per entity in `core`
+  would remove a lot of now-duplicated boilerplate if `web`'s route count
+  keeps growing.
 - `crates/web/src/main.rs::parse_data_dir` duplicates `crates/desktop/src/
   main.rs`'s hand-rolled `--data-dir` parsing verbatim — candidate to move
   into `adm_sfa_core::config` alongside `default_data_dir()`.
@@ -513,19 +567,37 @@ described in the phase 5 summary above, not repeated here):
   it's a decision, not an oversight.
 - Web templates and route handlers use hardcoded English strings — no
   `t!()` calls anywhere in `crates/web`, a deliberate, temporary violation
-  of T2 for this reduced-scope pass. Needs i18n wiring before `web` is
-  considered done, not just before it's exposed off-LAN.
-- No PDF/CSV export wired into `web` yet (Reports section isn't ported at
-  all this pass).
+  of T2, now spanning all nine sections rather than just the original two.
+  Needs i18n wiring before `web` is considered done, not just before it's
+  exposed off-LAN.
 - Session mechanism restart-invalidates-all-sessions tradeoff (see phase 5
   summary above) — revisit if restarts turn out to be more frequent than
   expected once this is in real use.
+- **New, from the second pass:** `categories::insert`/`update` and
+  `documents::insert_label`/`update_label` in `core` have no server-side
+  non-empty-name check (only an HTML `required` attribute) — verified live
+  that a raw POST with an empty name inserts a blank category visible in
+  every category picker across the app. `donors::insert`/`update`'s
+  `donor.name` has the identical shape and was not caught by the original
+  phase 5 review either. Fix belongs in `core`, shared across all three.
+- **New, from the second pass:** `crates/web/src/routes/outbound.rs`'s
+  item picker needed several checkboxes sharing one `name="item_ids"`, and
+  `axum::Form`'s `serde_urlencoded` backend can't deserialize repeated keys
+  into a `Vec` (confirmed empirically — it errors rather than collecting).
+  That route uses `axum::extract::RawForm` + `form_urlencoded::parse`
+  directly instead of this crate's usual `#[derive(Deserialize)] +
+  Form<T>` pattern, the only route that does. Documented inline; flagging
+  here too in case a future multi-select field elsewhere in `web` needs
+  the same approach and a reader goes looking for a precedent.
 
-What the audit found *correct* and not to be "improved" during the move:
-`db/queries/*` (parameterized, no business logic), `model/*` (enum
-`label()`/`as_str()`/`is_inflow()` helpers are domain vocabulary, correctly
-placed), `src/reports/{csv,pdf}.rs` (pure renderers), and the CRUD-only
-views (`donors.rs`, `settings.rs`).
+What the first pass's audit found *correct* and not to be "improved"
+during the move: `db/queries/*` (parameterized, no business logic),
+`model/*` (enum `label()`/`as_str()`/`is_inflow()` helpers are domain
+vocabulary, correctly placed), `src/reports/{csv,pdf}.rs` (pure
+renderers), and the CRUD-only views (`donors.rs`, `settings.rs`). The
+second pass's reviews reused and confirmed all of these calls held for the
+remaining seven sections too, with the three fixed 🔴-equivalent
+exceptions described in the phase 5 summary above.
 
 ### Platform differences between front-ends
 

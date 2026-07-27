@@ -1,0 +1,47 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Recipient projects</h1>
+<p class="hint">Create one here, then go back to <a href="/outbound/new">add or edit a donation event</a> and pick it from the Recipient project dropdown.</p>
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<h2>New recipient project</h2>
+<form method="post" action="/outbound/recipients">
+  <div class="field">
+    <label for="name">Name</label>
+    <input type="text" id="name" name="name" required autofocus>
+  </div>
+  <div class="field">
+    <label for="contact_info">Contact info</label>
+    <input type="text" id="contact_info" name="contact_info">
+  </div>
+  <div class="field">
+    <label for="location">Location</label>
+    <input type="text" id="location" name="location">
+  </div>
+  <div class="actions">
+    <button type="submit">Create</button>
+  </div>
+</form>
+
+<h2>Existing recipient projects</h2>
+<table>
+<thead>
+<tr><th>Name</th><th>Contact info</th><th>Location</th><th>Active</th></tr>
+</thead>
+<tbody>
+{% for r in recipients %}
+<tr>
+  <td>{{ r.name }}</td>
+  <td>{{ r.contact_info }}</td>
+  <td>{{ r.location }}</td>
+  <td>{% if r.active %}yes{% else %}&mdash;{% endif %}</td>
+</tr>
+{% else %}
+<tr><td colspan="4">No recipient projects yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Outbound</h1>
+<p><a class="button" href="/outbound/new">+ New donation event</a></p>
+<table>
+<thead>
+<tr><th>Date</th><th>Recipient</th><th>Summary</th></tr>
+</thead>
+<tbody>
+{% for e in events %}
+<tr>
+  <td><a href="/outbound/{{ e.id }}/edit">{{ e.date_display }}</a></td>
+  <td>{{ e.recipient_name }}</td>
+  <td>{{ e.summary }}</td>
+</tr>
+{% else %}
+<tr><td colspan="3">No outbound events yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

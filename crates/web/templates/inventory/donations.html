@@ -1,0 +1,51 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Donation records</h1>
+<p class="hint">These are physical donation receipts, used as a Source when adding an Inventory item &mdash; not the same as the Donors list. Create one here, then go back to <a href="/inventory/new">add or edit an item</a> and pick it from the Donation dropdown.</p>
+
+{% if let Some(msg) = error %}
+<div class="error">{{ msg }}</div>
+{% endif %}
+
+<h2>New donation record</h2>
+<form method="post" action="/inventory/donations">
+  <div class="field">
+    <label for="date_received">Date received</label>
+    <input type="date" id="date_received" name="date_received" value="{{ date }}" required>
+  </div>
+  <div class="field">
+    <label for="donor_id">Donor</label>
+    <select id="donor_id" name="donor_id">
+      <option value="">Anonymous</option>
+      {% for d in donors %}
+      <option value="{{ d.0 }}">{{ d.1 }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">Need a new donor first? <a href="/donors/new">Add one</a>.</p>
+  </div>
+  <div class="field">
+    <label for="notes">Notes</label>
+    <textarea id="notes" name="notes" rows="2"></textarea>
+  </div>
+  <div class="actions">
+    <button type="submit">Create</button>
+  </div>
+</form>
+
+<h2>Existing donation records</h2>
+<table>
+<thead>
+<tr><th>Date received</th><th>Donor</th></tr>
+</thead>
+<tbody>
+{% for d in donations %}
+<tr>
+  <td>{{ d.date_display }}</td>
+  <td>{{ d.donor_display }}</td>
+</tr>
+{% else %}
+<tr><td colspan="2">No donation records yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

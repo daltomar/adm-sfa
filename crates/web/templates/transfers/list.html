@@ -1,0 +1,22 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>Transfers</h1>
+<p><a class="button" href="/transfers/new">+ New transfer</a></p>
+<table>
+<thead>
+<tr><th>Date</th><th>EUR sent</th><th>Rate</th><th>BRL received</th></tr>
+</thead>
+<tbody>
+{% for t in transfers %}
+<tr>
+  <td><a href="/transfers/{{ t.id }}/edit">{{ t.date_display }}</a></td>
+  <td>&euro; {{ t.eur_display }}</td>
+  <td>{{ t.rate_display }}</td>
+  <td>R$ {{ t.brl_display }}</td>
+</tr>
+{% else %}
+<tr><td colspan="4">No transfers yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
