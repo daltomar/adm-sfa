@@ -21,10 +21,11 @@ pub fn list(conn: &Connection) -> Result<Vec<Donor>> {
 }
 
 pub fn insert(conn: &Connection, draft: &DonorDraft) -> Result<i64> {
+    let name = super::require_name("donor name", &draft.name)?;
     conn.execute(
         "INSERT INTO donor (name, contact_info, notes) VALUES (?1, ?2, ?3)",
         params![
-            draft.name.trim(),
+            name,
             super::opt(&draft.contact_info),
             super::opt(&draft.notes)
         ],
@@ -33,10 +34,11 @@ pub fn insert(conn: &Connection, draft: &DonorDraft) -> Result<i64> {
 }
 
 pub fn update(conn: &Connection, id: i64, draft: &DonorDraft) -> Result<()> {
+    let name = super::require_name("donor name", &draft.name)?;
     conn.execute(
         "UPDATE donor SET name = ?1, contact_info = ?2, notes = ?3 WHERE id = ?4",
         params![
-            draft.name.trim(),
+            name,
             super::opt(&draft.contact_info),
             super::opt(&draft.notes),
             id
@@ -123,5 +125,28 @@ mod tests {
             notes: String::new(),
         };
         assert!(insert_donation(&conn, &draft).is_err());
+    }
+
+    fn blank_donor_draft(name: &str) -> DonorDraft {
+        DonorDraft {
+            name: name.to_string(),
+            contact_info: String::new(),
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn blank_name_is_rejected_on_insert() {
+        let conn = test_db();
+        assert!(insert(&conn, &blank_donor_draft("   ")).is_err());
+        assert!(list(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn blank_name_is_rejected_on_update() {
+        let conn = test_db();
+        let id = insert(&conn, &blank_donor_draft("Jane Doe")).unwrap();
+        assert!(update(&conn, id, &blank_donor_draft("")).is_err());
+        assert_eq!(list(&conn).unwrap()[0].name, "Jane Doe");
     }
 }

@@ -27,11 +27,12 @@ pub fn list_recipient_projects(conn: &Connection) -> Result<Vec<RecipientProject
 }
 
 pub fn insert_recipient_project(conn: &Connection, draft: &RecipientProjectDraft) -> Result<i64> {
+    let name = super::require_name("recipient project name", &draft.name)?;
     conn.execute(
         "INSERT INTO recipient_project (name, contact_info, location, active)
               VALUES (?1, ?2, ?3, ?4)",
         params![
-            draft.name.trim(),
+            name,
             super::opt(&draft.contact_info),
             super::opt(&draft.location),
             draft.active as i64,
@@ -304,6 +305,23 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn blank_recipient_project_name_is_rejected() {
+        let conn = test_db();
+        let before = list_recipient_projects(&conn).unwrap().len();
+        let result = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "   ".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(list_recipient_projects(&conn).unwrap().len(), before);
     }
 
     #[test]
