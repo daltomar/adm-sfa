@@ -69,6 +69,22 @@ pub fn resolve_filing_date(draft_date_input: &str, persisted_iso_date: Option<&s
 /// Attaches a document to a record, resolving the filing date the same way
 /// regardless of caller (see `resolve_filing_date`) before delegating to
 /// `docs_fs::file_document`.
+///
+/// Validates `label` against `document_label` first. Both front-ends now
+/// restrict this field to a picker populated from the same table (desktop's
+/// `ComboBox`, web's `<select>`), so a well-behaved caller never trips this
+/// — but it's the authoritative check, not a UI nicety: nothing previously
+/// stopped a caller that isn't the UI (a crafted POST to `web`, bypassing
+/// its `<select>` entirely) from setting arbitrary label text, since nothing
+/// validated it was even one of the configured labels. Trimmed before the
+/// comparison so incidental leading/trailing whitespace — which a raw POST
+/// could still introduce even though a `<select>`'s value never has any —
+/// doesn't cause a spurious rejection. This doesn't change filename safety
+/// (that was already just an accident of `docs_fs::generate_filename`'s
+/// `{date}_{record_type}-{id}_{label}` construction, not a validated
+/// guarantee, and remains a separate, still-open concern), but it does
+/// close the gap where an arbitrary label string could end up stored and
+/// displayed as if it were a real, configured category of document.
 #[allow(clippy::too_many_arguments)]
 pub fn attach_document(
     conn: &Connection,
@@ -80,6 +96,11 @@ pub fn attach_document(
     label: &str,
     existing: &[String],
 ) -> std::result::Result<String, String> {
+    let label = label.trim();
+    let known_labels = documents_qry::labels(conn).map_err(|e| e.to_string())?;
+    if !known_labels.iter().any(|l| l == label) {
+        return Err(format!("Unknown document label: {label:?}"));
+    }
     let date = resolve_filing_date(draft_date_input, persisted_iso_date);
     docs_fs::file_document(conn, documents_dir, src, &date, record, label, existing)
 }
@@ -220,5 +241,70 @@ mod tests {
             notes: String::new(),
         };
         assert!(donate_items(&conn, &draft, &[]).is_err());
+    }
+
+    fn attach_document_test_files(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let tmp = std::env::temp_dir().join(format!(
+            "adm-sfa-attach-document-test-{tag}-{}",
+            std::process::id()
+        ));
+        let documents_dir = tmp.join("documents");
+        std::fs::create_dir_all(&documents_dir).unwrap();
+        let src = tmp.join("chat.png");
+        std::fs::write(&src, b"fake").unwrap();
+        (tmp, src)
+    }
+
+    #[test]
+    fn attach_document_rejects_a_label_outside_document_label() {
+        let conn = test_db();
+        let id = create_purchase(&conn, &purchase_draft()).unwrap();
+        let (tmp, src) = attach_document_test_files("unknown-label");
+
+        let result = attach_document(
+            &conn,
+            &tmp.join("documents"),
+            &src,
+            "2026-01-01",
+            None,
+            ("purchase", id),
+            "../../../etc/passwd",
+            &[],
+        );
+
+        assert!(result.is_err());
+        assert!(documents_qry::list_for_record(&conn, "purchase", id)
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn attach_document_accepts_a_known_label() {
+        let conn = test_db();
+        let id = create_purchase(&conn, &purchase_draft()).unwrap();
+        let (tmp, src) = attach_document_test_files("known-label");
+
+        let result = attach_document(
+            &conn,
+            &tmp.join("documents"),
+            &src,
+            "2026-01-01",
+            None,
+            ("purchase", id),
+            "chat",
+            &[],
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "purchase", id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

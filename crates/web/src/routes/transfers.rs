@@ -55,11 +55,13 @@ fn brl_preview(draft: &TransferDraft) -> Option<String> {
     eur.checked_mul(rate).map(format::amount)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn form_template(
     id: Option<i64>,
     draft: TransferDraft,
     error: Option<String>,
     documents: Vec<adm_sfa_core::model::document::Document>,
+    labels: Vec<String>,
 ) -> TransferFormTemplate {
     let brl_preview = brl_preview(&draft);
     TransferFormTemplate {
@@ -71,6 +73,7 @@ fn form_template(
         brl_preview,
         error,
         documents,
+        labels,
     }
 }
 
@@ -86,7 +89,15 @@ fn transfer_form_error_response(conn: &rusqlite::Connection, id: i64, error: Str
         return (axum::http::StatusCode::NOT_FOUND, "transfer not found").into_response();
     };
     let draft = draft_from_transfer(&transfer);
-    HtmlTemplate(form_template(Some(id), draft, Some(error), documents)).into_response()
+    let labels = documents_qry::labels(conn).unwrap_or_default();
+    HtmlTemplate(form_template(
+        Some(id),
+        draft,
+        Some(error),
+        documents,
+        labels,
+    ))
+    .into_response()
 }
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
@@ -110,7 +121,7 @@ async fn new_form() -> impl IntoResponse {
         date: chrono::Local::now().format("%Y-%m-%d").to_string(),
         ..TransferDraft::default()
     };
-    HtmlTemplate(form_template(None, draft, None, Vec::new()))
+    HtmlTemplate(form_template(None, draft, None, Vec::new(), Vec::new()))
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
@@ -123,8 +134,9 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         return (axum::http::StatusCode::NOT_FOUND, "transfer not found").into_response();
     };
     let documents = documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
+    let labels = documents_qry::labels(&conn).unwrap_or_default();
     let draft = draft_from_transfer(&transfer);
-    HtmlTemplate(form_template(Some(id), draft, None, documents)).into_response()
+    HtmlTemplate(form_template(Some(id), draft, None, documents, labels)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -150,8 +162,14 @@ async fn create(State(state): State<AppState>, Form(form): Form<TransferForm>) -
     let conn = state.conn();
     match qry::insert(&conn, &draft) {
         Ok(id) => Redirect::to(&format!("/transfers/{id}/edit")).into_response(),
-        Err(e) => HtmlTemplate(form_template(None, draft, Some(e.to_string()), Vec::new()))
-            .into_response(),
+        Err(e) => HtmlTemplate(form_template(
+            None,
+            draft,
+            Some(e.to_string()),
+            Vec::new(),
+            Vec::new(),
+        ))
+        .into_response(),
     }
 }
 
@@ -167,11 +185,13 @@ async fn update(
         Err(e) => {
             let documents =
                 documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
+            let labels = documents_qry::labels(&conn).unwrap_or_default();
             HtmlTemplate(form_template(
                 Some(id),
                 draft,
                 Some(e.to_string()),
                 documents,
+                labels,
             ))
             .into_response()
         }
@@ -253,7 +273,7 @@ async fn attach_document(
 
     match result {
         Ok(_) => Redirect::to(&format!("/transfers/{id}/edit")).into_response(),
-        Err(e) => (axum::http::StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => transfer_form_error_response(&conn, id, e),
     }
 }
 

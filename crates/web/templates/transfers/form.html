@@ -62,7 +62,11 @@
   <form method="post" action="/transfers/{{ id }}/documents" enctype="multipart/form-data">
     <div class="field">
       <label for="label">Label</label>
-      <input type="text" id="label" name="label" placeholder="e.g. bank receipt">
+      <select id="label" name="label">
+        {% for l in labels %}
+        <option value="{{ l }}">{{ l }}</option>
+        {% endfor %}
+      </select>
     </div>
     <div class="field">
       <label for="file">File</label>
