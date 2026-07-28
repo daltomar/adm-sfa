@@ -6093,6 +6093,7 @@ dependencies = [
  "axum-extra",
  "chrono",
  "form_urlencoded",
+ "http-body-util",
  "reports",
  "rusqlite",
  "rust-i18n",
@@ -6101,6 +6102,7 @@ dependencies = [
  "subtle",
  "time",
  "tokio",
+ "tower",
  "tower-http",
 ]
 
