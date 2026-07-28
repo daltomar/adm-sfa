@@ -2,6 +2,8 @@ mod auth;
 mod routes;
 mod state;
 mod templates;
+#[cfg(test)]
+mod test_support;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -40,6 +42,21 @@ async fn main() {
         cookie_key: Key::generate(),
     };
 
+    let app = build_app(state);
+
+    let bind_addr = std::env::var("ADM_SFA_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .unwrap_or_else(|e| panic!("failed to bind {bind_addr}: {e}"));
+    println!("adm-sfa-web listening on http://{bind_addr}");
+
+    axum::serve(listener, app).await.expect("server error");
+}
+
+/// Assembles the full router — pulled out of `main` so tests can build the
+/// same app (auth middleware, upload size limit, and all) without going
+/// through `main`'s env-var/DB-opening/TCP-binding setup.
+fn build_app(state: AppState) -> Router {
     let protected = Router::new()
         .route("/", get(|| async { Redirect::to("/purchases") }))
         .merge(routes::purchases::router())
@@ -51,25 +68,17 @@ async fn main() {
         .merge(routes::outbound::router())
         .merge(routes::reports::router())
         .merge(routes::settings::router())
-        .nest_service("/documents", ServeDir::new(&documents_dir))
+        .nest_service("/documents", ServeDir::new(&state.documents_dir))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
         ));
 
-    let app = Router::new()
+    Router::new()
         .merge(routes::login::router())
         .merge(protected)
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .with_state(state);
-
-    let bind_addr = std::env::var("ADM_SFA_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .unwrap_or_else(|e| panic!("failed to bind {bind_addr}: {e}"));
-    println!("adm-sfa-web listening on http://{bind_addr}");
-
-    axum::serve(listener, app).await.expect("server error");
+        .with_state(state)
 }
 
 fn parse_data_dir() -> PathBuf {

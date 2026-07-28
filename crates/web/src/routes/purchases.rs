@@ -374,3 +374,162 @@ async fn remove_document(
         Err(e) => purchase_form_error_response(&conn, id, e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support;
+    use adm_sfa_core::db::queries::{documents as documents_qry, purchases as purchases_qry};
+    use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
+    use axum::http::StatusCode;
+
+    fn a_purchase_draft() -> PurchaseDraft {
+        PurchaseDraft {
+            date: "2026-01-01".to_string(),
+            currency: Currency::Eur,
+            cost_str: "50.00".to_string(),
+            channel: "Kleinanzeigen".to_string(),
+            seller_info: String::new(),
+            multiple_items: false,
+            status: PurchaseStatus::Bought,
+        }
+    }
+
+    /// Regression coverage for the document-label allow-list fix
+    /// (CLAUDE.md backlog): the multipart upload's `label` field used to be
+    /// arbitrary free text with no check against `document_label` at all.
+    #[tokio::test]
+    async fn attach_document_rejects_an_unknown_label_and_rerenders_the_form() {
+        let (state, dir) = test_support::test_app("attach-doc-unknown-label");
+        let purchase_id = purchases_qry::insert(&state.conn(), &a_purchase_draft()).unwrap();
+        let app = crate::build_app(state.clone());
+
+        let cookie = test_support::login(&app).await;
+        let req = test_support::multipart_request(
+            &format!("/purchases/{purchase_id}/documents"),
+            &cookie,
+            "not-a-real-label",
+            b"fake image bytes",
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("Unknown document label"));
+        assert!(
+            documents_qry::list_for_record(&state.conn(), "purchase", purchase_id)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn attach_document_with_a_known_label_creates_a_document_and_redirects() {
+        let (state, dir) = test_support::test_app("attach-doc-known-label");
+        let purchase_id = purchases_qry::insert(&state.conn(), &a_purchase_draft()).unwrap();
+        let app = crate::build_app(state.clone());
+
+        let cookie = test_support::login(&app).await;
+        let req = test_support::multipart_request(
+            &format!("/purchases/{purchase_id}/documents"),
+            &cookie,
+            "chat",
+            b"fake image bytes",
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let docs = documents_qry::list_for_record(&state.conn(), "purchase", purchase_id).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].label, "chat");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn attach_document_without_a_session_cookie_redirects_to_login() {
+        let (state, dir) = test_support::test_app("attach-doc-unauthenticated");
+        let purchase_id = purchases_qry::insert(&state.conn(), &a_purchase_draft()).unwrap();
+        let app = crate::build_app(state.clone());
+
+        let req = test_support::multipart_request(
+            &format!("/purchases/{purchase_id}/documents"),
+            "", // no cookie at all
+            "chat",
+            b"fake image bytes",
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/login");
+        assert!(
+            documents_qry::list_for_record(&state.conn(), "purchase", purchase_id)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn attach_document_with_no_file_rerenders_the_form_with_an_error() {
+        let (state, dir) = test_support::test_app("attach-doc-no-file");
+        let purchase_id = purchases_qry::insert(&state.conn(), &a_purchase_draft()).unwrap();
+        let app = crate::build_app(state.clone());
+
+        let cookie = test_support::login(&app).await;
+        // Empty file bytes mirrors what a browser sends for an untouched
+        // `<input type="file">`: the `file` field is present with an empty
+        // filename/body, not absent — `attach_document`'s `!bytes.is_empty()`
+        // check is what actually distinguishes "no file" from a real upload.
+        let req = test_support::multipart_request(
+            &format!("/purchases/{purchase_id}/documents"),
+            &cookie,
+            "chat",
+            b"",
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("No file was selected"));
+        assert!(
+            documents_qry::list_for_record(&state.conn(), "purchase", purchase_id)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test locking in what CLAUDE.md's backlog only verified by
+    /// hand: a path-traversal-flavored label is rejected by the allow-list,
+    /// not merely "harmless by accident of filename construction" as it was
+    /// before that fix landed.
+    #[tokio::test]
+    async fn attach_document_rejects_a_path_traversal_flavored_label() {
+        let (state, dir) = test_support::test_app("attach-doc-path-traversal-label");
+        let purchase_id = purchases_qry::insert(&state.conn(), &a_purchase_draft()).unwrap();
+        let app = crate::build_app(state.clone());
+
+        let cookie = test_support::login(&app).await;
+        let req = test_support::multipart_request(
+            &format!("/purchases/{purchase_id}/documents"),
+            &cookie,
+            "../../../../tmp/pwned",
+            b"fake image bytes",
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("Unknown document label"));
+        assert!(
+            documents_qry::list_for_record(&state.conn(), "purchase", purchase_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !std::path::Path::new("/tmp/pwned").exists(),
+            "the traversal-flavored label must not have escaped the documents dir"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
