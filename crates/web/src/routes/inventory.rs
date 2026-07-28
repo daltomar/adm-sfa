@@ -173,11 +173,7 @@ fn form_template(
 /// "rebuild the draft from what's in the DB" path used both when no file
 /// was submitted and when `service::attach_document` rejects the upload.
 fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
-    let Some(item) = qry::list(conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|i| i.id == id)
-    else {
+    let Some(item) = qry::get(conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
     };
     let documents = documents_qry::list_for_record(conn, "item", id).unwrap_or_default();
@@ -231,11 +227,7 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
-    let Some(item) = qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|i| i.id == id)
-    else {
+    let Some(item) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
     };
     let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
@@ -392,11 +384,7 @@ async fn attach_document(
     // a nonexistent item id would still copy the file and insert a
     // permanently orphaned document row that no UI could ever list or
     // soft-delete, since no item exists to look it up against.
-    if !qry::list(&conn)
-        .unwrap_or_default()
-        .iter()
-        .any(|i| i.id == id)
-    {
+    if qry::get(&conn, id).ok().flatten().is_none() {
         let _ = std::fs::remove_file(&tmp_path);
         return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
     }

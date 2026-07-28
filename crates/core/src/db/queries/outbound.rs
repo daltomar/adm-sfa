@@ -1,7 +1,7 @@
 use crate::model::outbound::{
     OutboundEventDraft, OutboundEventRow, RecipientProject, RecipientProjectDraft,
 };
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -79,6 +79,36 @@ pub fn list(conn: &Connection) -> Result<Vec<OutboundEventRow>> {
         });
     }
     Ok(events)
+}
+
+/// A single outbound event by id, or `None` if it doesn't exist — a
+/// targeted alternative to `list(conn)?.into_iter().find(|e| e.id == id)`,
+/// the pattern every `web` route calling this used to re-fetch the whole
+/// table just to look up one row (CLAUDE.md's logged backlog item).
+pub fn get(conn: &Connection, id: i64) -> Result<Option<OutboundEventRow>> {
+    conn.query_row(
+        "SELECT oe.id, oe.date, oe.recipient_project_id, rp.name,
+                oe.cash_amount_brl, oe.notes,
+                (SELECT COUNT(*) FROM outbound_event_item oei
+                  WHERE oei.outbound_event_id = oe.id)
+           FROM outbound_event oe
+           JOIN recipient_project rp ON rp.id = oe.recipient_project_id
+          WHERE oe.id = ?1",
+        [id],
+        |row| {
+            let cash_str: Option<String> = row.get(4)?;
+            Ok(OutboundEventRow {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                recipient_project_id: row.get(2)?,
+                recipient_name: row.get(3)?,
+                cash_amount_brl: cash_str.and_then(|s| Decimal::from_str(&s).ok()),
+                notes: row.get(5)?,
+                item_count: row.get(6)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn item_ids_for_event(conn: &Connection, event_id: i64) -> Result<Vec<i64>> {
@@ -510,5 +540,33 @@ mod tests {
         let mut d = draft(rp);
         d.cash_amount_brl_str = "0.00".to_string();
         assert!(insert(&conn, &d, &[]).is_err());
+    }
+
+    #[test]
+    fn get_returns_the_matching_event() {
+        let conn = test_db();
+        let rp = insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Test Project".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let item_id = test_item(&conn, ItemStatus::Available);
+        let event_id = insert(&conn, &draft(rp), &[item_id]).unwrap();
+
+        let event = get(&conn, event_id).unwrap().unwrap();
+        assert_eq!(event.id, event_id);
+        assert_eq!(event.recipient_project_id, rp);
+        assert_eq!(event.item_count, 1);
+    }
+
+    #[test]
+    fn get_returns_none_for_a_nonexistent_id() {
+        let conn = test_db();
+        assert!(get(&conn, 999999).unwrap().is_none());
     }
 }

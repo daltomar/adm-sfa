@@ -1,5 +1,5 @@
 use crate::model::transaction::{EurTxDraft, EurTxRow, EurTxType};
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use rust_decimal::Decimal;
 
 pub fn list(conn: &Connection) -> Result<Vec<EurTxRow>> {
@@ -59,6 +59,42 @@ pub fn list(conn: &Connection) -> Result<Vec<EurTxRow>> {
         });
     }
     Ok(rows)
+}
+
+/// A single EUR ledger row by id, or `None` if it doesn't exist — a
+/// targeted alternative to `list(conn)?.into_iter().find(|r| r.id == id)`,
+/// the pattern every `web` route calling this used to re-fetch the whole
+/// table just to look up one row (CLAUDE.md's logged backlog item).
+pub fn get(conn: &Connection, id: i64) -> Result<Option<EurTxRow>> {
+    conn.query_row(
+        "SELECT t.id, t.date, t.type, t.amount,
+                t.donor_id, t.note, t.linked_purchase_id, t.linked_transfer_id,
+                d.name, p.channel
+           FROM eur_transaction t
+           LEFT JOIN donor   d ON d.id = t.donor_id
+           LEFT JOIN purchase p ON p.id = t.linked_purchase_id
+          WHERE t.id = ?1",
+        [id],
+        |row| {
+            let type_str: String = row.get(2)?;
+            let tx_type =
+                EurTxType::from_str(&type_str).ok_or_else(|| invalid_enum(2, &type_str))?;
+            let amount = parse_decimal(3, &row.get::<_, String>(3)?)?;
+            Ok(EurTxRow {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                tx_type,
+                amount,
+                donor_id: row.get(4)?,
+                note: row.get(5)?,
+                linked_purchase_id: row.get(6)?,
+                linked_transfer_id: row.get(7)?,
+                donor_name: row.get(8)?,
+                purchase_channel: row.get(9)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn insert(conn: &Connection, draft: &EurTxDraft) -> Result<i64> {
@@ -204,5 +240,20 @@ mod tests {
         let mut d = draft();
         d.date = "31.02.2026".to_string();
         assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn get_returns_the_matching_row() {
+        let conn = test_db();
+        let id = insert(&conn, &draft()).unwrap();
+        let row = get(&conn, id).unwrap().unwrap();
+        assert_eq!(row.id, id);
+        assert_eq!(row.tx_type, EurTxType::SelfFundingIn);
+    }
+
+    #[test]
+    fn get_returns_none_for_a_nonexistent_id() {
+        let conn = test_db();
+        assert!(get(&conn, 999999).unwrap().is_none());
     }
 }

@@ -89,6 +89,66 @@ pub fn list(conn: &Connection) -> Result<Vec<InventoryItemRow>> {
     Ok(items)
 }
 
+/// A single inventory item by id, or `None` if it doesn't exist — a
+/// targeted alternative to `list(conn)?.into_iter().find(|i| i.id == id)`,
+/// the pattern every `web` route calling this used to re-fetch the whole
+/// table just to look up one row (CLAUDE.md's logged backlog item).
+pub fn get(conn: &Connection, id: i64) -> Result<Option<InventoryItemRow>> {
+    conn.query_row(
+        "SELECT i.id, i.name, i.category_id, c.name,
+                i.source_type, i.source_donation_id, i.source_purchase_id,
+                dnr.name, pd.date_received, pu.channel, pu.date,
+                i.location, i.status, i.notes
+           FROM inventory_item i
+           JOIN category c            ON c.id = i.category_id
+           LEFT JOIN physical_donation pd ON pd.id = i.source_donation_id
+           LEFT JOIN donor dnr            ON dnr.id = pd.donor_id
+           LEFT JOIN purchase pu          ON pu.id = i.source_purchase_id
+          WHERE i.id = ?1",
+        [id],
+        |row| {
+            let source_type_str: String = row.get(4)?;
+            let source_type = SourceType::from_str(&source_type_str)
+                .ok_or_else(|| invalid_enum(4, &source_type_str))?;
+            let donor_name: Option<String> = row.get(7)?;
+            let date_received: Option<String> = row.get(8)?;
+            let purchase_channel: Option<String> = row.get(9)?;
+            let purchase_date: Option<String> = row.get(10)?;
+            let acquired_date = match source_type {
+                SourceType::Donation => date_received.clone(),
+                SourceType::Purchase => purchase_date,
+            };
+            let source_desc = match source_type {
+                SourceType::Donation => match (donor_name, date_received) {
+                    (Some(n), _) => n,
+                    (None, Some(d)) => format!("Anonymous donation ({d})"),
+                    (None, None) => "Donation".to_string(),
+                },
+                SourceType::Purchase => purchase_channel.unwrap_or_else(|| "Purchase".to_string()),
+            };
+            let location_str: String = row.get(11)?;
+            let status_str: String = row.get(12)?;
+            Ok(InventoryItemRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                category_id: row.get(2)?,
+                category_name: row.get(3)?,
+                source_type,
+                source_donation_id: row.get(5)?,
+                source_purchase_id: row.get(6)?,
+                source_desc,
+                acquired_date,
+                location: Location::from_str(&location_str)
+                    .ok_or_else(|| invalid_enum(11, &location_str))?,
+                status: ItemStatus::from_str(&status_str)
+                    .ok_or_else(|| invalid_enum(12, &status_str))?,
+                notes: row.get(13)?,
+            })
+        },
+    )
+    .optional()
+}
+
 pub fn insert(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {
     check_purchase_source(conn, draft, None)?;
     conn.execute(
@@ -402,5 +462,24 @@ mod tests {
         purchases::update(&conn, purchase_id, &bought).unwrap();
 
         insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+    }
+
+    #[test]
+    fn get_returns_the_matching_item() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        let id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+
+        let item = get(&conn, id).unwrap().unwrap();
+        assert_eq!(item.id, id);
+        assert_eq!(item.category_id, cat_id);
+        assert_eq!(item.source_purchase_id, Some(purchase_id));
+    }
+
+    #[test]
+    fn get_returns_none_for_a_nonexistent_id() {
+        let conn = test_db();
+        assert!(get(&conn, 999999).unwrap().is_none());
     }
 }
