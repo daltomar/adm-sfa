@@ -65,17 +65,19 @@ pub fn list_labels(conn: &Connection) -> Result<Vec<(i64, String)>> {
 }
 
 pub fn insert_label(conn: &Connection, name: &str) -> Result<i64> {
+    let name = super::require_name("document label name", name)?;
     conn.execute(
         "INSERT INTO document_label (name) VALUES (?1)",
-        params![name.trim()],
+        params![name],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn update_label(conn: &Connection, id: i64, name: &str) -> Result<()> {
+    let name = super::require_name("document label name", name)?;
     let changed = conn.execute(
         "UPDATE document_label SET name = ?1 WHERE id = ?2",
-        params![name.trim(), id],
+        params![name, id],
     )?;
     if changed == 0 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -105,4 +107,37 @@ pub fn insert(
 pub fn soft_delete(conn: &Connection, id: i64) -> Result<()> {
     conn.execute("UPDATE document SET deleted = 1 WHERE id = ?1", [id])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../../schema.sql"))
+            .unwrap();
+        conn
+    }
+
+    #[test]
+    fn blank_label_name_is_rejected_on_insert() {
+        let conn = test_db();
+        let before = labels(&conn).unwrap().len();
+        assert!(insert_label(&conn, "  ").is_err());
+        assert_eq!(labels(&conn).unwrap().len(), before);
+    }
+
+    #[test]
+    fn blank_label_name_is_rejected_on_update() {
+        let conn = test_db();
+        let id = insert_label(&conn, "Receipt").unwrap();
+        assert!(update_label(&conn, id, "").is_err());
+        let row = list_labels(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|(row_id, _)| *row_id == id)
+            .unwrap();
+        assert_eq!(row.1, "Receipt");
+    }
 }

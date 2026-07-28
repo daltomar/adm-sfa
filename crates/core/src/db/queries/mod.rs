@@ -19,3 +19,17 @@ fn opt(s: &str) -> Option<&str> {
         Some(t)
     }
 }
+
+/// Authoritative guard for name-like fields (category, document label, donor
+/// name) that a UI form marks `required` but that a raw POST can still send
+/// blank. `field` names the field in the error message (e.g. "category
+/// name") so callers don't need their own wording.
+fn require_name<'a>(field: &str, s: &'a str) -> rusqlite::Result<&'a str> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            format!("{field} must not be empty").into(),
+        ));
+    }
+    Ok(t)
+}
