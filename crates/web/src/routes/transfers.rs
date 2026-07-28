@@ -81,11 +81,7 @@ fn form_template(
 /// `purchases.rs::purchase_form_error_response`.
 fn transfer_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
     let documents = documents_qry::list_for_record(conn, "transfer", id).unwrap_or_default();
-    let Some(transfer) = qry::list(conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|t| t.id == id)
-    else {
+    let Some(transfer) = qry::get(conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "transfer not found").into_response();
     };
     let draft = draft_from_transfer(&transfer);
@@ -126,11 +122,7 @@ async fn new_form() -> impl IntoResponse {
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
-    let Some(transfer) = qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|t| t.id == id)
-    else {
+    let Some(transfer) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "transfer not found").into_response();
     };
     let documents = documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
@@ -248,11 +240,7 @@ async fn attach_document(
     };
 
     let conn = state.conn();
-    let persisted_date = qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|t| t.id == id)
-        .map(|t| t.date);
+    let persisted_date = qry::get(&conn, id).ok().flatten().map(|t| t.date);
     let existing: Vec<String> = documents_qry::list_for_record(&conn, "transfer", id)
         .unwrap_or_default()
         .into_iter()

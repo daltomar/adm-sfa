@@ -42,11 +42,7 @@ async fn new_form() -> impl IntoResponse {
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.conn();
-    let Some(donor) = donors_qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|d| d.id == id)
-    else {
+    let Some(donor) = donors_qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "donor not found").into_response();
     };
     let draft = DonorDraft {

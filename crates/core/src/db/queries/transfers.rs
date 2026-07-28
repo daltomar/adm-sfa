@@ -1,5 +1,5 @@
 use crate::model::transfer::{AnnualTransfer, TransferDraft};
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use rust_decimal::Decimal;
 
 pub fn list(conn: &Connection) -> Result<Vec<AnnualTransfer>> {
@@ -33,6 +33,30 @@ pub fn list(conn: &Connection) -> Result<Vec<AnnualTransfer>> {
         });
     }
     Ok(transfers)
+}
+
+/// A single transfer by id, or `None` if it doesn't exist — a targeted
+/// alternative to `list(conn)?.into_iter().find(|t| t.id == id)`, the
+/// pattern every `web` route calling this used to re-fetch the whole table
+/// just to look up one row (CLAUDE.md's logged backlog item).
+pub fn get(conn: &Connection, id: i64) -> Result<Option<AnnualTransfer>> {
+    conn.query_row(
+        "SELECT id, date, eur_amount_sent, exchange_rate, brl_amount_received, notes
+           FROM annual_transfer
+          WHERE id = ?1",
+        [id],
+        |row| {
+            Ok(AnnualTransfer {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                eur_amount_sent: parse_decimal(2, &row.get::<_, String>(2)?)?,
+                exchange_rate: parse_decimal(3, &row.get::<_, String>(3)?)?,
+                brl_amount_received: parse_decimal(4, &row.get::<_, String>(4)?)?,
+                notes: row.get(5)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn insert(conn: &Connection, draft: &TransferDraft) -> Result<i64> {
@@ -237,5 +261,19 @@ mod tests {
         d.eur_amount_sent_str = "79228162514264337593543950335".to_string(); // Decimal::MAX
         d.exchange_rate_str = "2".to_string();
         assert!(insert(&conn, &d).is_err());
+    }
+
+    #[test]
+    fn get_returns_the_matching_transfer() {
+        let conn = test_db();
+        let id = insert(&conn, &draft()).unwrap();
+        let transfer = get(&conn, id).unwrap().unwrap();
+        assert_eq!(transfer.id, id);
+    }
+
+    #[test]
+    fn get_returns_none_for_a_nonexistent_id() {
+        let conn = test_db();
+        assert!(get(&conn, 999999).unwrap().is_none());
     }
 }

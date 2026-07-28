@@ -123,11 +123,7 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
-    let Some(event) = qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|e| e.id == id)
-    else {
+    let Some(event) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "event not found").into_response();
     };
     let selected_item_ids = qry::item_ids_for_event(&conn, id).unwrap_or_default();

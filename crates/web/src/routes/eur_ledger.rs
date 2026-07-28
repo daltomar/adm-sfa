@@ -96,11 +96,7 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
-    let Some(row) = qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|r| r.id == id)
-    else {
+    let Some(row) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "entry not found").into_response();
     };
     if !row.tx_type.is_manual() {
@@ -192,11 +188,7 @@ async fn update(
     Form(form): Form<EurTxForm>,
 ) -> Response {
     let conn = state.conn();
-    let Some(existing) = qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|r| r.id == id)
-    else {
+    let Some(existing) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "entry not found").into_response();
     };
     if !existing.tx_type.is_manual() {

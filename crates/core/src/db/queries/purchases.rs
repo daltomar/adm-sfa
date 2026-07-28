@@ -1,5 +1,5 @@
 use crate::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use rust_decimal::Decimal;
 
 pub fn list(conn: &Connection) -> Result<Vec<Purchase>> {
@@ -43,6 +43,39 @@ pub fn list(conn: &Connection) -> Result<Vec<Purchase>> {
         });
     }
     Ok(purchases)
+}
+
+/// A single purchase by id, or `None` if it doesn't exist — a targeted
+/// alternative to `list(conn)?.into_iter().find(|p| p.id == id)`, the
+/// pattern every `web` route calling this used to re-fetch the whole table
+/// just to look up one row (CLAUDE.md's logged backlog item).
+pub fn get(conn: &Connection, id: i64) -> Result<Option<Purchase>> {
+    conn.query_row(
+        "SELECT id, date, currency, cost, channel, seller_info, multiple_items, status
+           FROM purchase
+          WHERE id = ?1",
+        [id],
+        |row| {
+            let currency_str: String = row.get(2)?;
+            let currency =
+                Currency::from_str(&currency_str).ok_or_else(|| invalid_enum(2, &currency_str))?;
+            let cost = parse_decimal(3, &row.get::<_, String>(3)?)?;
+            let status_str: String = row.get(7)?;
+            let status = PurchaseStatus::from_str(&status_str)
+                .ok_or_else(|| invalid_enum(7, &status_str))?;
+            Ok(Purchase {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                currency,
+                cost,
+                channel: row.get(4)?,
+                seller_info: row.get(5)?,
+                multiple_items: row.get::<_, i32>(6)? != 0,
+                status,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn insert(conn: &Connection, draft: &PurchaseDraft) -> Result<i64> {
@@ -457,5 +490,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, 0);
+    }
+
+    #[test]
+    fn get_returns_the_matching_purchase() {
+        let conn = test_db();
+        let id = insert(&conn, &draft(PurchaseStatus::Bought, Currency::Brl)).unwrap();
+        let purchase = get(&conn, id).unwrap().unwrap();
+        assert_eq!(purchase.id, id);
+        assert_eq!(purchase.currency, Currency::Brl);
+        assert_eq!(purchase.status, PurchaseStatus::Bought);
+    }
+
+    #[test]
+    fn get_returns_none_for_a_nonexistent_id() {
+        let conn = test_db();
+        assert!(get(&conn, 999999).unwrap().is_none());
     }
 }

@@ -37,11 +37,7 @@ fn draft_from_purchase(p: &Purchase) -> PurchaseDraft {
 /// document removal) that fail after the point of no redirect-only return.
 fn purchase_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
     let documents = documents_qry::list_for_record(conn, "purchase", id).unwrap_or_default();
-    let Some(purchase) = purchases_qry::list(conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|p| p.id == id)
-    else {
+    let Some(purchase) = purchases_qry::get(conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "purchase not found").into_response();
     };
     let draft = draft_from_purchase(&purchase);
@@ -106,11 +102,7 @@ async fn new_form() -> impl IntoResponse {
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.conn();
-    let Some(purchase) = purchases_qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|p| p.id == id)
-    else {
+    let Some(purchase) = purchases_qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "purchase not found").into_response();
     };
     let documents = documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
@@ -195,10 +187,9 @@ async fn update(
     // silently change negotiating/bought; that's `mark_bought`'s job, and
     // `purchases_qry::update` itself refuses to let a bought purchase
     // revert regardless of what's submitted here.
-    let current_status = purchases_qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|p| p.id == id)
+    let current_status = purchases_qry::get(&conn, id)
+        .ok()
+        .flatten()
         .map(|p| p.status)
         .unwrap_or(PurchaseStatus::Bought);
     let draft = draft_from_form(form, current_status);
@@ -243,11 +234,7 @@ async fn update(
 
 async fn mark_bought(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.conn();
-    let Some(purchase) = purchases_qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|p| p.id == id)
-    else {
+    let Some(purchase) = purchases_qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "purchase not found").into_response();
     };
     let draft = draft_from_purchase(&purchase);
@@ -328,11 +315,7 @@ async fn attach_document(
     };
 
     let conn = state.conn();
-    let persisted_date = purchases_qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|p| p.id == id)
-        .map(|p| p.date);
+    let persisted_date = purchases_qry::get(&conn, id).ok().flatten().map(|p| p.date);
     let existing: Vec<String> = documents_qry::list_for_record(&conn, "purchase", id)
         .unwrap_or_default()
         .into_iter()

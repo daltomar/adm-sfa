@@ -1,5 +1,5 @@
 use crate::model::donor::{Donor, DonorDraft, PhysicalDonation, PhysicalDonationDraft};
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 
 pub fn list(conn: &Connection) -> Result<Vec<Donor>> {
     let mut stmt = conn.prepare(
@@ -18,6 +18,26 @@ pub fn list(conn: &Connection) -> Result<Vec<Donor>> {
         })?
         .collect::<Result<Vec<_>>>()?;
     Ok(donors)
+}
+
+/// A single donor by id, or `None` if it doesn't exist — a targeted
+/// alternative to `list(conn)?.into_iter().find(|d| d.id == id)`, which was
+/// the pattern every `web` route calling this used to re-fetch the whole
+/// table just to look up one row (CLAUDE.md's logged backlog item).
+pub fn get(conn: &Connection, id: i64) -> Result<Option<Donor>> {
+    conn.query_row(
+        "SELECT id, name, contact_info, notes FROM donor WHERE id = ?1",
+        [id],
+        |row| {
+            Ok(Donor {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                contact_info: row.get(2)?,
+                notes: row.get(3)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn insert(conn: &Connection, draft: &DonorDraft) -> Result<i64> {
@@ -148,5 +168,20 @@ mod tests {
         let id = insert(&conn, &blank_donor_draft("Jane Doe")).unwrap();
         assert!(update(&conn, id, &blank_donor_draft("")).is_err());
         assert_eq!(list(&conn).unwrap()[0].name, "Jane Doe");
+    }
+
+    #[test]
+    fn get_returns_the_matching_donor() {
+        let conn = test_db();
+        let id = insert(&conn, &blank_donor_draft("Jane Doe")).unwrap();
+        let donor = get(&conn, id).unwrap().unwrap();
+        assert_eq!(donor.id, id);
+        assert_eq!(donor.name, "Jane Doe");
+    }
+
+    #[test]
+    fn get_returns_none_for_a_nonexistent_id() {
+        let conn = test_db();
+        assert!(get(&conn, 999999).unwrap().is_none());
     }
 }
