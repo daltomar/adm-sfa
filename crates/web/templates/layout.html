@@ -10,6 +10,9 @@
   header a { color: #fff; text-decoration: none; }
   header a:hover { text-decoration: underline; }
   header .brand { font-weight: 600; margin-right: 1rem; }
+  header .logout-form { margin: 0; }
+  header .logout-form button { background: none; border: none; padding: 0; color: #fff; font: inherit; cursor: pointer; text-decoration: none; }
+  header .logout-form button:hover { text-decoration: underline; }
   main { padding: 1.5rem; max-width: 900px; margin: 0 auto; }
   table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
   th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; }
@@ -42,7 +45,11 @@
   <a href="/outbound">Outbound</a>
   <a href="/reports">Reports</a>
   <a href="/settings">Settings</a>
-  <span style="margin-left: auto;"><a href="/logout">Log out</a></span>
+  <span style="margin-left: auto;">
+    <form class="logout-form" method="post" action="/logout">
+      <button type="submit">Log out</button>
+    </form>
+  </span>
 </header>
 <main>
 {% block content %}{% endblock %}

@@ -9,6 +9,15 @@ use crate::state::AppState;
 
 const SESSION_COOKIE: &str = "adm_sfa_session";
 
+/// A client-enforced expiry only — the browser stops sending the cookie
+/// once its `Max-Age` elapses, but `require_auth` never checks an issued-at
+/// timestamp of its own, so a captured raw cookie value replayed directly
+/// (not through a compliant browser) stays valid until the process
+/// restarts and regenerates `cookie_key`. 8 hours covers a working session
+/// on this LAN-only, occasional-use tool without requiring a re-login
+/// mid-task; it's not a guarantee against a stolen cookie outliving it.
+const SESSION_MAX_AGE: time::Duration = time::Duration::hours(8);
+
 /// Constant-time comparison — a plain `==` on the submitted password would
 /// leak timing information about how many leading bytes matched. The
 /// stakes are low for a LAN-only single-shared-password app, but this is
@@ -28,6 +37,7 @@ pub fn set_session_cookie(jar: SignedCookieJar) -> SignedCookieJar {
         .http_only(true)
         .same_site(SameSite::Strict)
         .path("/")
+        .max_age(SESSION_MAX_AGE)
         .build();
     jar.add(cookie)
 }

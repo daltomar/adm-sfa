@@ -1,6 +1,6 @@
 use axum::extract::State;
 use axum::response::{IntoResponse, Redirect};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Form, Router};
 use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
@@ -12,7 +12,7 @@ use crate::templates::{HtmlTemplate, LoginTemplate};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/login", get(show).post(submit))
-        .route("/logout", get(logout))
+        .route("/logout", post(logout))
 }
 
 async fn show() -> impl IntoResponse {
