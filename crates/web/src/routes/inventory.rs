@@ -148,6 +148,7 @@ fn form_template(
     let donations = donors_qry::list_donations(conn).unwrap_or_default();
     let purchases = purchases_qry::list(conn).unwrap_or_default();
     let items = qry::list(conn).unwrap_or_default();
+    let labels = documents_qry::labels(conn).unwrap_or_default();
 
     InventoryFormTemplate {
         id,
@@ -161,7 +162,43 @@ fn form_template(
         notes: draft.notes.clone(),
         error,
         documents,
+        labels,
     }
+}
+
+/// Re-fetches the persisted item and re-renders its edit form with an error
+/// banner — same pattern as `purchases.rs::purchase_form_error_response`.
+/// `attach_document` has no in-flight draft of its own (it's a
+/// document-only upload, not a full item edit), so this is the shared
+/// "rebuild the draft from what's in the DB" path used both when no file
+/// was submitted and when `service::attach_document` rejects the upload.
+fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
+    let Some(item) = qry::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|i| i.id == id)
+    else {
+        return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
+    };
+    let documents = documents_qry::list_for_record(conn, "item", id).unwrap_or_default();
+    let draft = InventoryItemDraft {
+        name: item.name,
+        category_id: Some(item.category_id),
+        source_type: item.source_type,
+        source_donation_id: item.source_donation_id,
+        source_purchase_id: item.source_purchase_id,
+        location: item.location,
+        status: item.status,
+        notes: item.notes.unwrap_or_default(),
+    };
+    HtmlTemplate(form_template(
+        conn,
+        Some(id),
+        &draft,
+        Some(error),
+        documents,
+    ))
+    .into_response()
 }
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
@@ -342,32 +379,11 @@ async fn attach_document(
 
     let Some(tmp_path) = tmp_path else {
         let conn = state.conn();
-        let Some(item) = qry::list(&conn)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|i| i.id == id)
-        else {
-            return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
-        };
-        let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
-        let draft = InventoryItemDraft {
-            name: item.name,
-            category_id: Some(item.category_id),
-            source_type: item.source_type,
-            source_donation_id: item.source_donation_id,
-            source_purchase_id: item.source_purchase_id,
-            location: item.location,
-            status: item.status,
-            notes: item.notes.unwrap_or_default(),
-        };
-        return HtmlTemplate(form_template(
+        return item_form_error_response(
             &conn,
-            Some(id),
-            &draft,
-            Some("No file was selected, or the upload could not be saved.".to_string()),
-            documents,
-        ))
-        .into_response();
+            id,
+            "No file was selected, or the upload could not be saved.".to_string(),
+        );
     };
 
     let conn = state.conn();
@@ -407,7 +423,7 @@ async fn attach_document(
 
     match result {
         Ok(_) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
-        Err(e) => (axum::http::StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => item_form_error_response(&conn, id, e),
     }
 }
 
@@ -425,27 +441,7 @@ async fn remove_document(
     };
     match docs_fs::remove_document(&conn, &state.documents_dir, doc.id, &doc.filename) {
         Ok(()) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
-        Err(e) => {
-            let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
-            let Some(item) = qry::list(&conn)
-                .unwrap_or_default()
-                .into_iter()
-                .find(|i| i.id == id)
-            else {
-                return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
-            };
-            let draft = InventoryItemDraft {
-                name: item.name,
-                category_id: Some(item.category_id),
-                source_type: item.source_type,
-                source_donation_id: item.source_donation_id,
-                source_purchase_id: item.source_purchase_id,
-                location: item.location,
-                status: item.status,
-                notes: item.notes.unwrap_or_default(),
-            };
-            HtmlTemplate(form_template(&conn, Some(id), &draft, Some(e), documents)).into_response()
-        }
+        Err(e) => item_form_error_response(&conn, id, e),
     }
 }
 

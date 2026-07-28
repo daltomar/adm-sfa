@@ -55,6 +55,12 @@ pub struct PurchaseFormTemplate {
     pub error: Option<String>,
     pub documents: Vec<adm_sfa_core::model::document::Document>,
     pub is_negotiating: bool,
+    /// Document labels for the "Attach a document" picker — sourced from
+    /// `document_label`, same allow-list `core::service::attach_document`
+    /// enforces authoritatively, so the web form can't submit a value that
+    /// gets rejected. Empty (and unused, since the template only renders
+    /// the picker when `id` is `Some`) on the create form.
+    pub labels: Vec<String>,
 }
 
 pub struct DonorRow {
@@ -163,6 +169,8 @@ pub struct TransferFormTemplate {
     pub brl_preview: Option<String>,
     pub error: Option<String>,
     pub documents: Vec<adm_sfa_core::model::document::Document>,
+    /// See `PurchaseFormTemplate::labels`.
+    pub labels: Vec<String>,
 }
 
 pub struct InventoryRow {
@@ -222,6 +230,8 @@ pub struct InventoryFormTemplate {
     pub notes: String,
     pub error: Option<String>,
     pub documents: Vec<adm_sfa_core::model::document::Document>,
+    /// See `PurchaseFormTemplate::labels`.
+    pub labels: Vec<String>,
 }
 
 pub struct DonationRow {

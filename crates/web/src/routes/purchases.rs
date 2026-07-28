@@ -45,12 +45,14 @@ fn purchase_form_error_response(conn: &rusqlite::Connection, id: i64, error: Str
         return (axum::http::StatusCode::NOT_FOUND, "purchase not found").into_response();
     };
     let draft = draft_from_purchase(&purchase);
+    let labels = documents_qry::labels(conn).unwrap_or_default();
     HtmlTemplate(PurchaseFormTemplate {
         id: Some(id),
         is_negotiating: draft.status == PurchaseStatus::Negotiating,
         draft,
         error: Some(error),
         documents,
+        labels,
     })
     .into_response()
 }
@@ -98,6 +100,7 @@ async fn new_form() -> impl IntoResponse {
         error: None,
         documents: Vec::new(),
         is_negotiating: false,
+        labels: Vec::new(),
     })
 }
 
@@ -111,6 +114,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
         return (axum::http::StatusCode::NOT_FOUND, "purchase not found").into_response();
     };
     let documents = documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
+    let labels = documents_qry::labels(&conn).unwrap_or_default();
     let draft = draft_from_purchase(&purchase);
     HtmlTemplate(PurchaseFormTemplate {
         id: Some(id),
@@ -118,6 +122,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
         draft,
         error: None,
         documents,
+        labels,
     })
     .into_response()
 }
@@ -174,6 +179,7 @@ async fn create(
             error: Some(e.to_string()),
             documents: Vec::new(),
             is_negotiating: false,
+            labels: Vec::new(),
         })
         .into_response(),
     }
@@ -201,6 +207,7 @@ async fn update(
         if let Ok(Some(n)) = purchases_qry::multiple_items_unset_conflict(&conn, id) {
             let documents =
                 documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
+            let labels = documents_qry::labels(&conn).unwrap_or_default();
             return HtmlTemplate(PurchaseFormTemplate {
                 id: Some(id),
                 is_negotiating: draft.status == PurchaseStatus::Negotiating,
@@ -209,6 +216,7 @@ async fn update(
                     "Cannot mark as single-item: {n} inventory items are already linked."
                 )),
                 documents,
+                labels,
             })
             .into_response();
         }
@@ -219,12 +227,14 @@ async fn update(
         Err(e) => {
             let documents =
                 documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
+            let labels = documents_qry::labels(&conn).unwrap_or_default();
             HtmlTemplate(PurchaseFormTemplate {
                 id: Some(id),
                 is_negotiating: draft.status == PurchaseStatus::Negotiating,
                 draft,
                 error: Some(e.to_string()),
                 documents,
+                labels,
             })
             .into_response()
         }
@@ -246,12 +256,14 @@ async fn mark_bought(State(state): State<AppState>, Path(id): Path<i64>) -> impl
         Err(e) => {
             let documents =
                 documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
+            let labels = documents_qry::labels(&conn).unwrap_or_default();
             HtmlTemplate(PurchaseFormTemplate {
                 id: Some(id),
                 is_negotiating: draft.status == PurchaseStatus::Negotiating,
                 draft,
                 error: Some(e.to_string()),
                 documents,
+                labels,
             })
             .into_response()
         }
@@ -341,7 +353,7 @@ async fn attach_document(
 
     match result {
         Ok(_) => Redirect::to(&format!("/purchases/{id}/edit")).into_response(),
-        Err(e) => (axum::http::StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => purchase_form_error_response(&conn, id, e),
     }
 }
 
