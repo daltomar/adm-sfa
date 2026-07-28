@@ -171,6 +171,13 @@ pub fn insert(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {
 }
 
 pub fn update(conn: &Connection, id: i64, draft: &InventoryItemDraft) -> Result<()> {
+    if let Some(current) = get(conn, id)? {
+        if donated_item_edit_locked(&current, draft) {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "this item has already been donated; only notes can be edited".into(),
+            ));
+        }
+    }
     check_purchase_source(conn, draft, Some(id))?;
     conn.execute(
         "UPDATE inventory_item
@@ -191,6 +198,27 @@ pub fn update(conn: &Connection, id: i64, draft: &InventoryItemDraft) -> Result<
         ],
     )?;
     Ok(())
+}
+
+/// Once an item is `donated`, every field except `notes` is locked —
+/// `status` (re-editing it back to `available` would let the same physical
+/// item be linked to a *second* outbound event, per the phase 2 review that
+/// first flagged this gap) and everything else that describes the item's
+/// identity or provenance (name, category, location, and its
+/// donation/purchase source), since any of those changing after the fact
+/// would corrupt the reconciliation trail the donation event already
+/// recorded against this item. No manual-override escape hatch — a
+/// mis-recorded donated item is corrected by deleting and recreating it,
+/// not by editing history.
+fn donated_item_edit_locked(current: &InventoryItemRow, draft: &InventoryItemDraft) -> bool {
+    current.status == ItemStatus::Donated
+        && (draft.name.trim() != current.name
+            || draft.category_id != Some(current.category_id)
+            || draft.location != current.location
+            || draft.source_type != current.source_type
+            || draft.source_donation_id != current.source_donation_id
+            || draft.source_purchase_id != current.source_purchase_id
+            || draft.status != current.status)
 }
 
 fn check_purchase_source(
@@ -481,5 +509,90 @@ mod tests {
     fn get_returns_none_for_a_nonexistent_id() {
         let conn = test_db();
         assert!(get(&conn, 999999).unwrap().is_none());
+    }
+
+    #[test]
+    fn notes_can_still_be_edited_after_donation() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        let id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+
+        let mut donated = item_draft(cat_id, purchase_id);
+        donated.status = ItemStatus::Donated;
+        update(&conn, id, &donated).unwrap();
+
+        let mut notes_edit = donated.clone();
+        notes_edit.notes = "handled with care".to_string();
+        update(&conn, id, &notes_edit).unwrap();
+
+        let item = get(&conn, id).unwrap().unwrap();
+        assert_eq!(item.notes.as_deref(), Some("handled with care"));
+    }
+
+    #[test]
+    fn status_cannot_revert_from_donated() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        let id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+
+        let mut donated = item_draft(cat_id, purchase_id);
+        donated.status = ItemStatus::Donated;
+        update(&conn, id, &donated).unwrap();
+
+        let mut reverted = donated.clone();
+        reverted.status = ItemStatus::Available;
+        assert!(update(&conn, id, &reverted).is_err());
+
+        assert_eq!(get(&conn, id).unwrap().unwrap().status, ItemStatus::Donated);
+    }
+
+    #[test]
+    fn non_notes_fields_are_locked_after_donation() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        let id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+
+        let mut donated = item_draft(cat_id, purchase_id);
+        donated.status = ItemStatus::Donated;
+        update(&conn, id, &donated).unwrap();
+
+        let mut renamed = donated.clone();
+        renamed.name = "Different name".to_string();
+        assert!(update(&conn, id, &renamed).is_err());
+
+        let mut relocated = donated.clone();
+        relocated.location = Location::Brazil;
+        assert!(update(&conn, id, &relocated).is_err());
+
+        let other_cat_id = categories::insert(&conn, "Wheels").unwrap();
+        let mut recategorized = donated.clone();
+        recategorized.category_id = Some(other_cat_id);
+        assert!(update(&conn, id, &recategorized).is_err());
+
+        // Confirm none of the rejected attempts actually changed anything.
+        let item = get(&conn, id).unwrap().unwrap();
+        assert_eq!(item.name, "Deck");
+        assert_eq!(item.location, Location::Germany);
+        assert_eq!(item.category_id, cat_id);
+    }
+
+    #[test]
+    fn a_non_donated_item_has_no_locked_fields() {
+        let conn = test_db();
+        let cat_id = categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = purchase(&conn, false);
+        let id = insert(&conn, &item_draft(cat_id, purchase_id)).unwrap();
+
+        let mut renamed = item_draft(cat_id, purchase_id);
+        renamed.name = "Renamed while available".to_string();
+        update(&conn, id, &renamed).unwrap();
+
+        assert_eq!(
+            get(&conn, id).unwrap().unwrap().name,
+            "Renamed while available"
+        );
     }
 }

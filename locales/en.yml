@@ -246,6 +246,7 @@ inventory.button.new_donation: "+ New donation"
 inventory.donation_label: "%{date} — %{name}"
 inventory.donation_label_anonymous: "%{date} — Anonymous"
 inventory.purchase_label: "%{date}  %{channel}  %{symbol}%{cost}%{multi}"
+inventory.donated_locked_notice: "This item has been donated — only Notes can still be edited."
 
 reports.tab.donors: "Donor breakdown"
 reports.tab.eur: "EUR ledger summary"

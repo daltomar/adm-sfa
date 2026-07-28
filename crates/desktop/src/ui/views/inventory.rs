@@ -38,6 +38,12 @@ pub struct InventoryView {
     items: Vec<InventoryItemRow>,
     mode: Mode,
     draft: InventoryItemDraft,
+    /// The status as currently persisted for the item being edited — used
+    /// (not `draft.status`) to decide whether the donated-item field lock
+    /// applies, so that a rejected attempt to edit `draft.status` away from
+    /// `Donated` doesn't visually unlock the form before the next reload.
+    /// `None` outside `Mode::Editing`.
+    persisted_status: Option<ItemStatus>,
     error: Option<String>,
     needs_reload: bool,
 
@@ -70,6 +76,7 @@ impl Default for InventoryView {
             items: Vec::new(),
             mode: Mode::List,
             draft: InventoryItemDraft::default(),
+            persisted_status: None,
             error: None,
             needs_reload: true,
             categories: Vec::new(),
@@ -212,6 +219,7 @@ impl InventoryView {
 
         if ui.button(t!("inventory.button.add").as_ref()).clicked() {
             self.draft = InventoryItemDraft::default();
+            self.persisted_status = None;
             self.mode = Mode::Adding;
             self.error = None;
             self.docs = Vec::new();
@@ -264,6 +272,7 @@ impl InventoryView {
                             status: item.status,
                             notes: item.notes.clone().unwrap_or_default(),
                         };
+                        self.persisted_status = Some(item.status);
                         self.mode = Mode::Editing(id);
                         self.error = None;
                         self.docs_needs_reload = true;
@@ -293,17 +302,36 @@ impl InventoryView {
         ui.heading(heading.as_ref());
         ui.add_space(8.0);
 
+        // Once donated, every field except Notes is locked — editing name,
+        // category, location, status, or source after the fact would
+        // corrupt the reconciliation trail the donation event already
+        // recorded against this item (see CLAUDE.md's donated-item
+        // field-locking backlog item). `core::db::queries::inventory::update`
+        // enforces this authoritatively; this is the matching UI indication,
+        // not the actual guard. No escape hatch: a mis-recorded donated item
+        // is corrected by deleting and recreating it.
+        let locked = self.persisted_status == Some(ItemStatus::Donated);
+        if locked {
+            ui.colored_label(
+                egui::Color32::from_rgb(180, 140, 0),
+                t!("inventory.donated_locked_notice").as_ref(),
+            );
+            ui.add_space(4.0);
+        }
+
         egui::Grid::new("inventory_form_grid")
             .num_columns(2)
             .spacing([12.0, 8.0])
             .min_col_width(90.0)
             .show(ui, |ui| {
                 ui.label(t!("common.field.name").as_ref());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.draft.name)
-                        .hint_text(t!("inventory.field.name_hint").as_ref())
-                        .desired_width(280.0),
-                );
+                ui.add_enabled_ui(!locked, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.draft.name)
+                            .hint_text(t!("inventory.field.name_hint").as_ref())
+                            .desired_width(280.0),
+                    );
+                });
                 ui.end_row();
 
                 ui.label(t!("inventory.field.category").as_ref());
@@ -313,47 +341,57 @@ impl InventoryView {
                     .and_then(|cid| self.categories.iter().find(|c| c.id == cid))
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| t!("common.combo.choose_one").into_owned());
-                egui::ComboBox::from_id_salt("inventory_category_combo")
-                    .selected_text(selected_name)
-                    .show_ui(ui, |ui| {
-                        for c in &self.categories {
-                            ui.selectable_value(&mut self.draft.category_id, Some(c.id), &c.name);
-                        }
-                    });
+                ui.add_enabled_ui(!locked, |ui| {
+                    egui::ComboBox::from_id_salt("inventory_category_combo")
+                        .selected_text(selected_name)
+                        .show_ui(ui, |ui| {
+                            for c in &self.categories {
+                                ui.selectable_value(
+                                    &mut self.draft.category_id,
+                                    Some(c.id),
+                                    &c.name,
+                                );
+                            }
+                        });
+                });
                 ui.end_row();
 
                 ui.label(t!("common.field.location").as_ref());
-                ui.horizontal(|ui| {
-                    ui.radio_value(
-                        &mut self.draft.location,
-                        Location::Germany,
-                        t!("status.location.germany").as_ref(),
-                    );
-                    ui.radio_value(
-                        &mut self.draft.location,
-                        Location::Brazil,
-                        t!("status.location.brazil").as_ref(),
-                    );
+                ui.add_enabled_ui(!locked, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(
+                            &mut self.draft.location,
+                            Location::Germany,
+                            t!("status.location.germany").as_ref(),
+                        );
+                        ui.radio_value(
+                            &mut self.draft.location,
+                            Location::Brazil,
+                            t!("status.location.brazil").as_ref(),
+                        );
+                    });
                 });
                 ui.end_row();
 
                 ui.label(t!("common.field.status").as_ref());
-                ui.horizontal(|ui| {
-                    ui.radio_value(
-                        &mut self.draft.status,
-                        ItemStatus::Available,
-                        t!("status.item.available").as_ref(),
-                    );
-                    ui.radio_value(
-                        &mut self.draft.status,
-                        ItemStatus::Reserved,
-                        t!("status.item.reserved").as_ref(),
-                    );
-                    ui.radio_value(
-                        &mut self.draft.status,
-                        ItemStatus::Donated,
-                        t!("status.item.donated").as_ref(),
-                    );
+                ui.add_enabled_ui(!locked, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(
+                            &mut self.draft.status,
+                            ItemStatus::Available,
+                            t!("status.item.available").as_ref(),
+                        );
+                        ui.radio_value(
+                            &mut self.draft.status,
+                            ItemStatus::Reserved,
+                            t!("status.item.reserved").as_ref(),
+                        );
+                        ui.radio_value(
+                            &mut self.draft.status,
+                            ItemStatus::Donated,
+                            t!("status.item.donated").as_ref(),
+                        );
+                    });
                 });
                 ui.end_row();
 
@@ -370,35 +408,37 @@ impl InventoryView {
         ui.separator();
         ui.add_space(4.0);
         ui.label(egui::RichText::new(t!("common.field.source").as_ref()).strong());
-        ui.horizontal(|ui| {
-            let to_donation = ui.radio_value(
-                &mut self.draft.source_type,
-                SourceType::Donation,
-                t!("status.source_type.donation").as_ref(),
-            );
-            let to_purchase = ui.radio_value(
-                &mut self.draft.source_type,
-                SourceType::Purchase,
-                t!("status.source_type.purchase").as_ref(),
-            );
-            // Switching source type must clear the other type's id — left
-            // stale otherwise (e.g. a Purchase-sourced item switched to
-            // Donation kept its old source_purchase_id, so the purchase
-            // still counted it as linked even though the item no longer
-            // claims that source).
-            if to_donation.changed() {
-                self.draft.source_purchase_id = None;
-            }
-            if to_purchase.changed() {
-                self.draft.source_donation_id = None;
+        ui.add_enabled_ui(!locked, |ui| {
+            ui.horizontal(|ui| {
+                let to_donation = ui.radio_value(
+                    &mut self.draft.source_type,
+                    SourceType::Donation,
+                    t!("status.source_type.donation").as_ref(),
+                );
+                let to_purchase = ui.radio_value(
+                    &mut self.draft.source_type,
+                    SourceType::Purchase,
+                    t!("status.source_type.purchase").as_ref(),
+                );
+                // Switching source type must clear the other type's id — left
+                // stale otherwise (e.g. a Purchase-sourced item switched to
+                // Donation kept its old source_purchase_id, so the purchase
+                // still counted it as linked even though the item no longer
+                // claims that source).
+                if to_donation.changed() {
+                    self.draft.source_purchase_id = None;
+                }
+                if to_purchase.changed() {
+                    self.draft.source_donation_id = None;
+                }
+            });
+            ui.add_space(4.0);
+
+            match self.draft.source_type {
+                SourceType::Donation => self.show_donation_source(ui, db),
+                SourceType::Purchase => self.show_purchase_source(ui),
             }
         });
-        ui.add_space(4.0);
-
-        match self.draft.source_type {
-            SourceType::Donation => self.show_donation_source(ui, db),
-            SourceType::Purchase => self.show_purchase_source(ui),
-        }
 
         if let Some(err) = &self.error {
             ui.add_space(4.0);
@@ -423,6 +463,7 @@ impl InventoryView {
                 } else if is_adding {
                     match qry::insert(db, &self.draft) {
                         Ok(new_id) => {
+                            self.persisted_status = Some(self.draft.status);
                             self.mode = Mode::Editing(new_id);
                             self.docs_needs_reload = true;
                             self.needs_reload = true;
@@ -433,6 +474,7 @@ impl InventoryView {
                 } else if let Some(id) = edit_id {
                     match qry::update(db, id, &self.draft) {
                         Ok(()) => {
+                            self.persisted_status = Some(self.draft.status);
                             self.needs_reload = true;
                             self.error = None;
                         }
@@ -442,6 +484,7 @@ impl InventoryView {
             }
 
             if ui.button(t!("common.cancel").as_ref()).clicked() {
+                self.persisted_status = None;
                 self.mode = Mode::List;
                 self.error = None;
                 self.discard_pending_doc();
