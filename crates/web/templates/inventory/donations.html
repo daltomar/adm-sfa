@@ -1,41 +1,41 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Donation records</h1>
-<p class="hint">These are physical donation receipts, used as a Source when adding an Inventory item &mdash; not the same as the Donors list. Create one here, then go back to <a href="/inventory/new">add or edit an item</a> and pick it from the Donation dropdown.</p>
+<h1>{{ "web.donations.heading"|t(locale) }}</h1>
+<p class="hint">{{ "web.donations.hint_before"|t(locale) }}<a href="/inventory/new">{{ "web.donations.hint_link"|t(locale) }}</a>{{ "web.donations.hint_after"|t(locale) }}</p>
 
 {% if let Some(msg) = error %}
 <div class="error">{{ msg }}</div>
 {% endif %}
 
-<h2>New donation record</h2>
+<h2>{{ "web.donations.new_heading"|t(locale) }}</h2>
 <form method="post" action="/inventory/donations">
   <div class="field">
-    <label for="date_received">Date received</label>
+    <label for="date_received">{{ "inventory.donation.field.date_received"|t(locale) }}</label>
     <input type="date" id="date_received" name="date_received" value="{{ date }}" required>
   </div>
   <div class="field">
-    <label for="donor_id">Donor</label>
+    <label for="donor_id">{{ "common.field.donor"|t(locale) }}</label>
     <select id="donor_id" name="donor_id">
-      <option value="">Anonymous</option>
+      <option value="">{{ "common.anonymous"|t(locale) }}</option>
       {% for d in donors %}
       <option value="{{ d.0 }}">{{ d.1 }}</option>
       {% endfor %}
     </select>
-    <p class="hint">Need a new donor first? <a href="/donors/new">Add one</a>.</p>
+    <p class="hint">{{ "web.donations.donor_hint_before"|t(locale) }}<a href="/donors/new">{{ "web.donations.donor_hint_link"|t(locale) }}</a>{{ "web.donations.donor_hint_after"|t(locale) }}</p>
   </div>
   <div class="field">
-    <label for="notes">Notes</label>
+    <label for="notes">{{ "common.field.notes"|t(locale) }}</label>
     <textarea id="notes" name="notes" rows="2"></textarea>
   </div>
   <div class="actions">
-    <button type="submit">Create</button>
+    <button type="submit">{{ "common.create"|t(locale) }}</button>
   </div>
 </form>
 
-<h2>Existing donation records</h2>
+<h2>{{ "web.donations.existing_heading"|t(locale) }}</h2>
 <table>
 <thead>
-<tr><th>Date received</th><th>Donor</th></tr>
+<tr><th>{{ "web.col.date_received"|t(locale) }}</th><th>{{ "common.field.donor"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for d in donations %}
@@ -44,7 +44,7 @@
   <td>{{ d.donor_display }}</td>
 </tr>
 {% else %}
-<tr><td colspan="2">No donation records yet.</td></tr>
+<tr><td colspan="2">{{ "web.donations.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

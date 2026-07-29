@@ -45,19 +45,25 @@ pub fn router() -> Router<AppState> {
         .route("/inventory/donations", get(donations).post(create_donation))
 }
 
-fn location_label(l: Location) -> &'static str {
-    match l {
-        Location::Germany => "Germany",
-        Location::Brazil => "Brazil",
-    }
+/// Same keys `core::model::inventory::Location::label()` uses, but with an
+/// explicit locale — see `eur_ledger.rs`'s `type_label` doc comment.
+fn location_label(l: Location, locale: &str) -> String {
+    let key = match l {
+        Location::Germany => "status.location.germany",
+        Location::Brazil => "status.location.brazil",
+    };
+    rust_i18n::t!(key, locale = locale).to_string()
 }
 
-fn status_label(s: ItemStatus) -> &'static str {
-    match s {
-        ItemStatus::Available => "Available",
-        ItemStatus::Reserved => "Reserved",
-        ItemStatus::Donated => "Donated",
-    }
+/// Same keys `core::model::inventory::ItemStatus::label()` uses, but with
+/// an explicit locale — see `eur_ledger.rs`'s `type_label` doc comment.
+fn status_label(s: ItemStatus, locale: &str) -> String {
+    let key = match s {
+        ItemStatus::Available => "status.item.available",
+        ItemStatus::Reserved => "status.item.reserved",
+        ItemStatus::Donated => "status.item.donated",
+    };
+    rust_i18n::t!(key, locale = locale).to_string()
 }
 
 fn purchase_label(p: &Purchase) -> String {
@@ -102,35 +108,58 @@ fn purchase_options(
     items: &[InventoryItemRow],
     edit_id: Option<i64>,
     selected: Option<i64>,
+    locale: &str,
 ) -> Vec<PurchaseOption> {
     purchases
         .iter()
         .filter(|p| p.status == PurchaseStatus::Bought)
-        .map(|p| PurchaseOption {
-            id: p.id,
-            label: purchase_label(p),
-            selected: selected == Some(p.id),
-            blocked: purchase_source_blocked(items, p, edit_id),
+        .map(|p| {
+            let blocked = purchase_source_blocked(items, p, edit_id);
+            let base_label = purchase_label(p);
+            // The blocked/"(in use)" suffix has to be baked into the
+            // `<option>` text here rather than in the template: a disabled
+            // `<option>` still needs to explain *why* it's unpickable, and
+            // the template only gets `label` as one opaque string.
+            let label = if blocked {
+                rust_i18n::t!(
+                    "web.inventory.purchase_combo.in_use",
+                    locale = locale,
+                    label = &base_label
+                )
+                .to_string()
+            } else {
+                base_label
+            };
+            PurchaseOption {
+                id: p.id,
+                label,
+                selected: selected == Some(p.id),
+                blocked,
+            }
         })
         .collect()
 }
 
-fn donation_label(d: &adm_sfa_core::model::donor::PhysicalDonation) -> String {
+fn donation_label(d: &adm_sfa_core::model::donor::PhysicalDonation, locale: &str) -> String {
     match &d.donor_name {
         Some(name) => format!("{} \u{2014} {name}", format::date(&d.date_received)),
-        None => format!("{} \u{2014} Anonymous", format::date(&d.date_received)),
+        None => {
+            let anonymous = rust_i18n::t!("common.anonymous", locale = locale);
+            format!("{} \u{2014} {anonymous}", format::date(&d.date_received))
+        }
     }
 }
 
 fn donation_options(
     donations: &[adm_sfa_core::model::donor::PhysicalDonation],
     selected: Option<i64>,
+    locale: &str,
 ) -> Vec<DonationOption> {
     donations
         .iter()
         .map(|d| DonationOption {
             id: d.id,
-            label: donation_label(d),
+            label: donation_label(d, locale),
             selected: selected == Some(d.id),
         })
         .collect()
@@ -143,6 +172,7 @@ fn form_template(
     draft: &InventoryItemDraft,
     error: Option<String>,
     documents: Vec<adm_sfa_core::model::document::Document>,
+    locale: String,
 ) -> InventoryFormTemplate {
     let categories = cat_qry::list(conn).unwrap_or_default();
     let donations = donors_qry::list_donations(conn).unwrap_or_default();
@@ -169,13 +199,14 @@ fn form_template(
         source_donation_id: draft.source_donation_id,
         source_purchase_id: draft.source_purchase_id,
         categories: category_options(&categories, draft.category_id),
-        donations: donation_options(&donations, draft.source_donation_id),
-        purchases: purchase_options(&purchases, &items, id, draft.source_purchase_id),
+        donations: donation_options(&donations, draft.source_donation_id, &locale),
+        purchases: purchase_options(&purchases, &items, id, draft.source_purchase_id, &locale),
         notes: draft.notes.clone(),
         error,
         documents,
         labels,
         locked,
+        locale,
     }
 }
 
@@ -200,18 +231,21 @@ fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String)
         status: item.status,
         notes: item.notes.unwrap_or_default(),
     };
+    let locale = crate::i18n::resolve_locale(conn);
     HtmlTemplate(form_template(
         conn,
         Some(id),
         &draft,
         Some(error),
         documents,
+        locale,
     ))
     .into_response()
 }
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let items = qry::list(&conn).unwrap_or_default();
     let rows = items
         .into_iter()
@@ -219,27 +253,33 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             id: i.id,
             name: i.name,
             category_name: i.category_name,
-            location_label: location_label(i.location),
-            status_label: status_label(i.status),
+            location_label: location_label(i.location, &locale),
+            status_label: status_label(i.status, &locale),
             source_desc: i.source_desc,
         })
         .collect();
-    HtmlTemplate(InventoryListTemplate { items: rows })
+    HtmlTemplate(InventoryListTemplate {
+        items: rows,
+        locale,
+    })
 }
 
 async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     HtmlTemplate(form_template(
         &conn,
         None,
         &InventoryItemDraft::default(),
         None,
         Vec::new(),
+        locale,
     ))
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let Some(item) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
     };
@@ -254,7 +294,15 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         status: item.status,
         notes: item.notes.unwrap_or_default(),
     };
-    HtmlTemplate(form_template(&conn, Some(id), &draft, None, documents)).into_response()
+    HtmlTemplate(form_template(
+        &conn,
+        Some(id),
+        &draft,
+        None,
+        documents,
+        locale,
+    ))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -308,14 +356,18 @@ async fn create(State(state): State<AppState>, Form(form): Form<InventoryForm>) 
     let conn = state.conn();
     match qry::insert(&conn, &draft) {
         Ok(id) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
-        Err(e) => HtmlTemplate(form_template(
-            &conn,
-            None,
-            &draft,
-            Some(e.to_string()),
-            Vec::new(),
-        ))
-        .into_response(),
+        Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
+            HtmlTemplate(form_template(
+                &conn,
+                None,
+                &draft,
+                Some(e.to_string()),
+                Vec::new(),
+                locale,
+            ))
+            .into_response()
+        }
     }
 }
 
@@ -360,12 +412,14 @@ async fn update(
             } else {
                 draft.clone()
             };
+            let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
                 &conn,
                 Some(id),
                 &render_draft,
                 Some(e.to_string()),
                 documents,
+                locale,
             ))
             .into_response()
         }
@@ -414,11 +468,9 @@ async fn attach_document(
 
     let Some(tmp_path) = tmp_path else {
         let conn = state.conn();
-        return item_form_error_response(
-            &conn,
-            id,
-            "No file was selected, or the upload could not be saved.".to_string(),
-        );
+        let locale = crate::i18n::resolve_locale(&conn);
+        let error = rust_i18n::t!("web.doc.error.no_file", locale = &locale).to_string();
+        return item_form_error_response(&conn, id, error);
     };
 
     let conn = state.conn();
@@ -489,12 +541,14 @@ async fn remove_document(
 /// with phase 5's existing scope reductions (CLAUDE.md).
 async fn donations(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
+    let anonymous = rust_i18n::t!("common.anonymous", locale = &locale).to_string();
     let donations = donors_qry::list_donations(&conn).unwrap_or_default();
     let rows = donations
         .into_iter()
         .map(|d| DonationRow {
             date_display: format::date(&d.date_received),
-            donor_display: d.donor_name.unwrap_or_else(|| "Anonymous".to_string()),
+            donor_display: d.donor_name.unwrap_or_else(|| anonymous.clone()),
         })
         .collect();
     let donors = donors_qry::list(&conn)
@@ -507,6 +561,7 @@ async fn donations(State(state): State<AppState>) -> impl IntoResponse {
         date: chrono::Local::now().format("%Y-%m-%d").to_string(),
         donors,
         error: None,
+        locale,
     })
 }
 
@@ -529,15 +584,17 @@ async fn create_donation(
         notes: form.notes,
     };
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     match donors_qry::insert_donation(&conn, &draft) {
         Ok(_) => Redirect::to("/inventory/donations").into_response(),
         Err(e) => {
+            let anonymous = rust_i18n::t!("common.anonymous", locale = &locale).to_string();
             let donations = donors_qry::list_donations(&conn).unwrap_or_default();
             let rows = donations
                 .into_iter()
                 .map(|d| DonationRow {
                     date_display: format::date(&d.date_received),
-                    donor_display: d.donor_name.unwrap_or_else(|| "Anonymous".to_string()),
+                    donor_display: d.donor_name.unwrap_or_else(|| anonymous.clone()),
                 })
                 .collect();
             let donors = donors_qry::list(&conn)
@@ -550,6 +607,7 @@ async fn create_donation(
                 date: draft.date_received,
                 donors,
                 error: Some(e.to_string()),
+                locale,
             })
             .into_response()
         }

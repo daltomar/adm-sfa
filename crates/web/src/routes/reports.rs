@@ -37,13 +37,16 @@ pub fn router() -> Router<AppState> {
 /// pattern (and same reason) as `purchases.rs`'s `UPLOAD_COUNTER`.
 static EXPORT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// (slug, i18n key) — the key, not literal English text, since these
+/// labels need to follow the resolved chrome locale (`index`) same as
+/// everything else in this crate's UI.
 const TABS: &[(&str, &str)] = &[
-    ("donors", "Donor breakdown"),
-    ("eur", "EUR ledger"),
-    ("brl", "BRL ledger"),
-    ("inventory", "Inventory"),
-    ("outbound", "Outbound"),
-    ("audit", "Audit trail"),
+    ("donors", "reports.tab.donors"),
+    ("eur", "reports.tab.eur"),
+    ("brl", "reports.tab.brl"),
+    ("inventory", "reports.tab.inventory"),
+    ("outbound", "reports.tab.outbound"),
+    ("audit", "reports.tab.audit_trail"),
 ];
 
 /// Everything the report tables/summaries are built from — one query pass
@@ -76,6 +79,10 @@ fn load(conn: &rusqlite::Connection) -> ReportsData {
     }
 }
 
+fn t(key: &str, locale: &str) -> String {
+    rust_i18n::t!(key, locale = locale).to_string()
+}
+
 fn donors_table(
     data: &ReportsData,
     from: &str,
@@ -84,10 +91,14 @@ fn donors_table(
     for_csv: bool,
 ) -> (Vec<String>, Vec<Vec<String>>) {
     let headers = vec![
-        "Donor".to_string(),
-        "Cash gifts".to_string(),
-        "Cash total".to_string(),
-        "Items donated".to_string(),
+        t("common.col.name", locale),
+        t("reports.donor.col.cash_count", locale),
+        if for_csv {
+            t("reports.donor.csv.col.cash_total", locale)
+        } else {
+            t("reports.donor.col.cash_total", locale)
+        },
+        t("reports.donor.col.items", locale),
     ];
     let rows = build_donor_rows(&data.donors, &data.eur_rows, &data.donations, from, to)
         .into_iter()
@@ -116,10 +127,14 @@ fn eur_table(
     for_csv: bool,
 ) -> (Vec<String>, Vec<Vec<String>>) {
     let headers = vec![
-        "Date".to_string(),
-        "Type".to_string(),
-        "Description".to_string(),
-        "Amount".to_string(),
+        t("common.col.date", locale),
+        t("reports.col.type", locale),
+        t("common.col.description", locale),
+        if for_csv {
+            t("reports.eur.csv.col.amount", locale)
+        } else {
+            t("common.col.amount", locale)
+        },
     ];
     let rows = data
         .eur_rows
@@ -168,10 +183,14 @@ fn brl_table(
     for_csv: bool,
 ) -> (Vec<String>, Vec<Vec<String>>) {
     let headers = vec![
-        "Date".to_string(),
-        "Type".to_string(),
-        "Description".to_string(),
-        "Amount".to_string(),
+        t("common.col.date", locale),
+        t("reports.col.type", locale),
+        t("common.col.description", locale),
+        if for_csv {
+            t("reports.brl.csv.col.amount", locale)
+        } else {
+            t("common.col.amount", locale)
+        },
     ];
     let rows = data
         .brl_rows
@@ -205,28 +224,32 @@ fn brl_table(
 
 fn inventory_table(data: &ReportsData, locale: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let headers = vec![
-        "Name".to_string(),
-        "Category".to_string(),
-        "Status".to_string(),
-        "Location".to_string(),
-        "Source type".to_string(),
-        "Source".to_string(),
+        t("common.col.name", locale),
+        t("common.col.category", locale),
+        t("common.field.status", locale),
+        t("common.field.location", locale),
+        t("reports.inventory.csv.col.source_type", locale),
+        t("reports.inventory.col.source", locale),
     ];
-    let _ = locale; // status/location labels aren't locale-threaded in core yet, same as desktop.
+    // `item.status.label()`/`item.location.label()` below resolve through
+    // `rust_i18n`'s ambient locale, not the `locale` parameter — same
+    // disclosed, pre-existing scope limit as `eur_table`'s `r.tx_type.
+    // label()` above (see that comment) and `reporting::AuditEntry.
+    // ledger_kind`'s doc comment in crates/core/src/reporting.rs.
     let rows = data
         .inventory_rows
         .iter()
         .map(|item| {
-            let source_type = match item.source_type {
-                SourceType::Donation => "Donation",
-                SourceType::Purchase => "Purchase",
+            let source_type_key = match item.source_type {
+                SourceType::Donation => "status.source_type.donation",
+                SourceType::Purchase => "status.source_type.purchase",
             };
             vec![
                 item.name.clone(),
                 item.category_name.clone(),
                 item.status.label(),
                 item.location.label(),
-                source_type.to_string(),
+                t(source_type_key, locale),
                 item.source_desc.clone(),
             ]
         })
@@ -243,10 +266,14 @@ fn outbound_table(
     for_csv: bool,
 ) -> (Vec<String>, Vec<Vec<String>>) {
     let headers = vec![
-        "Date".to_string(),
-        "Recipient".to_string(),
-        "Items".to_string(),
-        "Cash".to_string(),
+        t("common.col.date", locale),
+        t("reports.col.recipient", locale),
+        t("reports.col.items", locale),
+        if for_csv {
+            t("reports.outbound.csv.col.cash", locale)
+        } else {
+            t("reports.outbound.col.cash", locale)
+        },
     ];
     let rows = data
         .outbound_rows
@@ -289,12 +316,16 @@ fn audit_table(
     for_csv: bool,
 ) -> (Vec<String>, Vec<Vec<String>>) {
     let headers = vec![
-        "Date".to_string(),
-        "Ledger".to_string(),
-        "Type".to_string(),
-        "Description".to_string(),
-        "Amount".to_string(),
-        "Docs".to_string(),
+        t("common.col.date", locale),
+        t("reports.audit.col.ledger", locale),
+        t("reports.col.type", locale),
+        t("common.col.description", locale),
+        t("common.col.amount", locale),
+        if for_csv {
+            t("reports.audit.csv.col.documents", locale)
+        } else {
+            t("reports.audit.col.docs", locale)
+        },
     ];
     let fmt_amount = |v: Decimal| {
         if for_csv {
@@ -349,33 +380,34 @@ fn audit_table(
 fn eur_summary_lines(data: &ReportsData, from: &str, to: &str, locale: &str) -> Vec<SummaryLine> {
     let s = eur_summary(&data.eur_rows, from, to);
     let fmt = |v: Decimal| format::amount_in(v, locale);
+    let count = |key: &str, n: i64| rust_i18n::t!(key, locale = locale, count = n).to_string();
     vec![
         SummaryLine {
-            label: "Starting balance".to_string(),
+            label: t("web.reports.summary.starting_balance", locale),
             value: format!("\u{20ac} {}", fmt(s.starting_balance)),
         },
         SummaryLine {
-            label: format!("Donations ({})", s.donation_count),
+            label: count("web.reports.summary.donations", s.donation_count),
             value: format!("\u{20ac} {}", fmt(s.donation_total)),
         },
         SummaryLine {
-            label: format!("Self-funding ({})", s.self_funding_count),
+            label: count("web.reports.summary.self_funding", s.self_funding_count),
             value: format!("\u{20ac} {}", fmt(s.self_funding_total)),
         },
         SummaryLine {
-            label: format!("Purchases ({})", s.purchase_count),
+            label: count("web.reports.summary.purchases", s.purchase_count),
             value: format!("-\u{20ac} {}", fmt(s.purchase_total)),
         },
         SummaryLine {
-            label: format!("Transfers to BRL ({})", s.transfer_count),
+            label: count("web.reports.summary.transfers_out", s.transfer_count),
             value: format!("-\u{20ac} {}", fmt(s.transfer_total)),
         },
         SummaryLine {
-            label: "Net".to_string(),
+            label: t("web.reports.summary.net", locale),
             value: format!("\u{20ac} {}", fmt(s.net)),
         },
         SummaryLine {
-            label: "Ending balance".to_string(),
+            label: t("web.reports.summary.ending_balance", locale),
             value: format!("\u{20ac} {}", fmt(s.ending_balance)),
         },
     ]
@@ -384,29 +416,30 @@ fn eur_summary_lines(data: &ReportsData, from: &str, to: &str, locale: &str) -> 
 fn brl_summary_lines(data: &ReportsData, from: &str, to: &str, locale: &str) -> Vec<SummaryLine> {
     let s = brl_summary(&data.brl_rows, from, to);
     let fmt = |v: Decimal| format::amount_in(v, locale);
+    let count = |key: &str, n: i64| rust_i18n::t!(key, locale = locale, count = n).to_string();
     vec![
         SummaryLine {
-            label: "Starting balance".to_string(),
+            label: t("web.reports.summary.starting_balance", locale),
             value: format!("R$ {}", fmt(s.starting_balance)),
         },
         SummaryLine {
-            label: format!("Transfers in ({})", s.transfer_in_count),
+            label: count("web.reports.summary.transfers_in", s.transfer_in_count),
             value: format!("R$ {}", fmt(s.transfer_in_total)),
         },
         SummaryLine {
-            label: format!("Purchases ({})", s.purchase_count),
+            label: count("web.reports.summary.purchases", s.purchase_count),
             value: format!("-R$ {}", fmt(s.purchase_total)),
         },
         SummaryLine {
-            label: format!("Cash gifts ({})", s.gift_count),
+            label: count("web.reports.summary.cash_gifts", s.gift_count),
             value: format!("-R$ {}", fmt(s.gift_total)),
         },
         SummaryLine {
-            label: "Net".to_string(),
+            label: t("web.reports.summary.net", locale),
             value: format!("R$ {}", fmt(s.net)),
         },
         SummaryLine {
-            label: "Ending balance".to_string(),
+            label: t("web.reports.summary.ending_balance", locale),
             value: format!("R$ {}", fmt(s.ending_balance)),
         },
     ]
@@ -431,32 +464,32 @@ fn all_sections(
     let (ah, ar) = audit_table(data, from, to, recipient_filter, locale, false);
     vec![
         reports::pdf::PdfSection {
-            title: "Donor breakdown".to_string(),
+            title: t("reports.pdf.section.donor", locale),
             headers: dh,
             rows: dr,
         },
         reports::pdf::PdfSection {
-            title: "EUR ledger".to_string(),
+            title: t("reports.pdf.section.eur", locale),
             headers: eh,
             rows: er,
         },
         reports::pdf::PdfSection {
-            title: "BRL ledger".to_string(),
+            title: t("reports.pdf.section.brl", locale),
             headers: bh,
             rows: br,
         },
         reports::pdf::PdfSection {
-            title: "Inventory".to_string(),
+            title: t("reports.pdf.section.inventory", locale),
             headers: ih,
             rows: ir,
         },
         reports::pdf::PdfSection {
-            title: "Outbound".to_string(),
+            title: t("reports.pdf.section.outbound", locale),
             headers: oh,
             rows: or_,
         },
         reports::pdf::PdfSection {
-            title: "Audit trail".to_string(),
+            title: t("reports.pdf.section.audit", locale),
             headers: ah,
             rows: ar,
         },
@@ -497,6 +530,14 @@ fn query_string(tab: &str, from: &str, to: &str, recipient: Option<i64>) -> Stri
 
 async fn index(State(state): State<AppState>, Query(q): Query<ReportsQuery>) -> impl IntoResponse {
     let conn = state.conn();
+    // The *on-screen* chrome locale — distinct from `export_csv`/
+    // `export_pdf`'s `q.locale`, which is an explicit, user-chosen
+    // per-export locale (T3: report generators never read an ambient UI
+    // locale). This is that ambient UI locale, which is exactly what the
+    // on-screen page chrome (and its tables' own headers/summary labels,
+    // via `locale` below) is supposed to follow — previously hardcoded to
+    // `"en"` regardless of the installation's `ui_locale` setting.
+    let locale = crate::i18n::resolve_locale(&conn);
     let data = load(&conn);
 
     let tab = if TABS.iter().any(|(slug, _)| *slug == q.tab) {
@@ -508,35 +549,35 @@ async fn index(State(state): State<AppState>, Query(q): Query<ReportsQuery>) -> 
 
     let (summary, headers, rows) = match tab {
         "eur" => {
-            let (h, r) = eur_table(&data, &q.from, &q.to, "en", false);
-            (eur_summary_lines(&data, &q.from, &q.to, "en"), h, r)
+            let (h, r) = eur_table(&data, &q.from, &q.to, &locale, false);
+            (eur_summary_lines(&data, &q.from, &q.to, &locale), h, r)
         }
         "brl" => {
-            let (h, r) = brl_table(&data, &q.from, &q.to, "en", false);
-            (brl_summary_lines(&data, &q.from, &q.to, "en"), h, r)
+            let (h, r) = brl_table(&data, &q.from, &q.to, &locale, false);
+            (brl_summary_lines(&data, &q.from, &q.to, &locale), h, r)
         }
         "inventory" => {
-            let (h, r) = inventory_table(&data, "en");
+            let (h, r) = inventory_table(&data, &locale);
             (Vec::new(), h, r)
         }
         "outbound" => {
-            let (h, r) = outbound_table(&data, &q.from, &q.to, recipient_id, "en", false);
+            let (h, r) = outbound_table(&data, &q.from, &q.to, recipient_id, &locale, false);
             (Vec::new(), h, r)
         }
         "audit" => {
-            let (h, r) = audit_table(&data, &q.from, &q.to, recipient_id, "en", false);
+            let (h, r) = audit_table(&data, &q.from, &q.to, recipient_id, &locale, false);
             (Vec::new(), h, r)
         }
         _ => {
-            let (h, r) = donors_table(&data, &q.from, &q.to, "en", false);
+            let (h, r) = donors_table(&data, &q.from, &q.to, &locale, false);
             (Vec::new(), h, r)
         }
     };
 
     let tabs = TABS
         .iter()
-        .map(|(slug, label)| TabLink {
-            label,
+        .map(|(slug, key)| TabLink {
+            label: t(key, &locale),
             href: format!(
                 "/reports?{}",
                 query_string(slug, &q.from, &q.to, recipient_id)
@@ -566,6 +607,7 @@ async fn index(State(state): State<AppState>, Query(q): Query<ReportsQuery>) -> 
         headers,
         rows,
         error: None,
+        locale,
     })
 }
 

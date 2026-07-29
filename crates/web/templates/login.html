@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ locale }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>adm-sfa — Log in</title>
+<title>adm-sfa — {{ "login.button"|t(locale) }}</title>
 <style>
   body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f4f4f4; }
   form { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 280px; }
@@ -19,8 +19,8 @@
   {% if let Some(msg) = error %}
   <div class="error">{{ msg }}</div>
   {% endif %}
-  <input type="password" name="password" placeholder="Shared password" autofocus required>
-  <button type="submit">Log in</button>
+  <input type="password" name="password" placeholder="{{ "login.password_placeholder"|t(locale) }}" autofocus required>
+  <button type="submit">{{ "login.button"|t(locale) }}</button>
 </form>
 </body>
 </html>

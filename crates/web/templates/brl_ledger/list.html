@@ -1,13 +1,13 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>BRL Ledger</h1>
+<h1>{{ "sidebar.brl_ledger"|t(locale) }}</h1>
 <p class="balance {% if balance_positive %}balance-pos{% else %}balance-neg{% endif %}">
-  Balance: R$ {{ balance_display }}
+  {{ balance_label }}
 </p>
-<p class="hint">Every entry here is created automatically by Purchases, Transfers, or Outbound &mdash; nothing on this page is directly editable.</p>
+<p class="hint">{{ "brl_ledger.hint.read_only"|t(locale) }}</p>
 <table>
 <thead>
-<tr><th>Date</th><th>Type</th><th>Description</th><th>Amount</th></tr>
+<tr><th>{{ "common.col.date"|t(locale) }}</th><th>{{ "reports.col.type"|t(locale) }}</th><th>{{ "common.col.description"|t(locale) }}</th><th>{{ "common.col.amount"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for r in rows %}
@@ -18,7 +18,7 @@
   <td>{{ r.sign }}R$ {{ r.amount_display }}</td>
 </tr>
 {% else %}
-<tr><td colspan="4">No entries yet.</td></tr>
+<tr><td colspan="4">{{ "common.no_entries"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

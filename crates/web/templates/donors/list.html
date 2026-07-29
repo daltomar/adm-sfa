@@ -1,10 +1,10 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Donors</h1>
-<p><a class="button" href="/donors/new">+ New donor</a></p>
+<h1>{{ "sidebar.donors"|t(locale) }}</h1>
+<p><a class="button" href="/donors/new">{{ "donors.button.add"|t(locale) }}</a></p>
 <table>
 <thead>
-<tr><th>Name</th><th>Contact info</th></tr>
+<tr><th>{{ "common.col.name"|t(locale) }}</th><th>{{ "common.field.contact_info"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for d in donors %}
@@ -13,7 +13,7 @@
   <td>{{ d.contact_info }}</td>
 </tr>
 {% else %}
-<tr><td colspan="2">No donors yet.</td></tr>
+<tr><td colspan="2">{{ "donors.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

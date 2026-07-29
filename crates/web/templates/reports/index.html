@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Reports</h1>
+<h1>{{ "sidebar.reports"|t(locale) }}</h1>
 
 {% if let Some(msg) = error %}
 <div class="error">{{ msg }}</div>
@@ -9,25 +9,25 @@
 <form method="get" action="/reports">
   <input type="hidden" name="tab" value="{{ active_tab }}">
   <div class="field" style="display: inline-block; margin-right: 1rem;">
-    <label for="from">From</label>
+    <label for="from">{{ "reports.filter.from"|t(locale) }}</label>
     <input type="date" id="from" name="from" value="{{ date_from }}">
   </div>
   <div class="field" style="display: inline-block; margin-right: 1rem;">
-    <label for="to">To</label>
+    <label for="to">{{ "reports.filter.to"|t(locale) }}</label>
     <input type="date" id="to" name="to" value="{{ date_to }}">
   </div>
   <div class="field" style="display: inline-block; margin-right: 1rem;">
-    <label for="recipient">Recipient (Outbound/Audit only)</label>
+    <label for="recipient">{{ "web.reports.filter.recipient"|t(locale) }}</label>
     <select id="recipient" name="recipient">
-      <option value="">All</option>
+      <option value="">{{ "reports.combo.all"|t(locale) }}</option>
       {% for r in recipients %}
       <option value="{{ r.0 }}" {% if r.2 %}selected{% endif %}>{{ r.1 }}</option>
       {% endfor %}
     </select>
   </div>
   <div class="field" style="display: inline-block;">
-    <button type="submit">Apply filters</button>
-    <a class="button secondary" href="/reports?tab={{ active_tab }}">Clear</a>
+    <button type="submit">{{ "web.reports.button.apply_filters"|t(locale) }}</button>
+    <a class="button secondary" href="/reports?tab={{ active_tab }}">{{ "reports.button.clear_filters"|t(locale) }}</a>
   </div>
 </form>
 
@@ -55,12 +55,12 @@
 {% for row in rows %}
 <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
 {% else %}
-<tr><td colspan="{{ headers.len() }}">No rows for this filter.</td></tr>
+<tr><td colspan="{{ headers.len() }}">{{ "web.reports.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>
 
-<h2>Export</h2>
+<h2>{{ "web.reports.export.heading"|t(locale) }}</h2>
 <div style="display: flex; gap: 2rem;">
   <form method="get" action="/reports/export.csv">
     <input type="hidden" name="tab" value="{{ active_tab }}">
@@ -68,14 +68,14 @@
     <input type="hidden" name="to" value="{{ date_to }}">
     {% if let Some(r) = recipient_id %}<input type="hidden" name="recipient" value="{{ r }}">{% endif %}
     <div class="field">
-      <label for="csv_locale">Report language</label>
+      <label for="csv_locale">{{ "web.reports.export.language_label"|t(locale) }}</label>
       <select id="csv_locale" name="locale">
         <option value="en">English</option>
         <option value="de">Deutsch</option>
         <option value="pt-BR">Portugu&ecirc;s (Brasil)</option>
       </select>
     </div>
-    <button type="submit">Export current tab as CSV</button>
+    <button type="submit">{{ "web.reports.export.csv_button"|t(locale) }}</button>
   </form>
 
   <form method="get" action="/reports/export.pdf">
@@ -83,15 +83,15 @@
     <input type="hidden" name="to" value="{{ date_to }}">
     {% if let Some(r) = recipient_id %}<input type="hidden" name="recipient" value="{{ r }}">{% endif %}
     <div class="field">
-      <label for="pdf_locale">Report language</label>
+      <label for="pdf_locale">{{ "web.reports.export.language_label"|t(locale) }}</label>
       <select id="pdf_locale" name="locale">
         <option value="en">English</option>
         <option value="de">Deutsch</option>
         <option value="pt-BR">Portugu&ecirc;s (Brasil)</option>
       </select>
     </div>
-    <button type="submit">Export full report as PDF</button>
-    <p class="hint">The PDF always includes all six sections, regardless of the tab open above.</p>
+    <button type="submit">{{ "web.reports.export.pdf_button"|t(locale) }}</button>
+    <p class="hint">{{ "web.reports.export.pdf_hint"|t(locale) }}</p>
   </form>
 </div>
 {% endblock %}

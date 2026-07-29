@@ -42,6 +42,7 @@ fn purchase_form_error_response(conn: &rusqlite::Connection, id: i64, error: Str
     };
     let draft = draft_from_purchase(&purchase);
     let labels = documents_qry::labels(conn).unwrap_or_default();
+    let locale = crate::i18n::resolve_locale(conn);
     HtmlTemplate(PurchaseFormTemplate {
         id: Some(id),
         is_negotiating: draft.status == PurchaseStatus::Negotiating,
@@ -49,8 +50,17 @@ fn purchase_form_error_response(conn: &rusqlite::Connection, id: i64, error: Str
         error: Some(error),
         documents,
         labels,
+        locale,
     })
     .into_response()
+}
+
+fn status_label(status: PurchaseStatus, locale: &str) -> String {
+    let key = match status {
+        PurchaseStatus::Negotiating => "status.purchase.negotiating",
+        PurchaseStatus::Bought => "status.purchase.bought",
+    };
+    rust_i18n::t!(key, locale = locale).to_string()
 }
 
 pub fn router() -> Router<AppState> {
@@ -70,6 +80,7 @@ pub fn router() -> Router<AppState> {
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let purchases = purchases_qry::list(&conn).unwrap_or_default();
     let rows = purchases
         .into_iter()
@@ -79,17 +90,19 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             channel: p.channel,
             cost_display: format::amount(p.cost),
             currency_symbol: p.currency.symbol(),
-            status_label: match p.status {
-                PurchaseStatus::Negotiating => "Negotiating",
-                PurchaseStatus::Bought => "Bought",
-            },
+            status_label: status_label(p.status, &locale),
             multiple_items: p.multiple_items,
         })
         .collect();
-    HtmlTemplate(PurchasesListTemplate { purchases: rows })
+    HtmlTemplate(PurchasesListTemplate {
+        purchases: rows,
+        locale,
+    })
 }
 
-async fn new_form() -> impl IntoResponse {
+async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     HtmlTemplate(PurchaseFormTemplate {
         id: None,
         draft: PurchaseDraft::default(),
@@ -97,11 +110,13 @@ async fn new_form() -> impl IntoResponse {
         documents: Vec::new(),
         is_negotiating: false,
         labels: Vec::new(),
+        locale,
     })
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let Some(purchase) = purchases_qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "purchase not found").into_response();
     };
@@ -115,6 +130,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
         error: None,
         documents,
         labels,
+        locale,
     })
     .into_response()
 }
@@ -163,6 +179,7 @@ async fn create(
     };
     let draft = draft_from_form(form, status);
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     match service::create_purchase(&conn, &draft) {
         Ok(id) => Redirect::to(&format!("/purchases/{id}/edit")).into_response(),
         Err(e) => HtmlTemplate(PurchaseFormTemplate {
@@ -172,6 +189,7 @@ async fn create(
             documents: Vec::new(),
             is_negotiating: false,
             labels: Vec::new(),
+            locale,
         })
         .into_response(),
     }
@@ -193,21 +211,27 @@ async fn update(
         .map(|p| p.status)
         .unwrap_or(PurchaseStatus::Bought);
     let draft = draft_from_form(form, current_status);
+    let locale = crate::i18n::resolve_locale(&conn);
 
     if !draft.multiple_items {
         if let Ok(Some(n)) = purchases_qry::multiple_items_unset_conflict(&conn, id) {
             let documents =
                 documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
             let labels = documents_qry::labels(&conn).unwrap_or_default();
+            let error = rust_i18n::t!(
+                "purchases.error.cannot_mark_single_other",
+                locale = &locale,
+                n = n
+            )
+            .to_string();
             return HtmlTemplate(PurchaseFormTemplate {
                 id: Some(id),
                 is_negotiating: draft.status == PurchaseStatus::Negotiating,
                 draft,
-                error: Some(format!(
-                    "Cannot mark as single-item: {n} inventory items are already linked."
-                )),
+                error: Some(error),
                 documents,
                 labels,
+                locale,
             })
             .into_response();
         }
@@ -226,6 +250,7 @@ async fn update(
                 error: Some(e.to_string()),
                 documents,
                 labels,
+                locale,
             })
             .into_response()
         }
@@ -244,6 +269,7 @@ async fn mark_bought(State(state): State<AppState>, Path(id): Path<i64>) -> impl
             let documents =
                 documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
             let labels = documents_qry::labels(&conn).unwrap_or_default();
+            let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(PurchaseFormTemplate {
                 id: Some(id),
                 is_negotiating: draft.status == PurchaseStatus::Negotiating,
@@ -251,6 +277,7 @@ async fn mark_bought(State(state): State<AppState>, Path(id): Path<i64>) -> impl
                 error: Some(e.to_string()),
                 documents,
                 labels,
+                locale,
             })
             .into_response()
         }
@@ -307,11 +334,9 @@ async fn attach_document(
 
     let Some(tmp_path) = tmp_path else {
         let conn = state.conn();
-        return purchase_form_error_response(
-            &conn,
-            id,
-            "No file was selected, or the upload could not be saved.".to_string(),
-        );
+        let locale = crate::i18n::resolve_locale(&conn);
+        let error = rust_i18n::t!("web.doc.error.no_file", locale = &locale).to_string();
+        return purchase_form_error_response(&conn, id, error);
     };
 
     let conn = state.conn();

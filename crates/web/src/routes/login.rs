@@ -15,8 +15,13 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout))
 }
 
-async fn show() -> impl IntoResponse {
-    HtmlTemplate(LoginTemplate { error: None })
+async fn show(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
+    HtmlTemplate(LoginTemplate {
+        error: None,
+        locale,
+    })
 }
 
 #[derive(Deserialize)]
@@ -33,10 +38,11 @@ async fn submit(
         let jar = set_session_cookie(jar);
         (jar, Redirect::to("/")).into_response()
     } else {
-        HtmlTemplate(LoginTemplate {
-            error: Some("Incorrect password.".to_string()),
-        })
-        .into_response()
+        let conn = state.conn();
+        let locale = crate::i18n::resolve_locale(&conn);
+        let error =
+            Some(rust_i18n::t!("login.error.incorrect_password", locale = &locale).to_string());
+        HtmlTemplate(LoginTemplate { error, locale }).into_response()
     }
 }
 

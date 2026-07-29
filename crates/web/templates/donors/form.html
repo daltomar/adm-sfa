@@ -1,9 +1,9 @@
 {% extends "layout.html" %}
 {% block content %}
 {% if let Some(id) = id %}
-<h1>Edit donor</h1>
+<h1>{{ "donors.heading.edit"|t(locale) }}</h1>
 {% else %}
-<h1>New donor</h1>
+<h1>{{ "donors.heading.new"|t(locale) }}</h1>
 {% endif %}
 
 {% if let Some(msg) = error %}
@@ -12,20 +12,20 @@
 
 <form method="post" action="{% if let Some(id) = id %}/donors/{{ id }}/edit{% else %}/donors{% endif %}">
   <div class="field">
-    <label for="name">Name</label>
+    <label for="name">{{ "common.field.name"|t(locale) }}</label>
     <input type="text" id="name" name="name" value="{{ draft.name }}" required autofocus>
   </div>
   <div class="field">
-    <label for="contact_info">Contact info</label>
+    <label for="contact_info">{{ "common.field.contact_info"|t(locale) }}</label>
     <input type="text" id="contact_info" name="contact_info" value="{{ draft.contact_info }}">
   </div>
   <div class="field">
-    <label for="notes">Notes</label>
+    <label for="notes">{{ "common.field.notes"|t(locale) }}</label>
     <textarea id="notes" name="notes" rows="3">{{ draft.notes }}</textarea>
   </div>
   <div class="actions">
-    <button type="submit">Save</button>
-    <a class="button secondary" href="/donors">Cancel</a>
+    <button type="submit">{{ "common.save"|t(locale) }}</button>
+    <a class="button secondary" href="/donors">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
 {% endblock %}

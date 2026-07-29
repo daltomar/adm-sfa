@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let donors = donors_qry::list(&conn).unwrap_or_default();
     let rows = donors
         .into_iter()
@@ -29,19 +30,26 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             contact_info: d.contact_info.unwrap_or_default(),
         })
         .collect();
-    HtmlTemplate(DonorsListTemplate { donors: rows })
+    HtmlTemplate(DonorsListTemplate {
+        donors: rows,
+        locale,
+    })
 }
 
-async fn new_form() -> impl IntoResponse {
+async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     HtmlTemplate(DonorFormTemplate {
         id: None,
         draft: DonorDraft::default(),
         error: None,
+        locale,
     })
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let Some(donor) = donors_qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "donor not found").into_response();
     };
@@ -54,6 +62,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
         id: Some(id),
         draft,
         error: None,
+        locale,
     })
     .into_response()
 }
@@ -74,12 +83,14 @@ async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> i
         notes: form.notes,
     };
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     match donors_qry::insert(&conn, &draft) {
         Ok(id) => Redirect::to(&format!("/donors/{id}/edit")).into_response(),
         Err(e) => HtmlTemplate(DonorFormTemplate {
             id: None,
             draft,
             error: Some(e.to_string()),
+            locale,
         })
         .into_response(),
     }
@@ -96,12 +107,14 @@ async fn update(
         notes: form.notes,
     };
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     match donors_qry::update(&conn, id, &draft) {
         Ok(()) => Redirect::to(&format!("/donors/{id}/edit")).into_response(),
         Err(e) => HtmlTemplate(DonorFormTemplate {
             id: Some(id),
             draft,
             error: Some(e.to_string()),
+            locale,
         })
         .into_response(),
     }

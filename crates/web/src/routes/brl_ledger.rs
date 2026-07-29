@@ -16,12 +16,15 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/brl-ledger", get(list))
 }
 
-fn type_label(tx_type: BrlTxType) -> &'static str {
-    match tx_type {
-        BrlTxType::TransferIn => "Transfer in",
-        BrlTxType::BrazilPurchaseOut => "Purchase",
-        BrlTxType::CashGiftOut => "Cash gift",
-    }
+/// Same keys `core::model::transaction::BrlTxType::label()` uses, but with
+/// an explicit locale — see `eur_ledger.rs`'s `type_label` doc comment.
+fn type_label(tx_type: BrlTxType, locale: &str) -> String {
+    let key = match tx_type {
+        BrlTxType::TransferIn => "status.brl_tx.transfer_in",
+        BrlTxType::BrazilPurchaseOut => "status.source_type.purchase",
+        BrlTxType::CashGiftOut => "status.brl_tx.cash_gift_out",
+    };
+    rust_i18n::t!(key, locale = locale).to_string()
 }
 
 fn row_desc(row: &BrlTxRow) -> String {
@@ -34,23 +37,34 @@ fn row_desc(row: &BrlTxRow) -> String {
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let rows = qry::list(&conn).unwrap_or_default();
     let balance = compute_balance(rows.iter().map(|r| (r.tx_type.is_inflow(), r.amount)));
+    let balance_display = format::amount(balance);
 
     let view_rows = rows
         .iter()
         .map(|r| BrlLedgerRow {
             date_display: format::date(&r.date),
-            type_label: type_label(r.tx_type).to_string(),
+            type_label: type_label(r.tx_type, &locale),
             sign: if r.tx_type.is_inflow() { "+" } else { "-" },
             amount_display: format::amount(r.amount),
             desc: row_desc(r),
         })
         .collect();
 
+    let balance_label = rust_i18n::t!(
+        "common.balance",
+        locale = &locale,
+        symbol = "R$",
+        amount = &balance_display
+    )
+    .to_string();
+
     HtmlTemplate(BrlLedgerListTemplate {
         rows: view_rows,
-        balance_display: format::amount(balance),
         balance_positive: balance >= Decimal::ZERO,
+        balance_label,
+        locale,
     })
 }

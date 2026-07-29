@@ -1,9 +1,9 @@
 {% extends "layout.html" %}
 {% block content %}
 {% if let Some(id) = id %}
-<h1>Edit outbound event</h1>
+<h1>{{ "outbound.heading.edit"|t(locale) }}</h1>
 {% else %}
-<h1>New outbound event</h1>
+<h1>{{ "outbound.heading.new"|t(locale) }}</h1>
 {% endif %}
 
 {% if let Some(msg) = error %}
@@ -12,33 +12,33 @@
 
 <form method="post" action="{% if let Some(id) = id %}/outbound/{{ id }}{% else %}/outbound{% endif %}">
   <div class="field">
-    <label for="date">Date</label>
+    <label for="date">{{ "common.field.date"|t(locale) }}</label>
     <input type="date" id="date" name="date" value="{{ date }}" required>
   </div>
   <div class="field">
-    <label for="recipient_project_id">Recipient project</label>
+    <label for="recipient_project_id">{{ "outbound.field.recipient"|t(locale) }}</label>
     <select id="recipient_project_id" name="recipient_project_id" required>
-      <option value="">&mdash; choose one &mdash;</option>
+      <option value="">{{ "common.combo.choose_one"|t(locale) }}</option>
       {% for r in recipients %}
       <option value="{{ r.id }}" {% if r.selected %}selected{% endif %}>{{ r.name }}</option>
       {% endfor %}
     </select>
-    <p class="hint">Don't see the recipient you need? <a href="/outbound/recipients">Add one</a> (opens a separate page &mdash; come back and pick it from the list after).</p>
+    <p class="hint">{{ "web.outbound.hint.new_recipient_before"|t(locale) }}<a href="/outbound/recipients">{{ "web.outbound.hint.new_recipient_link"|t(locale) }}</a>{{ "web.outbound.hint.new_recipient_after"|t(locale) }}</p>
   </div>
   <div class="field">
-    <label for="cash_amount_brl_str">Cash gift (R$, optional)</label>
-    <input type="text" id="cash_amount_brl_str" name="cash_amount_brl_str" value="{{ cash_amount_brl_str }}" placeholder="leave blank if none">
+    <label for="cash_amount_brl_str">{{ "outbound.field.cash"|t(locale) }}</label>
+    <input type="text" id="cash_amount_brl_str" name="cash_amount_brl_str" value="{{ cash_amount_brl_str }}" placeholder="{{ "web.outbound.field.cash_placeholder"|t(locale) }}">
   </div>
   <div class="field">
-    <label for="notes">Notes</label>
+    <label for="notes">{{ "common.field.notes"|t(locale) }}</label>
     <textarea id="notes" name="notes" rows="3">{{ notes }}</textarea>
   </div>
 
   <div class="field">
-    <label>Items donated</label>
-    <p class="hint">Only Available items are listed (plus any already linked to this event). An event needs at least one item or a cash amount.</p>
+    <label>{{ "outbound.items.heading"|t(locale) }}</label>
+    <p class="hint">{{ "web.outbound.hint.items"|t(locale) }}</p>
     {% if items.is_empty() %}
-    <p class="hint">No eligible inventory items.</p>
+    <p class="hint">{{ "outbound.items.none_available"|t(locale) }}</p>
     {% endif %}
     {% for i in items %}
     <label style="display: block;">
@@ -49,8 +49,8 @@
   </div>
 
   <div class="actions">
-    <button type="submit">Save</button>
-    <a class="button secondary" href="/outbound">Cancel</a>
+    <button type="submit">{{ "common.save"|t(locale) }}</button>
+    <a class="button secondary" href="/outbound">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
 {% endblock %}

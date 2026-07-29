@@ -1,9 +1,9 @@
 {% extends "layout.html" %}
 {% block content %}
 {% if let Some(id) = id %}
-<h1>Edit purchase</h1>
+<h1>{{ "purchases.heading.edit"|t(locale) }}</h1>
 {% else %}
-<h1>New purchase</h1>
+<h1>{{ "purchases.heading.new"|t(locale) }}</h1>
 {% endif %}
 
 {% if let Some(msg) = error %}
@@ -12,45 +12,45 @@
 
 <form method="post" action="{% if let Some(id) = id %}/purchases/{{ id }}{% else %}/purchases{% endif %}">
   <div class="field">
-    <label for="date">Date</label>
+    <label for="date">{{ "common.field.date"|t(locale) }}</label>
     <input type="date" id="date" name="date" value="{{ draft.date }}" required>
   </div>
   <div class="field">
-    <label for="currency">Currency</label>
+    <label for="currency">{{ "purchases.field.currency"|t(locale) }}</label>
     <select id="currency" name="currency">
-      <option value="EUR" {% if draft.currency.as_str() == "EUR" %}selected{% endif %}>EUR</option>
-      <option value="BRL" {% if draft.currency.as_str() == "BRL" %}selected{% endif %}>BRL</option>
+      <option value="EUR" {% if draft.currency.as_str() == "EUR" %}selected{% endif %}>{{ "purchases.radio.eur"|t(locale) }}</option>
+      <option value="BRL" {% if draft.currency.as_str() == "BRL" %}selected{% endif %}>{{ "purchases.radio.brl"|t(locale) }}</option>
     </select>
   </div>
   <div class="field">
-    <label for="cost_str">Cost</label>
+    <label for="cost_str">{{ "purchases.field.cost"|t(locale) }}</label>
     <input type="text" id="cost_str" name="cost_str" value="{{ draft.cost_str }}" required>
   </div>
   <div class="field">
-    <label for="channel">Channel</label>
+    <label for="channel">{{ "purchases.field.channel"|t(locale) }}</label>
     <input type="text" id="channel" name="channel" value="{{ draft.channel }}" required>
   </div>
   <div class="field">
-    <label for="seller_info">Seller info</label>
+    <label for="seller_info">{{ "purchases.field.seller_info"|t(locale) }}</label>
     <textarea id="seller_info" name="seller_info" rows="2">{{ draft.seller_info }}</textarea>
   </div>
   <div class="field">
     <label>
       <input type="checkbox" name="multiple_items" {% if draft.multiple_items %}checked{% endif %}>
-      Multiple items (this purchase can back more than one inventory item)
+      {{ "purchases.checkbox.multiple_items"|t(locale) }}
     </label>
   </div>
   {% if id.is_none() %}
   <div class="field">
     <label>
       <input type="checkbox" name="negotiating">
-      Start as negotiating (no ledger entry until marked bought)
+      {{ "purchases.checkbox.start_negotiating"|t(locale) }}
     </label>
   </div>
   {% endif %}
   <div class="actions">
-    <button type="submit">Save</button>
-    <a class="button secondary" href="/purchases">Cancel</a>
+    <button type="submit">{{ "common.save"|t(locale) }}</button>
+    <a class="button secondary" href="/purchases">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
 
@@ -58,18 +58,18 @@
   {% if is_negotiating %}
   <div class="actions">
     <form method="post" action="/purchases/{{ id }}/mark-bought">
-      <button type="submit">Mark as bought</button>
+      <button type="submit">{{ "purchases.button.mark_bought"|t(locale) }}</button>
     </form>
     <form method="post" action="/purchases/{{ id }}/drop"
-          onsubmit="return confirm('Permanently delete this negotiating purchase? This cannot be undone.');">
-      <button type="submit" class="danger">Drop negotiating purchase</button>
+          onsubmit="return confirm('{{ "web.purchases.confirm.drop_negotiating"|tjs(locale) }}');">
+      <button type="submit" class="danger">{{ "purchases.button.drop_negotiating"|t(locale) }}</button>
     </form>
   </div>
   {% endif %}
 
-  <h2>Documents</h2>
+  <h2>{{ "common.doc.heading"|t(locale) }}</h2>
   <table>
-    <thead><tr><th>Label</th><th>File</th><th></th></tr></thead>
+    <thead><tr><th>{{ "web.doc.col.label"|t(locale) }}</th><th>{{ "web.doc.col.file"|t(locale) }}</th><th></th></tr></thead>
     <tbody>
     {% for doc in documents %}
     <tr>
@@ -77,21 +77,21 @@
       <td><a href="/documents/{{ doc.filename }}" target="_blank">{{ doc.filename }}</a></td>
       <td>
         <form class="inline" method="post" action="/purchases/{{ id }}/documents/{{ doc.id }}/delete"
-              onsubmit="return confirm('Remove this document?');">
-          <button type="submit" class="danger">Remove</button>
+              onsubmit="return confirm('{{ "web.doc.confirm.remove"|tjs(locale) }}');">
+          <button type="submit" class="danger">{{ "common.doc.remove"|t(locale) }}</button>
         </form>
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="3">No documents attached.</td></tr>
+    <tr><td colspan="3">{{ "common.doc.none_attached"|t(locale) }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
 
-  <h3>Attach a document</h3>
+  <h3>{{ "web.doc.heading.attach"|t(locale) }}</h3>
   <form method="post" action="/purchases/{{ id }}/documents" enctype="multipart/form-data">
     <div class="field">
-      <label for="label">Label</label>
+      <label for="label">{{ "web.doc.col.label"|t(locale) }}</label>
       <select id="label" name="label">
         {% for l in labels %}
         <option value="{{ l }}">{{ l }}</option>
@@ -99,10 +99,10 @@
       </select>
     </div>
     <div class="field">
-      <label for="file">File</label>
+      <label for="file">{{ "web.doc.col.file"|t(locale) }}</label>
       <input type="file" id="file" name="file" required>
     </div>
-    <button type="submit">Upload</button>
+    <button type="submit">{{ "web.doc.button.upload"|t(locale) }}</button>
   </form>
 {% endif %}
 {% endblock %}

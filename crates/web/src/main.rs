@@ -1,4 +1,5 @@
 mod auth;
+mod i18n;
 mod routes;
 mod state;
 mod templates;
@@ -7,6 +8,20 @@ mod test_support;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+// Compile-time locale catalogue (mirrors crates/desktop/src/main.rs and
+// crates/core/src/lib.rs — each crate embeds its own copy of the same
+// locales/*.yml content; see crates/core/src/lib.rs's doc comment on why
+// that's per-crate rather than inherited). Unlike desktop, `web` must
+// never call `rust_i18n::set_locale`: its runtime locale state
+// (`rust_i18n::locale()`/`set_locale()`) is a single process-wide
+// `LazyLock<AtomicStr>` (see the `rust-i18n` crate's source), not
+// request-scoped, so one axum request mutating it while another renders
+// concurrently would be a real race — two users on the LAN could get
+// text baked in the other's locale. Every `t!()` call in this crate must
+// carry an explicit `locale = ...` argument instead; `crate::i18n`
+// resolves what that locale is per request.
+rust_i18n::i18n!("../../locales", fallback = "en");
 
 use axum::extract::DefaultBodyLimit;
 use axum::response::Redirect;

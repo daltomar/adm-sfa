@@ -1,10 +1,10 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Inventory</h1>
-<p><a class="button" href="/inventory/new">+ New item</a></p>
+<h1>{{ "sidebar.inventory"|t(locale) }}</h1>
+<p><a class="button" href="/inventory/new">{{ "inventory.button.add"|t(locale) }}</a></p>
 <table>
 <thead>
-<tr><th>Name</th><th>Category</th><th>Location</th><th>Status</th><th>Source</th></tr>
+<tr><th>{{ "common.col.name"|t(locale) }}</th><th>{{ "common.col.category"|t(locale) }}</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "common.field.source"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for i in items %}
@@ -16,7 +16,7 @@
   <td>{{ i.source_desc }}</td>
 </tr>
 {% else %}
-<tr><td colspan="5">No inventory items yet.</td></tr>
+<tr><td colspan="5">{{ "inventory.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

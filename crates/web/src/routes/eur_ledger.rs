@@ -22,13 +22,19 @@ pub fn router() -> Router<AppState> {
         .route("/eur-ledger/{id}", axum::routing::post(update))
 }
 
-fn type_label(tx_type: EurTxType) -> &'static str {
-    match tx_type {
-        EurTxType::DonationIn => "Donation",
-        EurTxType::SelfFundingIn => "Self-funding",
-        EurTxType::PurchaseOut => "Purchase",
-        EurTxType::TransferToBrlOut => "Transfer to BRL",
-    }
+/// Same keys `core::model::transaction::EurTxType::label()` uses, but with
+/// an *explicit* locale rather than that method's ambient
+/// `rust_i18n::locale()` — see `main.rs`'s doc comment on why `web` can't
+/// use the ambient form. (`web` previously didn't call this function at
+/// all here; it used to inline plain English literals instead.)
+fn type_label(tx_type: EurTxType, locale: &str) -> String {
+    let key = match tx_type {
+        EurTxType::DonationIn => "status.source_type.donation",
+        EurTxType::SelfFundingIn => "status.eur_tx.self_funding_in",
+        EurTxType::PurchaseOut => "status.source_type.purchase",
+        EurTxType::TransferToBrlOut => "status.eur_tx.transfer_to_brl_out",
+    };
+    rust_i18n::t!(key, locale = locale).to_string()
 }
 
 fn row_desc(row: &EurTxRow) -> String {
@@ -56,15 +62,17 @@ fn donor_options(conn: &rusqlite::Connection, selected: Option<i64>) -> Vec<(i64
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let rows = qry::list(&conn).unwrap_or_default();
     let balance = compute_balance(rows.iter().map(|r| (r.tx_type.is_inflow(), r.amount)));
+    let balance_display = format::amount(balance);
 
     let view_rows = rows
         .iter()
         .map(|r| EurLedgerRow {
             id: r.id,
             date_display: format::date(&r.date),
-            type_label: type_label(r.tx_type).to_string(),
+            type_label: type_label(r.tx_type, &locale),
             sign: if r.tx_type.is_inflow() { "+" } else { "-" },
             amount_display: format::amount(r.amount),
             desc: row_desc(r),
@@ -72,15 +80,25 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
         })
         .collect();
 
+    let balance_label = rust_i18n::t!(
+        "common.balance",
+        locale = &locale,
+        symbol = "\u{20ac}",
+        amount = &balance_display
+    )
+    .to_string();
+
     HtmlTemplate(EurLedgerListTemplate {
         rows: view_rows,
-        balance_display: format::amount(balance),
         balance_positive: balance >= Decimal::ZERO,
+        balance_label,
+        locale,
     })
 }
 
 async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let donors = donor_options(&conn, None);
     HtmlTemplate(EurTxFormTemplate {
         id: None,
@@ -91,11 +109,13 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
         donors,
         note: String::new(),
         error: None,
+        locale,
     })
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let Some(row) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "entry not found").into_response();
     };
@@ -111,12 +131,13 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
     HtmlTemplate(EurTxFormTemplate {
         id: Some(id),
         date: row.date,
-        type_label: Some(type_label(row.tx_type).to_string()),
+        type_label: Some(type_label(row.tx_type, &locale)),
         show_donor: is_donation,
         amount_str: row.amount.to_string(),
         donors,
         note: row.note.unwrap_or_default(),
         error: None,
+        locale,
     })
     .into_response()
 }
@@ -166,6 +187,7 @@ async fn create(State(state): State<AppState>, Form(form): Form<EurTxForm>) -> R
     match qry::insert(&conn, &draft) {
         Ok(_) => Redirect::to("/eur-ledger").into_response(),
         Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
             let donors = donor_options(&conn, draft.donor_id);
             HtmlTemplate(EurTxFormTemplate {
                 id: None,
@@ -176,6 +198,7 @@ async fn create(State(state): State<AppState>, Form(form): Form<EurTxForm>) -> R
                 donors,
                 note: draft.note,
                 error: Some(e.to_string()),
+                locale,
             })
             .into_response()
         }
@@ -218,16 +241,18 @@ async fn update(
     match qry::update(&conn, id, &draft) {
         Ok(()) => Redirect::to("/eur-ledger").into_response(),
         Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
             let donors = donor_options(&conn, draft.donor_id);
             HtmlTemplate(EurTxFormTemplate {
                 id: Some(id),
                 date: draft.date,
-                type_label: Some(type_label(existing.tx_type).to_string()),
+                type_label: Some(type_label(existing.tx_type, &locale)),
                 show_donor: manual_type == ManualEurTxType::DonationIn,
                 amount_str: draft.amount_str,
                 donors,
                 note: draft.note,
                 error: Some(e.to_string()),
+                locale,
             })
             .into_response()
         }

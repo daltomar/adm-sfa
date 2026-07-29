@@ -69,6 +69,7 @@ fn form_template(
     draft: &OutboundEventDraft,
     selected_item_ids: &[i64],
     error: Option<String>,
+    locale: String,
 ) -> OutboundFormTemplate {
     let recipients = qry::list_recipient_projects(conn).unwrap_or_default();
     let items = inventory_qry::list(conn).unwrap_or_default();
@@ -80,18 +81,32 @@ fn form_template(
         notes: draft.notes.clone(),
         items: item_options(&items, selected_item_ids),
         error,
+        locale,
     }
 }
 
-fn event_summary(item_count: i64, cash: Option<Decimal>) -> String {
+fn event_summary(item_count: i64, cash: Option<Decimal>, locale: &str) -> String {
     let mut s = if item_count == 1 {
-        "1 item".to_string()
+        rust_i18n::t!("web.outbound.summary_one", locale = locale).to_string()
     } else {
-        format!("{item_count} items")
+        rust_i18n::t!(
+            "web.outbound.summary_other",
+            locale = locale,
+            count = item_count
+        )
+        .to_string()
     };
     if let Some(cash) = cash {
         if cash > Decimal::ZERO {
-            s.push_str(&format!(", R$ {}", format::amount(cash)));
+            let amount = format::amount(cash);
+            s.push_str(
+                rust_i18n::t!(
+                    "web.outbound.summary_cash_suffix",
+                    locale = locale,
+                    cash = &amount
+                )
+                .as_ref(),
+            );
         }
     }
     s
@@ -99,6 +114,7 @@ fn event_summary(item_count: i64, cash: Option<Decimal>) -> String {
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let events = qry::list(&conn).unwrap_or_default();
     let rows = events
         .into_iter()
@@ -106,23 +122,28 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             id: e.id,
             date_display: format::date(&e.date),
             recipient_name: e.recipient_name,
-            summary: event_summary(e.item_count, e.cash_amount_brl),
+            summary: event_summary(e.item_count, e.cash_amount_brl, &locale),
         })
         .collect();
-    HtmlTemplate(OutboundListTemplate { events: rows })
+    HtmlTemplate(OutboundListTemplate {
+        events: rows,
+        locale,
+    })
 }
 
 async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let draft = OutboundEventDraft {
         date: chrono::Local::now().format("%Y-%m-%d").to_string(),
         ..OutboundEventDraft::default()
     };
-    HtmlTemplate(form_template(&conn, None, &draft, &[], None))
+    HtmlTemplate(form_template(&conn, None, &draft, &[], None, locale))
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let Some(event) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "event not found").into_response();
     };
@@ -142,6 +163,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         &draft,
         &selected_item_ids,
         None,
+        locale,
     ))
     .into_response()
 }
@@ -207,14 +229,18 @@ async fn create(State(state): State<AppState>, RawForm(bytes): RawForm) -> Respo
     let conn = state.conn();
     match service::donate_items(&conn, &draft, &form.item_ids) {
         Ok(id) => Redirect::to(&format!("/outbound/{id}/edit")).into_response(),
-        Err(e) => HtmlTemplate(form_template(
-            &conn,
-            None,
-            &draft,
-            &form.item_ids,
-            Some(e.to_string()),
-        ))
-        .into_response(),
+        Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
+            HtmlTemplate(form_template(
+                &conn,
+                None,
+                &draft,
+                &form.item_ids,
+                Some(e.to_string()),
+                locale,
+            ))
+            .into_response()
+        }
     }
 }
 
@@ -233,14 +259,18 @@ async fn update(
     let conn = state.conn();
     match qry::update(&conn, id, &draft, &form.item_ids) {
         Ok(()) => Redirect::to(&format!("/outbound/{id}/edit")).into_response(),
-        Err(e) => HtmlTemplate(form_template(
-            &conn,
-            Some(id),
-            &draft,
-            &form.item_ids,
-            Some(e.to_string()),
-        ))
-        .into_response(),
+        Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
+            HtmlTemplate(form_template(
+                &conn,
+                Some(id),
+                &draft,
+                &form.item_ids,
+                Some(e.to_string()),
+                locale,
+            ))
+            .into_response()
+        }
     }
 }
 
@@ -254,6 +284,7 @@ async fn update(
 /// what's actually implemented rather than adding one speculatively.
 async fn recipients(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let recipients = qry::list_recipient_projects(&conn).unwrap_or_default();
     let rows = recipients
         .into_iter()
@@ -267,6 +298,7 @@ async fn recipients(State(state): State<AppState>) -> impl IntoResponse {
     HtmlTemplate(RecipientsTemplate {
         recipients: rows,
         error: None,
+        locale,
     })
 }
 
@@ -293,6 +325,7 @@ async fn create_recipient(
     match qry::insert_recipient_project(&conn, &draft) {
         Ok(_) => Redirect::to("/outbound/recipients").into_response(),
         Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
             let recipients = qry::list_recipient_projects(&conn).unwrap_or_default();
             let rows = recipients
                 .into_iter()
@@ -306,6 +339,7 @@ async fn create_recipient(
             HtmlTemplate(RecipientsTemplate {
                 recipients: rows,
                 error: Some(e.to_string()),
+                locale,
             })
             .into_response()
         }
