@@ -224,6 +224,13 @@ pub struct InventoryFormTemplate {
     pub status: String,
     /// "donation" or "purchase".
     pub source_type: String,
+    /// Raw scalar counterparts of `categories`/`donations`/`purchases`'
+    /// per-option `selected` flags — needed as hidden-input values when
+    /// `locked` is true, since a `<select>`'s own selection doesn't survive
+    /// being `disabled` (disabled form controls aren't submitted at all).
+    pub category_id: Option<i64>,
+    pub source_donation_id: Option<i64>,
+    pub source_purchase_id: Option<i64>,
     pub categories: Vec<CategoryOption>,
     pub donations: Vec<DonationOption>,
     pub purchases: Vec<PurchaseOption>,
@@ -232,6 +239,11 @@ pub struct InventoryFormTemplate {
     pub documents: Vec<adm_sfa_core::model::document::Document>,
     /// See `PurchaseFormTemplate::labels`.
     pub labels: Vec<String>,
+    /// True once the item has been donated — every field except `notes` is
+    /// locked (CLAUDE.md's donated-item field-locking backlog item).
+    /// `core::db::queries::inventory::update` enforces this authoritatively;
+    /// the template only needs to match it for the UI indication.
+    pub locked: bool,
 }
 
 pub struct DonationRow {

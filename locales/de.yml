@@ -231,6 +231,7 @@ inventory.button.new_donation: "+ Neue Spende"
 inventory.donation_label: "%{date} — %{name}"
 inventory.donation_label_anonymous: "%{date} — Anonym"
 inventory.purchase_label: "%{date}  %{channel}  %{symbol}%{cost}%{multi}"
+inventory.donated_locked_notice: "Dieser Artikel wurde bereits gespendet — nur Notizen können noch bearbeitet werden."
 
 reports.tab.donors: "Spenderübersicht"
 reports.tab.eur: "EUR-Kassenbuch-Zusammenfassung"

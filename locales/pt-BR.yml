@@ -230,6 +230,7 @@ inventory.button.new_donation: "+ Nova doação"
 inventory.donation_label: "%{date} — %{name}"
 inventory.donation_label_anonymous: "%{date} — Anônimo"
 inventory.purchase_label: "%{date}  %{channel}  %{symbol}%{cost}%{multi}"
+inventory.donated_locked_notice: "Este item já foi doado — apenas as Observações ainda podem ser editadas."
 
 reports.tab.donors: "Detalhamento por doador"
 reports.tab.eur: "Resumo do livro-caixa EUR"

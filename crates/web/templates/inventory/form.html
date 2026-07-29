@@ -10,30 +10,37 @@
 <div class="error">{{ msg }}</div>
 {% endif %}
 
+{% if locked %}
+<div class="notice">This item has been donated &mdash; only Notes can still be edited.</div>
+{% endif %}
+
 <form method="post" action="{% if let Some(id) = id %}/inventory/{{ id }}{% else %}/inventory{% endif %}">
   <div class="field">
     <label for="name">Name</label>
-    <input type="text" id="name" name="name" value="{{ name }}" required autofocus>
+    <input type="text" id="name" name="name" value="{{ name }}" required autofocus {% if locked %}readonly{% endif %}>
   </div>
   <div class="field">
     <label for="category_id">Category</label>
-    <select id="category_id" name="category_id" required>
+    <select id="category_id" name="category_id" required {% if locked %}disabled{% endif %}>
       <option value="">&mdash; choose one &mdash;</option>
       {% for c in categories %}
       <option value="{{ c.id }}" {% if c.selected %}selected{% endif %}>{{ c.name }}</option>
       {% endfor %}
     </select>
+    {% if locked %}<input type="hidden" name="category_id" value="{% if let Some(cid) = category_id %}{{ cid }}{% endif %}">{% endif %}
   </div>
   <div class="field">
     <label>Location</label>
-    <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %}> Germany</label>
-    <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %}> Brazil</label>
+    <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %} {% if locked %}disabled{% endif %}> Germany</label>
+    <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %} {% if locked %}disabled{% endif %}> Brazil</label>
+    {% if locked %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
   </div>
   <div class="field">
     <label>Status</label>
-    <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %}> Available</label>
-    <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %}> Reserved</label>
-    <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %}> Donated</label>
+    <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %} {% if locked %}disabled{% endif %}> Available</label>
+    <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %} {% if locked %}disabled{% endif %}> Reserved</label>
+    <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %} {% if locked %}disabled{% endif %}> Donated</label>
+    {% if locked %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
   </div>
   <div class="field">
     <label for="notes">Notes</label>
@@ -42,27 +49,30 @@
 
   <div class="field">
     <label>Source</label>
-    <label><input type="radio" name="source_type" value="donation" {% if source_type == "donation" %}checked{% endif %}> Donation</label>
-    <label><input type="radio" name="source_type" value="purchase" {% if source_type == "purchase" %}checked{% endif %}> Purchase</label>
+    <label><input type="radio" name="source_type" value="donation" {% if source_type == "donation" %}checked{% endif %} {% if locked %}disabled{% endif %}> Donation</label>
+    <label><input type="radio" name="source_type" value="purchase" {% if source_type == "purchase" %}checked{% endif %} {% if locked %}disabled{% endif %}> Purchase</label>
+    {% if locked %}<input type="hidden" name="source_type" value="{{ source_type }}">{% endif %}
   </div>
   <div class="field">
     <label for="source_donation_id">Donation</label>
-    <select id="source_donation_id" name="source_donation_id">
+    <select id="source_donation_id" name="source_donation_id" {% if locked %}disabled{% endif %}>
       <option value="">&mdash; choose one &mdash;</option>
       {% for d in donations %}
       <option value="{{ d.id }}" {% if d.selected %}selected{% endif %}>{{ d.label }}</option>
       {% endfor %}
     </select>
+    {% if locked %}<input type="hidden" name="source_donation_id" value="{% if let Some(did) = source_donation_id %}{{ did }}{% endif %}">{% endif %}
     <p class="hint">Only used when Source is Donation. Don't see the donation you need? <a href="/inventory/donations">Add one</a> (opens a separate page &mdash; come back and pick it from the list after).</p>
   </div>
   <div class="field">
     <label for="source_purchase_id">Purchase</label>
-    <select id="source_purchase_id" name="source_purchase_id">
+    <select id="source_purchase_id" name="source_purchase_id" {% if locked %}disabled{% endif %}>
       <option value="">&mdash; choose one &mdash;</option>
       {% for p in purchases %}
       <option value="{{ p.id }}" {% if p.blocked %}disabled{% endif %} {% if p.selected %}selected{% endif %}>{{ p.label }}{% if p.blocked %} (in use){% endif %}</option>
       {% endfor %}
     </select>
+    {% if locked %}<input type="hidden" name="source_purchase_id" value="{% if let Some(pid) = source_purchase_id %}{{ pid }}{% endif %}">{% endif %}
     <p class="hint">Only used when Source is Purchase. Negotiating purchases aren't listed &mdash; only ones marked Bought.</p>
   </div>
 

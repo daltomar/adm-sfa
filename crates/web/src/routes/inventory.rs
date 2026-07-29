@@ -149,6 +149,15 @@ fn form_template(
     let purchases = purchases_qry::list(conn).unwrap_or_default();
     let items = qry::list(conn).unwrap_or_default();
     let labels = documents_qry::labels(conn).unwrap_or_default();
+    // The *persisted* status, not `draft.status` — a rejected attempt to
+    // submit `status` away from `donated` must not visually unlock the form
+    // before the next page load just because the rejected draft said
+    // otherwise (`core::db::queries::inventory::update` is what actually
+    // enforces the lock; this only has to match it, not re-derive it from
+    // untrusted input).
+    let locked = id
+        .and_then(|id| qry::get(conn, id).ok().flatten())
+        .is_some_and(|item| item.status == ItemStatus::Donated);
 
     InventoryFormTemplate {
         id,
@@ -156,6 +165,9 @@ fn form_template(
         location: draft.location.as_str().to_string(),
         status: draft.status.as_str().to_string(),
         source_type: draft.source_type.as_str().to_string(),
+        category_id: draft.category_id,
+        source_donation_id: draft.source_donation_id,
+        source_purchase_id: draft.source_purchase_id,
         categories: category_options(&categories, draft.category_id),
         donations: donation_options(&donations, draft.source_donation_id),
         purchases: purchase_options(&purchases, &items, id, draft.source_purchase_id),
@@ -163,6 +175,7 @@ fn form_template(
         error,
         documents,
         labels,
+        locked,
     }
 }
 
@@ -317,10 +330,40 @@ async fn update(
         Ok(()) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
         Err(e) => {
             let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
+            // A donated item only ever allows `notes` to change — if that's
+            // why this was rejected, re-render from what's actually
+            // persisted (not the rejected submission) so the hidden inputs
+            // carry true values and a notes-only retry can still succeed.
+            // Re-rendering the rejected draft verbatim here (as any other
+            // validation error does, to preserve in-progress edits) would
+            // instead bake the same mismatched values into the hidden
+            // inputs, making every retry fail the same way with no visible
+            // way out short of a full page reload.
+            let persisted = qry::get(&conn, id).ok().flatten();
+            let is_locked_rejection = persisted
+                .as_ref()
+                .is_some_and(|item| item.status == ItemStatus::Donated);
+            let render_draft = if is_locked_rejection {
+                match persisted {
+                    Some(item) => InventoryItemDraft {
+                        name: item.name,
+                        category_id: Some(item.category_id),
+                        source_type: item.source_type,
+                        source_donation_id: item.source_donation_id,
+                        source_purchase_id: item.source_purchase_id,
+                        location: item.location,
+                        status: item.status,
+                        notes: draft.notes.clone(),
+                    },
+                    None => draft.clone(),
+                }
+            } else {
+                draft.clone()
+            };
             HtmlTemplate(form_template(
                 &conn,
                 Some(id),
-                &draft,
+                &render_draft,
                 Some(e.to_string()),
                 documents,
             ))
@@ -510,5 +553,226 @@ async fn create_donation(
             })
             .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support;
+    use adm_sfa_core::db::queries::{
+        categories as cat_qry, inventory as qry, purchases as purchases_qry,
+    };
+    use adm_sfa_core::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
+    use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+
+    /// Sets up a donated item directly through `core` (not through the web
+    /// form) — this is regression coverage for the donated-item field-lock
+    /// backlog item, not for the create/insert path itself.
+    fn setup_donated_item(conn: &rusqlite::Connection) -> (i64, i64) {
+        let cat_id = cat_qry::insert(conn, "Decks").unwrap();
+        let purchase_id = purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        let item_id = qry::insert(
+            conn,
+            &InventoryItemDraft {
+                name: "Deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Purchase,
+                source_donation_id: None,
+                source_purchase_id: Some(purchase_id),
+                location: Location::Germany,
+                status: ItemStatus::Available,
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        // Transition to donated through a real update — the item starts
+        // editable, and this is the only legitimate way to reach `donated`.
+        qry::update(
+            conn,
+            item_id,
+            &InventoryItemDraft {
+                name: "Deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Purchase,
+                source_donation_id: None,
+                source_purchase_id: Some(purchase_id),
+                location: Location::Germany,
+                status: ItemStatus::Donated,
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        (item_id, cat_id)
+    }
+
+    fn update_form_body(
+        name: &str,
+        category_id: i64,
+        location: &str,
+        status: &str,
+        source_type: &str,
+        source_purchase_id: i64,
+        notes: &str,
+    ) -> String {
+        format!(
+            "name={name}&category_id={category_id}&location={location}&status={status}\
+             &source_type={source_type}&source_purchase_id={source_purchase_id}&notes={notes}"
+        )
+    }
+
+    #[tokio::test]
+    async fn editing_a_locked_field_on_a_donated_item_is_rejected() {
+        let (state, dir) = test_support::test_app("inventory-locked-field-rejected");
+        let (item_id, cat_id) = setup_donated_item(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = update_form_body(
+            "Renamed deck", // name changed — locked
+            cat_id,
+            "germany",
+            "donated",
+            "purchase",
+            1,
+            "",
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/inventory/{item_id}"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("already been donated"));
+        assert_eq!(
+            qry::get(&state.conn(), item_id).unwrap().unwrap().name,
+            "Deck"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test for a bug the reviewer caught before this branch was
+    /// committed: the rejected-update re-render used to bake the *rejected*
+    /// submission's values into the locked fields' hidden inputs (not the
+    /// true persisted values), so a real browser doing exactly what the
+    /// error banner invites — leave the page as shown, fix notes, resubmit
+    /// — would keep failing for the same reason forever, with no visible
+    /// way out short of a full page reload.
+    #[tokio::test]
+    async fn a_rejected_update_rerenders_locked_fields_from_persisted_values_not_the_rejected_submission(
+    ) {
+        let (state, dir) = test_support::test_app("inventory-locked-rerender-uses-persisted");
+        let (item_id, cat_id) = setup_donated_item(&state.conn());
+        let other_cat_id = cat_qry::insert(&state.conn(), "Wheels").unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        // Submit a bad category_id alongside a notes change — rejected.
+        let body = update_form_body(
+            "Deck",
+            other_cat_id,
+            "germany",
+            "donated",
+            "purchase",
+            1,
+            "attempted while also changing category",
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/inventory/{item_id}"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        // The re-rendered hidden input must carry the *true* persisted
+        // category, not the bad one that was just rejected.
+        assert!(body_text.contains(&format!("name=\"category_id\" value=\"{cat_id}\"")));
+        assert!(!body_text.contains(&format!("name=\"category_id\" value=\"{other_cat_id}\"")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn notes_can_still_be_updated_on_a_donated_item() {
+        let (state, dir) = test_support::test_app("inventory-locked-notes-allowed");
+        let (item_id, cat_id) = setup_donated_item(&state.conn());
+        let purchase_id = qry::get(&state.conn(), item_id)
+            .unwrap()
+            .unwrap()
+            .source_purchase_id
+            .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = update_form_body(
+            "Deck",
+            cat_id,
+            "germany",
+            "donated",
+            "purchase",
+            purchase_id,
+            "handled with care",
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/inventory/{item_id}"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            qry::get(&state.conn(), item_id)
+                .unwrap()
+                .unwrap()
+                .notes
+                .as_deref(),
+            Some("handled with care")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn edit_form_shows_the_donated_lock_notice() {
+        let (state, dir) = test_support::test_app("inventory-locked-form-render");
+        let (item_id, _cat_id) = setup_donated_item(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .uri(format!("/inventory/{item_id}/edit"))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("has been donated"));
+        assert!(body_text.contains("disabled"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
