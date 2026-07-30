@@ -397,9 +397,8 @@ web.inventory.hint.new_donation_after: " (öffnet eine eigene Seite — danach z
 web.inventory.hint.purchase_source: "Nur relevant, wenn Quelle „Kauf“ ist. Laufende Käufe werden nicht angezeigt — nur als gekauft markierte."
 web.inventory.purchase_combo.in_use: "%{label} (bereits verknüpft)"
 
-web.eur_ledger.donor_hint_before: "Nur für Spendeneinträge relevant — wird bei Eigenfinanzierung ignoriert. Zuerst einen neuen Spender anlegen? "
-web.eur_ledger.donor_hint_link: "Anlegen"
-web.eur_ledger.donor_hint_after: "."
+web.eur_ledger.donor_hint_link: "Neuer Spender anlegen"
+web.eur_ledger.error.type_required: "Bitte einen Typ auswählen."
 
 web.reports.filter.recipient: "Empfänger (nur Ausgehend/Prüfprotokoll)"
 web.reports.button.apply_filters: "Filter anwenden"

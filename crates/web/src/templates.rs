@@ -158,11 +158,20 @@ pub struct EurTxFormTemplate {
     /// `None` when adding (radios shown, both choices possible); `Some(label)`
     /// when editing an existing manual entry (type is fixed after creation).
     pub type_label: Option<String>,
-    /// Whether the donor field should be shown: always true when adding
-    /// (the chosen radio isn't known until submit, so both fields render and
-    /// the server ignores donor_id if self-funding was submitted); only true
-    /// when editing a donation entry.
+    /// Whether the donor field should be visible on render. When adding:
+    /// `false` until a type is chosen, then reflects whichever type was
+    /// actually chosen/submitted (`donation_checked`) — also toggled live by
+    /// the template's own JS as the user clicks a radio. When editing:
+    /// fixed based on the existing entry's immutable type, never toggled.
     pub show_donor: bool,
+    /// Create-form only: whether the "Donation" / "Self-funding" radio
+    /// should render `checked`. Both `false` on a fresh `/eur-ledger/new`
+    /// load (no default) and on the type-validation-error path; reflect the
+    /// actually-parsed type after a date/amount validation error. Unused
+    /// (left `false`) when `type_label` is `Some` — that branch doesn't
+    /// render radios at all.
+    pub donation_checked: bool,
+    pub self_funding_checked: bool,
     pub amount_str: String,
     /// (donor id, donor name, whether this donor is the currently selected one).
     pub donors: Vec<(i64, String, bool)>,
