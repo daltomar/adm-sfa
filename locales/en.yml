@@ -17,6 +17,7 @@ _version: 1
 common.save: "Save"
 common.cancel: "Cancel"
 common.create: "Create"
+common.edit: "Edit"
 common.field.name: "Name *"
 common.field.notes: "Notes"
 common.field.note: "Note"
@@ -418,9 +419,8 @@ web.inventory.hint.new_donation_after: " (opens a separate page — come back an
 web.inventory.hint.purchase_source: "Only used when Source is Purchase. Negotiating purchases aren't listed — only ones marked Bought."
 web.inventory.purchase_combo.in_use: "%{label} (in use)"
 
-web.eur_ledger.donor_hint_before: "Only used for Donation entries — ignored if Self-funding is selected. Need a new donor first? "
-web.eur_ledger.donor_hint_link: "Add one"
-web.eur_ledger.donor_hint_after: "."
+web.eur_ledger.donor_hint_link: "Create new donor"
+web.eur_ledger.error.type_required: "Please select a type."
 
 web.reports.filter.recipient: "Recipient (Outbound/Audit only)"
 web.reports.button.apply_filters: "Apply filters"

@@ -6,6 +6,7 @@ _version: 1
 common.save: "Salvar"
 common.cancel: "Cancelar"
 common.create: "Criar"
+common.edit: "Editar"
 common.field.name: "Nome *"
 common.field.notes: "Notas"
 common.field.note: "Nota"
@@ -396,9 +397,8 @@ web.inventory.hint.new_donation_after: " (abre uma página separada — volte de
 web.inventory.hint.purchase_source: "Usado apenas quando a Origem é Compra. Compras em negociação não aparecem na lista — apenas as marcadas como compradas."
 web.inventory.purchase_combo.in_use: "%{label} (em uso)"
 
-web.eur_ledger.donor_hint_before: "Usado apenas em lançamentos de Doação — ignorado se Autofinanciamento estiver selecionado. Precisa cadastrar um novo doador primeiro? "
-web.eur_ledger.donor_hint_link: "Adicionar um"
-web.eur_ledger.donor_hint_after: "."
+web.eur_ledger.donor_hint_link: "Cadastrar novo doador"
+web.eur_ledger.error.type_required: "Selecione um tipo."
 
 web.reports.filter.recipient: "Beneficiário (apenas Saídas/Auditoria)"
 web.reports.button.apply_filters: "Aplicar filtros"

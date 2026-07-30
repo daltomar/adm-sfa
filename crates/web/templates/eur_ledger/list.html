@@ -14,7 +14,7 @@
 <tr>
   <td>{{ r.date_display }}</td>
   <td>{{ r.type_label }}</td>
-  <td>{% if r.editable %}<a href="/eur-ledger/{{ r.id }}/edit">{{ r.desc }}</a>{% else %}{{ r.desc }}{% endif %}</td>
+  <td>{% if r.editable %}<a href="/eur-ledger/{{ r.id }}/edit">{% if r.desc.is_empty() %}{{ "common.edit"|t(locale) }}{% else %}{{ r.desc }}{% endif %}</a>{% else %}{{ r.desc }}{% endif %}</td>
   <td>{{ r.sign }}&euro; {{ r.amount_display }}</td>
 </tr>
 {% else %}

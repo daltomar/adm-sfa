@@ -11,6 +11,9 @@
 {% endif %}
 
 <form method="post" action="{% if let Some(id) = id %}/donors/{{ id }}/edit{% else %}/donors{% endif %}">
+  {% if let Some(rt) = return_to %}
+  <input type="hidden" name="return_to" value="{{ rt }}">
+  {% endif %}
   <div class="field">
     <label for="name">{{ "common.field.name"|t(locale) }}</label>
     <input type="text" id="name" name="name" value="{{ draft.name }}" required autofocus>
