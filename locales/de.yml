@@ -7,6 +7,7 @@ _version: 1
 common.save: "Speichern"
 common.cancel: "Abbrechen"
 common.create: "Erstellen"
+common.edit: "Bearbeiten"
 common.field.name: "Name *"
 common.field.notes: "Notizen"
 common.field.note: "Notiz"

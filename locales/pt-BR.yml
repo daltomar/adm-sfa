@@ -6,6 +6,7 @@ _version: 1
 common.save: "Salvar"
 common.cancel: "Cancelar"
 common.create: "Criar"
+common.edit: "Editar"
 common.field.name: "Nome *"
 common.field.notes: "Notas"
 common.field.note: "Nota"

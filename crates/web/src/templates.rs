@@ -120,6 +120,12 @@ pub struct DonorFormTemplate {
     pub id: Option<i64>,
     pub draft: adm_sfa_core::model::donor::DonorDraft,
     pub error: Option<String>,
+    /// Round-tripped from `?return_to=` on `GET /donors/new` through a
+    /// hidden form field, so `create()` can redirect back to the page that
+    /// linked here (e.g. `/eur-ledger/new`) instead of always landing on
+    /// this donor's own edit page. `None` on the edit form and on the
+    /// normal Donors-page "+ New donor" flow (no caller to return to).
+    pub return_to: Option<String>,
     pub locale: String,
 }
 

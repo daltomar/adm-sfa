@@ -41,7 +41,7 @@
       <option value="{{ d.0 }}" {% if d.2 %}selected{% endif %}>{{ d.1 }}</option>
       {% endfor %}
     </select>
-    <p class="hint"><a href="/donors/new">{{ "web.eur_ledger.donor_hint_link"|t(locale) }}</a></p>
+    <p class="hint"><a id="new_donor_link" href="/donors/new">{{ "web.eur_ledger.donor_hint_link"|t(locale) }}</a></p>
   </div>
   <div class="field">
     <label for="note">{{ "common.field.note"|t(locale) }}</label>
@@ -56,12 +56,44 @@
 (function() {
   var radios = document.querySelectorAll('input[name="tx_type"]');
   var donorField = document.getElementById('donor_field');
-  if (!radios.length || !donorField) { return; }
-  function sync() {
-    var checked = document.querySelector('input[name="tx_type"]:checked');
-    donorField.style.display = (checked && checked.value === 'donation_in') ? '' : 'none';
+  if (radios.length && donorField) {
+    var sync = function() {
+      var checked = document.querySelector('input[name="tx_type"]:checked');
+      donorField.style.display = (checked && checked.value === 'donation_in') ? '' : 'none';
+    };
+    radios.forEach(function(r) { r.addEventListener('change', sync); });
   }
-  radios.forEach(function(r) { r.addEventListener('change', sync); });
+
+  // Keep the "Create new donor" link's return_to current, so a round trip
+  // through /donors/new lands back here with whatever the user had already
+  // typed (this page's own fields) still in place, plus the new donor
+  // auto-selected once donors.rs appends donor_id on the way back. Only the
+  // create form (radios present) carries the field values along — the edit
+  // form just returns to itself with no query string, since edit_form()
+  // doesn't read one back (a smaller, deliberate scope: this only preserves
+  // in-progress typing on the create page, not an unsaved in-progress edit).
+  var newDonorLink = document.getElementById('new_donor_link');
+  if (newDonorLink) {
+    var dateInput = document.getElementById('date');
+    var amountInput = document.getElementById('amount_str');
+    var noteInput = document.getElementById('note');
+    var updateNewDonorLink = function() {
+      var returnTo = window.location.pathname;
+      if (radios.length) {
+        var params = new URLSearchParams();
+        if (dateInput && dateInput.value) { params.set('date', dateInput.value); }
+        if (amountInput && amountInput.value) { params.set('amount_str', amountInput.value); }
+        if (noteInput && noteInput.value) { params.set('note', noteInput.value); }
+        var qs = params.toString();
+        if (qs) { returnTo += '?' + qs; }
+      }
+      newDonorLink.href = '/donors/new?return_to=' + encodeURIComponent(returnTo);
+    };
+    [dateInput, amountInput, noteInput].forEach(function(el) {
+      if (el) { el.addEventListener('input', updateNewDonorLink); }
+    });
+    updateNewDonorLink();
+  }
 })();
 </script>
 {% endblock %}
