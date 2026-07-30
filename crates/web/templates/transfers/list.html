@@ -1,10 +1,10 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Transfers</h1>
-<p><a class="button" href="/transfers/new">+ New transfer</a></p>
+<h1>{{ "sidebar.transfers"|t(locale) }}</h1>
+<p><a class="button" href="/transfers/new">{{ "transfers.button.add"|t(locale) }}</a></p>
 <table>
 <thead>
-<tr><th>Date</th><th>EUR sent</th><th>Rate</th><th>BRL received</th></tr>
+<tr><th>{{ "common.col.date"|t(locale) }}</th><th>{{ "web.col.eur_sent"|t(locale) }}</th><th>{{ "web.col.rate"|t(locale) }}</th><th>{{ "web.col.brl_received"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for t in transfers %}
@@ -15,7 +15,7 @@
   <td>R$ {{ t.brl_display }}</td>
 </tr>
 {% else %}
-<tr><td colspan="4">No transfers yet.</td></tr>
+<tr><td colspan="4">{{ "transfers.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

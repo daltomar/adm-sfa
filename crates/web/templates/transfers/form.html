@@ -1,9 +1,9 @@
 {% extends "layout.html" %}
 {% block content %}
 {% if let Some(id) = id %}
-<h1>Edit transfer</h1>
+<h1>{{ "transfers.heading.edit"|t(locale) }}</h1>
 {% else %}
-<h1>New transfer</h1>
+<h1>{{ "transfers.heading.new"|t(locale) }}</h1>
 {% endif %}
 
 {% if let Some(msg) = error %}
@@ -12,34 +12,34 @@
 
 <form method="post" action="{% if let Some(id) = id %}/transfers/{{ id }}{% else %}/transfers{% endif %}">
   <div class="field">
-    <label for="date">Date</label>
+    <label for="date">{{ "common.field.date"|t(locale) }}</label>
     <input type="date" id="date" name="date" value="{{ date }}" required>
   </div>
   <div class="field">
-    <label for="eur_amount_sent_str">EUR sent</label>
+    <label for="eur_amount_sent_str">{{ "transfers.field.eur_amount"|t(locale) }}</label>
     <input type="text" id="eur_amount_sent_str" name="eur_amount_sent_str" value="{{ eur_amount_sent_str }}" required>
   </div>
   <div class="field">
-    <label for="exchange_rate_str">Exchange rate (EUR &rarr; BRL)</label>
-    <input type="text" id="exchange_rate_str" name="exchange_rate_str" value="{{ exchange_rate_str }}" placeholder="e.g. 5.5" required>
+    <label for="exchange_rate_str">{{ "transfers.field.exchange_rate"|t(locale) }}</label>
+    <input type="text" id="exchange_rate_str" name="exchange_rate_str" value="{{ exchange_rate_str }}" placeholder="{{ "transfers.field.exchange_rate_hint"|t(locale) }}" required>
   </div>
   {% if let Some(preview) = brl_preview %}
-  <p class="hint">BRL received: R$ {{ preview }}</p>
+  <p class="hint">{{ preview }}</p>
   {% endif %}
   <div class="field">
-    <label for="notes">Notes</label>
+    <label for="notes">{{ "common.field.notes"|t(locale) }}</label>
     <textarea id="notes" name="notes" rows="3">{{ notes }}</textarea>
   </div>
   <div class="actions">
-    <button type="submit">Save</button>
-    <a class="button secondary" href="/transfers">Cancel</a>
+    <button type="submit">{{ "common.save"|t(locale) }}</button>
+    <a class="button secondary" href="/transfers">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
 
 {% if let Some(id) = id %}
-  <h2>Documents</h2>
+  <h2>{{ "common.doc.heading"|t(locale) }}</h2>
   <table>
-    <thead><tr><th>Label</th><th>File</th><th></th></tr></thead>
+    <thead><tr><th>{{ "web.doc.col.label"|t(locale) }}</th><th>{{ "web.doc.col.file"|t(locale) }}</th><th></th></tr></thead>
     <tbody>
     {% for doc in documents %}
     <tr>
@@ -47,21 +47,21 @@
       <td><a href="/documents/{{ doc.filename }}" target="_blank">{{ doc.filename }}</a></td>
       <td>
         <form class="inline" method="post" action="/transfers/{{ id }}/documents/{{ doc.id }}/delete"
-              onsubmit="return confirm('Remove this document?');">
-          <button type="submit" class="danger">Remove</button>
+              onsubmit="return confirm('{{ "web.doc.confirm.remove"|tjs(locale) }}');">
+          <button type="submit" class="danger">{{ "common.doc.remove"|t(locale) }}</button>
         </form>
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="3">No documents attached.</td></tr>
+    <tr><td colspan="3">{{ "common.doc.none_attached"|t(locale) }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
 
-  <h3>Attach a document</h3>
+  <h3>{{ "web.doc.heading.attach"|t(locale) }}</h3>
   <form method="post" action="/transfers/{{ id }}/documents" enctype="multipart/form-data">
     <div class="field">
-      <label for="label">Label</label>
+      <label for="label">{{ "web.doc.col.label"|t(locale) }}</label>
       <select id="label" name="label">
         {% for l in labels %}
         <option value="{{ l }}">{{ l }}</option>
@@ -69,10 +69,10 @@
       </select>
     </div>
     <div class="field">
-      <label for="file">File</label>
+      <label for="file">{{ "web.doc.col.file"|t(locale) }}</label>
       <input type="file" id="file" name="file" required>
     </div>
-    <button type="submit">Upload</button>
+    <button type="submit">{{ "web.doc.button.upload"|t(locale) }}</button>
   </form>
 {% endif %}
 {% endblock %}

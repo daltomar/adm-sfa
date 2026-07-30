@@ -1,35 +1,35 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Recipient projects</h1>
-<p class="hint">Create one here, then go back to <a href="/outbound/new">add or edit a donation event</a> and pick it from the Recipient project dropdown.</p>
+<h1>{{ "web.outbound.recipients.heading"|t(locale) }}</h1>
+<p class="hint">{{ "web.outbound.recipients.hint_before"|t(locale) }}<a href="/outbound/new">{{ "web.outbound.recipients.hint_link"|t(locale) }}</a>{{ "web.outbound.recipients.hint_after"|t(locale) }}</p>
 
 {% if let Some(msg) = error %}
 <div class="error">{{ msg }}</div>
 {% endif %}
 
-<h2>New recipient project</h2>
+<h2>{{ "web.outbound.recipients.new_heading"|t(locale) }}</h2>
 <form method="post" action="/outbound/recipients">
   <div class="field">
-    <label for="name">Name</label>
+    <label for="name">{{ "common.field.name"|t(locale) }}</label>
     <input type="text" id="name" name="name" required autofocus>
   </div>
   <div class="field">
-    <label for="contact_info">Contact info</label>
+    <label for="contact_info">{{ "common.field.contact_info"|t(locale) }}</label>
     <input type="text" id="contact_info" name="contact_info">
   </div>
   <div class="field">
-    <label for="location">Location</label>
+    <label for="location">{{ "common.field.location"|t(locale) }}</label>
     <input type="text" id="location" name="location">
   </div>
   <div class="actions">
-    <button type="submit">Create</button>
+    <button type="submit">{{ "common.create"|t(locale) }}</button>
   </div>
 </form>
 
-<h2>Existing recipient projects</h2>
+<h2>{{ "web.outbound.recipients.existing_heading"|t(locale) }}</h2>
 <table>
 <thead>
-<tr><th>Name</th><th>Contact info</th><th>Location</th><th>Active</th></tr>
+<tr><th>{{ "common.col.name"|t(locale) }}</th><th>{{ "common.field.contact_info"|t(locale) }}</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "web.col.active"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for r in recipients %}
@@ -37,10 +37,10 @@
   <td>{{ r.name }}</td>
   <td>{{ r.contact_info }}</td>
   <td>{{ r.location }}</td>
-  <td>{% if r.active %}yes{% else %}&mdash;{% endif %}</td>
+  <td>{% if r.active %}{{ "web.common.yes"|t(locale) }}{% else %}&mdash;{% endif %}</td>
 </tr>
 {% else %}
-<tr><td colspan="4">No recipient projects yet.</td></tr>
+<tr><td colspan="4">{{ "web.outbound.recipients.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

@@ -42,7 +42,11 @@ fn draft_from_transfer(t: &AnnualTransfer) -> TransferDraft {
     }
 }
 
-fn brl_preview(draft: &TransferDraft) -> Option<String> {
+/// Full "BRL amount received: R$ 123.45" sentence, pre-formatted here (not
+/// in the template) since word order around an interpolated amount can
+/// differ per language — same reasoning as `EurLedgerListTemplate::
+/// balance_label`.
+fn brl_preview(draft: &TransferDraft, locale: &str) -> Option<String> {
     let eur = adm_sfa_core::money::parse_amount_input(draft.eur_amount_sent_str.trim())?;
     let rate = adm_sfa_core::money::parse_amount_input(draft.exchange_rate_str.trim())?;
     // `checked_mul` (not `*`), matching `core::db::queries::transfers`'s own
@@ -52,7 +56,15 @@ fn brl_preview(draft: &TransferDraft) -> Option<String> {
     // (like the existing "unparseable" case) is fine since `insert`/`update`
     // is the actual authority and will reject the same input with a real
     // error banner instead of a preview.
-    eur.checked_mul(rate).map(format::amount)
+    let amount = eur.checked_mul(rate).map(format::amount)?;
+    Some(
+        rust_i18n::t!(
+            "transfers.field.brl_received",
+            locale = locale,
+            amount = &amount
+        )
+        .to_string(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -62,8 +74,9 @@ fn form_template(
     error: Option<String>,
     documents: Vec<adm_sfa_core::model::document::Document>,
     labels: Vec<String>,
+    locale: String,
 ) -> TransferFormTemplate {
-    let brl_preview = brl_preview(&draft);
+    let brl_preview = brl_preview(&draft, &locale);
     TransferFormTemplate {
         id,
         date: draft.date,
@@ -74,6 +87,7 @@ fn form_template(
         error,
         documents,
         labels,
+        locale,
     }
 }
 
@@ -86,18 +100,21 @@ fn transfer_form_error_response(conn: &rusqlite::Connection, id: i64, error: Str
     };
     let draft = draft_from_transfer(&transfer);
     let labels = documents_qry::labels(conn).unwrap_or_default();
+    let locale = crate::i18n::resolve_locale(conn);
     HtmlTemplate(form_template(
         Some(id),
         draft,
         Some(error),
         documents,
         labels,
+        locale,
     ))
     .into_response()
 }
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let transfers = qry::list(&conn).unwrap_or_default();
     let rows = transfers
         .into_iter()
@@ -109,26 +126,47 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             rate_display: format::number(t.exchange_rate, 4),
         })
         .collect();
-    HtmlTemplate(TransfersListTemplate { transfers: rows })
+    HtmlTemplate(TransfersListTemplate {
+        transfers: rows,
+        locale,
+    })
 }
 
-async fn new_form() -> impl IntoResponse {
+async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let draft = TransferDraft {
         date: chrono::Local::now().format("%Y-%m-%d").to_string(),
         ..TransferDraft::default()
     };
-    HtmlTemplate(form_template(None, draft, None, Vec::new(), Vec::new()))
+    HtmlTemplate(form_template(
+        None,
+        draft,
+        None,
+        Vec::new(),
+        Vec::new(),
+        locale,
+    ))
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
     let Some(transfer) = qry::get(&conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "transfer not found").into_response();
     };
     let documents = documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
     let labels = documents_qry::labels(&conn).unwrap_or_default();
     let draft = draft_from_transfer(&transfer);
-    HtmlTemplate(form_template(Some(id), draft, None, documents, labels)).into_response()
+    HtmlTemplate(form_template(
+        Some(id),
+        draft,
+        None,
+        documents,
+        labels,
+        locale,
+    ))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -154,14 +192,18 @@ async fn create(State(state): State<AppState>, Form(form): Form<TransferForm>) -
     let conn = state.conn();
     match qry::insert(&conn, &draft) {
         Ok(id) => Redirect::to(&format!("/transfers/{id}/edit")).into_response(),
-        Err(e) => HtmlTemplate(form_template(
-            None,
-            draft,
-            Some(e.to_string()),
-            Vec::new(),
-            Vec::new(),
-        ))
-        .into_response(),
+        Err(e) => {
+            let locale = crate::i18n::resolve_locale(&conn);
+            HtmlTemplate(form_template(
+                None,
+                draft,
+                Some(e.to_string()),
+                Vec::new(),
+                Vec::new(),
+                locale,
+            ))
+            .into_response()
+        }
     }
 }
 
@@ -178,12 +220,14 @@ async fn update(
             let documents =
                 documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
             let labels = documents_qry::labels(&conn).unwrap_or_default();
+            let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
                 Some(id),
                 draft,
                 Some(e.to_string()),
                 documents,
                 labels,
+                locale,
             ))
             .into_response()
         }
@@ -232,11 +276,9 @@ async fn attach_document(
 
     let Some(tmp_path) = tmp_path else {
         let conn = state.conn();
-        return transfer_form_error_response(
-            &conn,
-            id,
-            "No file was selected, or the upload could not be saved.".to_string(),
-        );
+        let locale = crate::i18n::resolve_locale(&conn);
+        let error = rust_i18n::t!("web.doc.error.no_file", locale = &locale).to_string();
+        return transfer_form_error_response(&conn, id, error);
     };
 
     let conn = state.conn();

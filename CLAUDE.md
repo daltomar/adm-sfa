@@ -441,7 +441,7 @@ inventory}.rs`, reviewed by `rust-code-reviewer` (no 🔴 findings):
   the pre-save check) plus a new authoritative DB-backed
   `inventory::purchase_source_conflict` wired into `insert`/`update`.
 
-**New backlog item found during phase 2's review, confirmed and widened by
+~~**New backlog item found during phase 2's review, confirmed and widened by
 manual testing after the phase 2 commit** (not fixed — pre-existing, adjacent
 to but not covered by the `link_items` guard above): a `donated` inventory
 item has **no locked fields at all** in the edit form
@@ -455,7 +455,9 @@ HTTP: what should stay editable on a `donated` item (notes? category?) versus
 what should lock (status; source; anything that feeds a ledger/reconciliation
 figure) — full lock, or an intentional manual-override escape hatch with a
 confirmation step. Not blocking any current phase; flagged here so it isn't
-lost.
+lost.~~ **Fixed** on `backlog-donated-item-field-locking` (PR #16): owner's
+call was full lock, notes-only, no manual-override escape hatch. See
+"Donated inventory item field locking" below for the implementation.
 
 **Related bug found and fixed during the same manual testing pass**: switching
 an item's source-type radio button (Donation ↔ Purchase) in the edit form
@@ -519,76 +521,68 @@ arithmetic, per `rust-code-reviewer`):
   `generate_filename` also consult `_deleted/` filenames, or namespace
   `_deleted/` by document id so collisions can't occur at all.
 
-**New backlog items found during phase 5's review** (not fixed — per
-`rust-code-reviewer`; the three 🟡s that *were* fixed before commit are
-described in the phase 5 summary above, not repeated here):
-- The multipart upload's `label` field (`crates/web/src/routes/
-  purchases.rs::attach_document`, and — confirmed still true after the
-  second pass — the identical shape in `transfers.rs`/`inventory.rs`'s own
-  `attach_document`) is arbitrary free text with no allow-list check
-  against `document_label` — desktop restricts the equivalent field to a
-  `ComboBox`. Verified live that a path-traversal payload (`label=../../
-  ../../tmp/.../pwned`) does *not* escape `documents_dir` today, but only as
-  an accident of how `docs_fs::generate_filename` concatenates
-  `{date}_{record_type}-{record_id}_{label}` (the date/record prefix means
-  `label` can never be the first path segment, and `fs::copy` doesn't
-  auto-create missing directories) — not a validated guarantee. Per
-  CLAUDE.md's own "business rules live in core" rule, this belongs in
-  `core` (validate `label` against `docs_qry::labels(conn)`, or reject `/`,
-  `\`, NUL outright) rather than trusted-by-convention in each UI caller,
-  since an HTTP client can send anything.
-- `crates/web` has zero automated tests (`cargo test -p web` → 0), still
-  true after the second pass — every section's route handlers were instead
-  verified via live manual smoke-testing (`curl` against a running
-  instance) per commit, not committed as regression tests. Given this
-  crate's whole job is an auth gate and untrusted multipart/form handling,
-  `auth::password_matches`/`require_auth` and the various `attach_document`
-  edge cases remain the highest-value first targets.
-- The "re-fetch the full list and `.find(|x| x.id == id)` rather than a
-  targeted single-row lookup" pattern flagged in `purchases.rs`/`donors.rs`
-  after the first pass is now the established convention across every
-  section added in the second pass too (`eur_ledger.rs`, `transfers.rs`,
-  `inventory.rs`, `outbound.rs`, `reports.rs` — the last of which does this
-  8x per request in `ReportsData::load`). Fine at this data scale and
-  reviewed as such each time, but a `get(conn, id)` per entity in `core`
-  would remove a lot of now-duplicated boilerplate if `web`'s route count
-  keeps growing.
-- `crates/web/src/main.rs::parse_data_dir` duplicates `crates/desktop/src/
-  main.rs`'s hand-rolled `--data-dir` parsing verbatim — candidate to move
-  into `adm_sfa_core::config` alongside `default_data_dir()`.
-- `/logout` (`crates/web/src/routes/login.rs`) is a plain `GET`, trivially
-  triggerable cross-site (e.g. an `<img>` tag) to force-end a session. Low
-  impact (ends a session, no data effect) but conventionally should be a
-  `POST`.
-- The session cookie has no explicit `Max-Age`/`Expires` (browser-session
-  cookie) — combined with the signing key being regenerated fresh per
-  process start, a long-lived open tab stays authenticated indefinitely
-  between server restarts. Likely fine for this threat model; flagged so
-  it's a decision, not an oversight.
-- Web templates and route handlers use hardcoded English strings — no
-  `t!()` calls anywhere in `crates/web`, a deliberate, temporary violation
-  of T2, now spanning all nine sections rather than just the original two.
-  Needs i18n wiring before `web` is considered done, not just before it's
-  exposed off-LAN.
+**New backlog items found during phase 5's review** (the three 🟡s that
+*were* fixed before commit are described in the phase 5 summary above, not
+repeated here). Status below reflects reality as of `backlog-donated-item-
+field-locking` (PR #16) — several of these were fixed by dedicated
+`backlog-*` branches (PRs #12–#15) *after* this section was last written,
+without this section being updated at the time; that gap is why this note
+exists instead of the usual inline strikethrough for each one.
+
+- ~~The multipart upload's `label` field ... is arbitrary free text with no
+  allow-list check against `document_label`~~ **Fixed** on
+  `backlog-document-label-allowlist` (PR #12): `label` is now validated in
+  `core` against `docs_qry::labels(conn)` for all three `attach_document`
+  call sites (purchases, transfers, inventory), including a path-traversal
+  test.
+- **Still open, partially addressed.** `crates/web` had zero automated
+  tests at the time this was written; `backlog-web-test-coverage` (PR #14)
+  added the first suite (`auth::password_matches`/`require_auth`, login,
+  and `purchases.rs`'s `attach_document` edge cases — the highest-value
+  targets this item called out), and `backlog-donated-item-field-locking`
+  (PR #16) added `inventory.rs` route tests on top. Still no tests for
+  `eur_ledger.rs`, `brl_ledger.rs`, `transfers.rs`, `outbound.rs`,
+  `reports.rs`, `settings.rs`, or `donors.rs`'s routes.
+- **Still open.** The "re-fetch the full list and `.find(|x| x.id == id)`"
+  pattern was the motivation for `get(conn, id)` per entity — **fixed** on
+  `backlog-get-by-id-dedup` (PR #15), which added `get()` to every entity
+  in `core` and switched `web`'s single-row lookups to it. (Note: this only
+  replaced the *lookup* pattern; it didn't touch call sites that
+  legitimately need the full list, e.g. pickers.)
+- **Still open.** `crates/web/src/main.rs::parse_data_dir` still duplicates
+  `crates/desktop/src/main.rs`'s hand-rolled `--data-dir` parsing verbatim —
+  not yet moved into `adm_sfa_core::config`.
+- ~~`/logout` ... is a plain `GET`~~ / ~~session cookie has no explicit
+  `Max-Age`~~ **Both fixed** on `backlog-logout-post-and-cookie-expiry` (PR
+  #13): `/logout` is now a `POST` (styled as a small form in the header),
+  and the session cookie gets an explicit 8-hour `Max-Age` (client-enforced
+  only — `require_auth` checks signature, not issued-at, documented inline
+  as a known tradeoff).
+- **Still open — in progress on `backlog-web-i18n`.** Web templates and
+  route handlers use hardcoded English strings — no `t!()` calls anywhere
+  in `crates/web`, a deliberate, temporary violation of T2, spanning all
+  nine sections. This is the top remaining item; being worked now.
 - Session mechanism restart-invalidates-all-sessions tradeoff (see phase 5
-  summary above) — revisit if restarts turn out to be more frequent than
-  expected once this is in real use.
-- **New, from the second pass:** `categories::insert`/`update` and
+  summary above) — a deliberate design decision, not a defect. Revisit only
+  if restarts turn out to be more frequent than expected once this is in
+  real use.
+- ~~**New, from the second pass:** `categories::insert`/`update` and
   `documents::insert_label`/`update_label` in `core` have no server-side
-  non-empty-name check (only an HTML `required` attribute) — verified live
-  that a raw POST with an empty name inserts a blank category visible in
-  every category picker across the app. `donors::insert`/`update`'s
-  `donor.name` has the identical shape and was not caught by the original
-  phase 5 review either. Fix belongs in `core`, shared across all three.
-- **New, from the second pass:** `crates/web/src/routes/outbound.rs`'s
-  item picker needed several checkboxes sharing one `name="item_ids"`, and
-  `axum::Form`'s `serde_urlencoded` backend can't deserialize repeated keys
-  into a `Vec` (confirmed empirically — it errors rather than collecting).
-  That route uses `axum::extract::RawForm` + `form_urlencoded::parse`
-  directly instead of this crate's usual `#[derive(Deserialize)] +
-  Form<T>` pattern, the only route that does. Documented inline; flagging
-  here too in case a future multi-select field elsewhere in `web` needs
-  the same approach and a reader goes looking for a precedent.
+  non-empty-name check~~ **Fixed** at the tail of
+  `phase-5-web-remaining-sections` (commit `9e109f2`, landed just before
+  this CLAUDE.md section was last updated, but never reflected here until
+  now): `core` now rejects a blank/whitespace-only name for category,
+  document_label, donor, and recipient_project alike.
+- **New, from the second pass** (still open, not a bug — just a documented
+  precedent): `crates/web/src/routes/outbound.rs`'s item picker needed
+  several checkboxes sharing one `name="item_ids"`, and `axum::Form`'s
+  `serde_urlencoded` backend can't deserialize repeated keys into a `Vec`
+  (confirmed empirically — it errors rather than collecting). That route
+  uses `axum::extract::RawForm` + `form_urlencoded::parse` directly instead
+  of this crate's usual `#[derive(Deserialize)] + Form<T>` pattern, the
+  only route that does. Documented inline; flagging here too in case a
+  future multi-select field elsewhere in `web` needs the same approach and
+  a reader goes looking for a precedent.
 
 What the first pass's audit found *correct* and not to be "improved"
 during the move: `db/queries/*` (parameterized, no business logic),

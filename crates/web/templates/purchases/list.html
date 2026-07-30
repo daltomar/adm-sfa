@@ -1,10 +1,10 @@
 {% extends "layout.html" %}
 {% block content %}
-<h1>Purchases</h1>
-<p><a class="button" href="/purchases/new">+ New purchase</a></p>
+<h1>{{ "sidebar.purchases"|t(locale) }}</h1>
+<p><a class="button" href="/purchases/new">{{ "purchases.button.add"|t(locale) }}</a></p>
 <table>
 <thead>
-<tr><th>Date</th><th>Channel</th><th>Cost</th><th>Status</th><th>Multi-item</th></tr>
+<tr><th>{{ "common.col.date"|t(locale) }}</th><th>{{ "web.purchases.col.channel"|t(locale) }}</th><th>{{ "web.purchases.col.cost"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "web.col.multi_item"|t(locale) }}</th></tr>
 </thead>
 <tbody>
 {% for p in purchases %}
@@ -13,10 +13,10 @@
   <td><a href="/purchases/{{ p.id }}/edit">{{ p.channel }}</a></td>
   <td>{{ p.currency_symbol }} {{ p.cost_display }}</td>
   <td>{{ p.status_label }}</td>
-  <td>{% if p.multiple_items %}yes{% else %}—{% endif %}</td>
+  <td>{% if p.multiple_items %}{{ "web.common.yes"|t(locale) }}{% else %}—{% endif %}</td>
 </tr>
 {% else %}
-<tr><td colspan="5">No purchases yet.</td></tr>
+<tr><td colspan="5">{{ "purchases.empty"|t(locale) }}</td></tr>
 {% endfor %}
 </tbody>
 </table>

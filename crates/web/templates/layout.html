@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ locale }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -37,18 +37,18 @@
 <body>
 <header>
   <span class="brand">adm-sfa</span>
-  <a href="/purchases">Purchases</a>
-  <a href="/donors">Donors</a>
-  <a href="/eur-ledger">EUR Ledger</a>
-  <a href="/brl-ledger">BRL Ledger</a>
-  <a href="/transfers">Transfers</a>
-  <a href="/inventory">Inventory</a>
-  <a href="/outbound">Outbound</a>
-  <a href="/reports">Reports</a>
-  <a href="/settings">Settings</a>
+  <a href="/purchases">{{ "sidebar.purchases"|t(locale) }}</a>
+  <a href="/donors">{{ "sidebar.donors"|t(locale) }}</a>
+  <a href="/eur-ledger">{{ "sidebar.eur_ledger"|t(locale) }}</a>
+  <a href="/brl-ledger">{{ "sidebar.brl_ledger"|t(locale) }}</a>
+  <a href="/transfers">{{ "sidebar.transfers"|t(locale) }}</a>
+  <a href="/inventory">{{ "sidebar.inventory"|t(locale) }}</a>
+  <a href="/outbound">{{ "sidebar.outbound"|t(locale) }}</a>
+  <a href="/reports">{{ "sidebar.reports"|t(locale) }}</a>
+  <a href="/settings">{{ "sidebar.settings"|t(locale) }}</a>
   <span style="margin-left: auto;">
     <form class="logout-form" method="post" action="/logout">
-      <button type="submit">Log out</button>
+      <button type="submit">{{ "web.nav.logout"|t(locale) }}</button>
     </form>
   </span>
 </header>
