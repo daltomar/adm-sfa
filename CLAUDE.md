@@ -558,10 +558,42 @@ exists instead of the usual inline strikethrough for each one.
   and the session cookie gets an explicit 8-hour `Max-Age` (client-enforced
   only — `require_auth` checks signature, not issued-at, documented inline
   as a known tradeoff).
-- **Still open — in progress on `backlog-web-i18n`.** Web templates and
-  route handlers use hardcoded English strings — no `t!()` calls anywhere
-  in `crates/web`, a deliberate, temporary violation of T2, spanning all
-  nine sections. This is the top remaining item; being worked now.
+- ~~Web templates and route handlers use hardcoded English strings — no
+  `t!()` calls anywhere in `crates/web`, a deliberate, temporary violation
+  of T2, spanning all nine sections.~~ **Fixed** on `backlog-web-i18n`
+  (commit `aa9ec4c`): `t!()` wired through every template and route
+  handler in `crates/web`. Manually tested per `backlog-web-i18n-tests.md`
+  against the full 8-step guide (baseline English, live DB-driven locale
+  switching with no restart, all nine sections in German/Portuguese,
+  interpolated strings, the two reviewer-caught JS-escaping/placeholder
+  bugs, on-screen-vs-export locale independence, and the donated-item-lock
+  regression check) — passed, with two things noted rather than fixed as
+  part of this branch:
+  - **New backlog item, found during manual testing:** the Transfers
+    form's "BRL received: R$ ..." preview only appears after a save
+    (error re-render or the edit page after a successful create), not
+    live as the user types an amount/rate — confirmed as a **pre-existing
+    web/desktop parity gap, not an i18n regression**. Desktop's
+    `crates/desktop/src/ui/views/transfers.rs` recomputes the preview
+    every egui frame from the in-progress draft; `web`'s
+    `crates/web/src/routes/transfers.rs::brl_preview` only ever runs
+    server-side against whatever draft the current page render already
+    has, and `crates/web/templates/transfers/form.html` has no
+    client-side JS to recompute it on input. Present since the original
+    web Transfers port (`d70b5c0`); the i18n commit only swapped the
+    hardcoded English string for a translated one, it didn't add or
+    remove any live-preview mechanism. Needs a deliberate decision (add
+    a small `oninput` JS recompute, matching values/format the server
+    already computes on submit, vs. leave web without a live preview)
+    before treating it as done.
+  - **Not yet tested, flagged so it isn't silently assumed passing:**
+    step 6 of the test guide — confirming the Export CSV/PDF forms'
+    "Report language" dropdown produces a download in the *dropdown's*
+    chosen language even when it differs from the current on-screen
+    `ui_locale` chrome (T3: export locale is always an explicit
+    per-export argument, never read from the ambient UI locale). The
+    on-screen-vs-chrome-locale half of step 6 *was* tested and passed;
+    only the dropdown-vs-download-language half was skipped this pass.
 - Session mechanism restart-invalidates-all-sessions tradeoff (see phase 5
   summary above) — a deliberate design decision, not a defect. Revisit only
   if restarts turn out to be more frequent than expected once this is in
