@@ -123,7 +123,13 @@ async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> i
                 let sep = if return_to.contains('?') { '&' } else { '?' };
                 Redirect::to(&format!("{return_to}{sep}donor_id={id}")).into_response()
             } else {
-                Redirect::to(&format!("/donors/{id}/edit")).into_response()
+                // No caller-supplied return path (the normal "Donors page →
+                // + Add donor" flow) or an unsafe one (rejected above,
+                // falls back here too) — either way lands on the Donors
+                // list, matching desktop's own Save-while-adding behavior
+                // (`ui/views/donors.rs`'s Save handler sets `Mode::List`,
+                // never a per-donor edit view).
+                Redirect::to("/donors").into_response()
             }
         }
         Err(e) => HtmlTemplate(DonorFormTemplate {
@@ -196,8 +202,9 @@ mod tests {
     }
 
     /// A `return_to` that isn't a root-relative path (an open-redirect
-    /// attempt) is rejected — falls back to the normal edit-page redirect
-    /// instead of ever being handed to `Redirect::to`.
+    /// attempt) is rejected — falls back to the same "no return_to"
+    /// destination (the Donors list) instead of ever being handed to
+    /// `Redirect::to`.
     #[tokio::test]
     async fn create_ignores_an_unsafe_return_to() {
         let (state, dir) = test_support::test_app("donors-unsafe-return-to");
@@ -216,7 +223,7 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str().unwrap();
-        assert_eq!(location, "/donors/1/edit");
+        assert_eq!(location, "/donors");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -240,7 +247,7 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str().unwrap();
-        assert_eq!(location, "/donors/1/edit");
+        assert_eq!(location, "/donors");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -286,7 +293,33 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str().unwrap();
-        assert_eq!(location, "/donors/1/edit");
+        assert_eq!(location, "/donors");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The normal "Donors page → + Add donor" flow (no `return_to` at all)
+    /// lands on the Donors list, not this donor's own edit page — matching
+    /// desktop's Save-while-adding behavior (`ui/views/donors.rs`, which
+    /// returns to `Mode::List` on success, never a per-donor edit view).
+    #[tokio::test]
+    async fn create_without_a_return_to_redirects_to_the_donors_list() {
+        let (state, dir) = test_support::test_app("donors-no-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "name=Alex&contact_info=&notes=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/donors")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/donors");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

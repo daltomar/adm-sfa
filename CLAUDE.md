@@ -434,6 +434,43 @@ front-ends.
   `transfers.error.linked_record_not_found` key) and resets to
   `Mode::List` instead.
 
+## Donors: creating one from the main Donors page lands on the list (implemented)
+
+Branch `web-donors-create-redirect`. Bug report: on `web`, `POST /donors`
+with no `return_to` (the normal "Donors page → + Add donor" flow)
+redirected to the new donor's own `/donors/{id}/edit` instead of back to
+the Donors list. Desktop was already correct — `ui/views/donors.rs`'s
+Save-while-adding handler already returns to `Mode::List` on success, never
+opening a per-donor edit view — so this was a web-only fix.
+
+- `crates/web/src/routes/donors.rs`'s `create()`: the fallback branch of
+  `if safe_return_to(&return_to) { .. } else { .. }` (taken both for "no
+  `return_to` submitted" and for a rejected/unsafe one — these were already
+  handled identically before this change, sharing one branch, just with a
+  different shared destination) now redirects to `/donors` instead of
+  `/donors/{id}/edit`. The `return_to`-present-and-safe branch (used by
+  every "+ New donor" link from EUR Ledger/Inventory/Outbound, which
+  appends `?donor_id={id}` and redirects back to the linking page) is
+  unchanged. `update()`'s post-edit redirect (still `/donors/{id}/edit`,
+  matching desktop's own Save-while-*editing* behavior, which does stay on
+  the edit view) is untouched — this only ever affected the create path.
+- Three existing security-regression tests for the open-redirect guard
+  (`create_ignores_an_unsafe_return_to`,
+  `create_ignores_a_protocol_relative_return_to`,
+  `create_ignores_a_backslash_return_to`) had their expected `location`
+  updated from `/donors/1/edit` to `/donors` — their actual assertion (the
+  attacker-supplied value never reaches `Redirect::to`) is unaffected by
+  which safe destination the fallback picks. New test
+  `create_without_a_return_to_redirects_to_the_donors_list` covers the
+  actual bug report.
+- Reviewed by `rust-code-reviewer`: no 🔴 or 🟡 findings. One thing noted
+  for awareness, not a defect in this branch: `inventory/donations.html`'s
+  "+ New donor" hint link has no `return_to` param at all (unlike EUR
+  Ledger's, which is JS-populated) — it already fell into the fallback
+  branch before this fix and still does now, just landing on `/donors`
+  instead of the old edit-page target. Pre-existing gap, not introduced or
+  worsened here.
+
 ## Workspace restructure and web front-end (in progress)
 
 Goal: extract the domain layer into a shared crate so a web front-end can
