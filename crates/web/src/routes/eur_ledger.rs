@@ -49,6 +49,25 @@ fn row_desc(row: &EurTxRow) -> String {
     }
 }
 
+/// Where the ledger list's description cell should link. Manual entries
+/// link to their own edit form; a purchase-/transfer-linked entry has no
+/// edit form of its own (it's auto-created — see `row_desc`'s sibling
+/// comment on `EurLedgerRow::link_href`), so this links to the record that
+/// actually generated it instead of leaving the row unclickable.
+fn link_href(row: &EurTxRow) -> Option<String> {
+    match row.tx_type {
+        EurTxType::DonationIn | EurTxType::SelfFundingIn => {
+            Some(format!("/eur-ledger/{}/edit", row.id))
+        }
+        EurTxType::PurchaseOut => row
+            .linked_purchase_id
+            .map(|id| format!("/purchases/{id}/edit")),
+        EurTxType::TransferToBrlOut => row
+            .linked_transfer_id
+            .map(|id| format!("/transfers/{id}/edit")),
+    }
+}
+
 fn donor_options(conn: &rusqlite::Connection, selected: Option<i64>) -> Vec<(i64, String, bool)> {
     donors_qry::list(conn)
         .unwrap_or_default()
@@ -74,13 +93,12 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
         .iter()
         .rev()
         .map(|r| EurLedgerRow {
-            id: r.id,
             date_display: format::date(&r.date),
             type_label: type_label(r.tx_type, &locale),
             sign: if r.tx_type.is_inflow() { "+" } else { "-" },
             amount_display: format::amount(r.amount),
             desc: row_desc(r),
-            editable: r.tx_type.is_manual(),
+            link_href: link_href(r),
         })
         .collect();
 
@@ -604,6 +622,81 @@ mod tests {
         let body_text = test_support::body_text(res).await;
 
         assert!(body_text.contains(r#"<a href="/eur-ledger/1/edit">Edit</a>"#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression coverage for the bug report this fix addresses: a
+    /// Purchase-typed row used to render as unclickable plain text (no
+    /// `editable` flag was ever true for it) instead of linking anywhere.
+    #[tokio::test]
+    async fn list_links_a_purchase_row_to_the_purchase_edit_page() {
+        use adm_sfa_core::db::queries::purchases as purchases_qry;
+        use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
+
+        let (state, dir) = test_support::test_app("eur-ledger-list-purchase-link");
+        let conn = state.conn();
+        let purchase_id = purchases_qry::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/eur-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        let body_text = test_support::body_text(res).await;
+
+        assert!(body_text.contains(&format!(r#"href="/purchases/{purchase_id}/edit""#)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Same regression, for the other auto-created type.
+    #[tokio::test]
+    async fn list_links_a_transfer_row_to_the_transfer_edit_page() {
+        use adm_sfa_core::db::queries::transfers as transfers_qry;
+        use adm_sfa_core::model::transfer::TransferDraft;
+
+        let (state, dir) = test_support::test_app("eur-ledger-list-transfer-link");
+        let conn = state.conn();
+        let transfer_id = transfers_qry::insert(
+            &conn,
+            &TransferDraft {
+                date: "2026-01-01".to_string(),
+                eur_amount_sent_str: "100.00".to_string(),
+                exchange_rate_str: "5.00".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/eur-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        let body_text = test_support::body_text(res).await;
+
+        assert!(body_text.contains(&format!(r#"href="/transfers/{transfer_id}/edit""#)));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

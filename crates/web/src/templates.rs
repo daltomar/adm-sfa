@@ -147,16 +147,20 @@ pub struct DonorFormTemplate {
 }
 
 pub struct EurLedgerRow {
-    pub id: i64,
     pub date_display: String,
     pub type_label: String,
     pub sign: &'static str,
     pub amount_display: String,
     pub desc: String,
-    /// Only manual entries (Donation/Self-funding) link to an edit form —
-    /// purchase- and transfer-linked entries are auto-created and read-only
-    /// here, same as desktop.
-    pub editable: bool,
+    /// Where the description cell links to, pre-formatted in the route
+    /// handler: a manual entry (Donation/Self-funding) links to its own
+    /// `/eur-ledger/{id}/edit` — it's not directly editable here since
+    /// they're auto-created, but the underlying record still is, so this
+    /// links to *that* record's own edit page instead of nothing. `None`
+    /// only if a purchase-/transfer-linked row's `linked_purchase_id`/
+    /// `linked_transfer_id` is somehow unset — a data-integrity gap the
+    /// `NOT NULL` FK should prevent, not the common case.
+    pub link_href: Option<String>,
 }
 
 #[derive(Template)]

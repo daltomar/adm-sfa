@@ -112,6 +112,44 @@ impl PurchasesView {
         self.labels.clear();
     }
 
+    /// Jumps straight into editing purchase `id` — the entry point for EUR
+    /// Ledger's "Open in Purchases" cross-section navigation
+    /// (`app.rs`'s handling of `eur_ledger::LedgerNavTarget`). Fetches the
+    /// row directly rather than relying on `self.purchases` already
+    /// containing it, since the caller may be jumping here without this
+    /// section ever having been visited yet this session. Mirrors the list
+    /// click handler's field mapping in `show_list` — small enough, and
+    /// with different data sources, that it isn't worth extracting a
+    /// shared helper for two call sites.
+    pub fn select_for_edit(&mut self, db: &Connection, id: i64) {
+        let Ok(Some(p)) = qry::get(db, id) else {
+            // Shouldn't happen — the caller only reaches this with an id
+            // from a live `linked_purchase_id` FK — but silently landing on
+            // an unexplained list view would be worse than a rare stale
+            // error banner, so this surfaces something rather than nothing.
+            self.mode = Mode::List;
+            self.error = Some(t!("purchases.error.linked_record_not_found").into_owned());
+            return;
+        };
+        self.draft = PurchaseDraft {
+            date: format::date(&p.date),
+            currency: p.currency,
+            cost_str: p.cost.to_string(),
+            channel: p.channel.clone(),
+            seller_info: p.seller_info.clone().unwrap_or_default(),
+            multiple_items: p.multiple_items,
+            status: p.status,
+        };
+        self.mode = Mode::Editing(id);
+        self.error = None;
+        self.docs_needs_reload = true;
+        self.discard_pending_doc();
+        self.discard_staged_docs();
+        self.path_input = None;
+        self.confirm_drop = false;
+        self.capture_note = None;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         if self.needs_reload {
             match qry::list(db) {

@@ -149,9 +149,11 @@ eur_ledger.error.amount_zero: "Amount must be greater than zero"
 eur_ledger.button.new_donor: "+ New donor"
 eur_ledger.detail.purchase.heading: "Purchase (read-only)"
 eur_ledger.detail.purchase.created_by: "Created automatically by the %{section} section. Edit or delete the purchase there."
+eur_ledger.detail.purchase.open_button: "Open in Purchases"
 eur_ledger.detail.transfer.heading: "EUR → BRL Transfer (read-only)"
 eur_ledger.detail.amount_sent: "Amount sent: %{symbol} %{amount}"
 eur_ledger.detail.transfer.created_by: "Created automatically by the %{section} section."
+eur_ledger.detail.transfer.open_button: "Open in Transfers"
 
 settings.heading: "Settings"
 settings.locale.heading: "Language"
@@ -193,6 +195,7 @@ transfers.error.eur_invalid: "EUR amount sent isn't a valid amount — use e.g. 
 transfers.error.eur_zero: "EUR amount sent must be greater than zero"
 transfers.error.rate_invalid: "Exchange rate isn't a valid amount — use e.g. 5.4321 or 5,4321"
 transfers.error.rate_zero: "Exchange rate must be greater than zero"
+transfers.error.linked_record_not_found: "The linked transfer could not be found. It may have been deleted."
 
 # Enum/status display-layer keys (SPEC.md §6, task: display-layer i18n).
 # Derived from the stored English DB value — the DB itself stays monolingual.
@@ -231,6 +234,7 @@ purchases.checkbox.multiple_items: "This purchase covers more than one inventory
 purchases.checkbox.start_negotiating: "Start as negotiating — no ledger entry until marked bought"
 purchases.error.cost_zero: "Cost must be greater than zero"
 purchases.error.cannot_mark_single_other: "Cannot mark as single-item: %{n} inventory items are already linked to this purchase."
+purchases.error.linked_record_not_found: "The linked purchase could not be found. It may have been deleted."
 purchases.button.mark_bought: "Mark as bought"
 purchases.confirm.delete_permanently: "Delete permanently?"
 purchases.button.confirm_delete: "Yes, delete"
