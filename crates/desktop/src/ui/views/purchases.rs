@@ -28,6 +28,16 @@ struct PendingAttachment {
     is_temp: bool,
 }
 
+/// Result of the shared attachment picker (`show_attachment_picker`) —
+/// module scope since both `show_documents` (Editing) and
+/// `show_staged_documents` (Adding) apply it after the borrow of
+/// `self.pending_doc` ends.
+enum DocAction {
+    None,
+    Confirm,
+    Cancel,
+}
+
 pub struct PurchasesView {
     purchases: Vec<Purchase>,
     mode: Mode,
@@ -38,6 +48,16 @@ pub struct PurchasesView {
     labels: Vec<String>,
     docs_needs_reload: bool,
     pending_doc: Option<PendingAttachment>,
+    /// Documents staged (label + file picked, not yet filed) while adding a
+    /// new purchase — `Mode::Adding` only. `pending_doc` remains "the one
+    /// currently being configured" in both modes; entries only land here
+    /// once the user confirms them via `show_attachment_picker`'s "Add to
+    /// list" button, and are filed together with the purchase on Save
+    /// (`service::create_purchase_with_documents`). A failed entry from a
+    /// partially-failed Save stays here so `show_documents`'s retry
+    /// hand-off can offer it again through the normal Editing-mode
+    /// Attach/Cancel flow.
+    staged_docs: Vec<PendingAttachment>,
     path_input: Option<String>,
     confirm_drop: bool,
     capture_note: Option<String>,
@@ -55,6 +75,7 @@ impl Default for PurchasesView {
             labels: Vec::new(),
             docs_needs_reload: false,
             pending_doc: None,
+            staged_docs: Vec::new(),
             path_input: None,
             confirm_drop: false,
             capture_note: None,
@@ -69,6 +90,17 @@ impl PurchasesView {
     /// OS temp dir every time a form is reset before confirming the attach.
     fn discard_pending_doc(&mut self) {
         if let Some(p) = self.pending_doc.take() {
+            if p.is_temp {
+                let _ = std::fs::remove_file(&p.path);
+            }
+        }
+    }
+
+    /// Same idea as `discard_pending_doc`, for every staged-but-unsaved
+    /// document — called alongside it at every reset point so an abandoned
+    /// "new purchase" flow doesn't leak staged screenshot temp files.
+    fn discard_staged_docs(&mut self) {
+        for p in self.staged_docs.drain(..) {
             if p.is_temp {
                 let _ = std::fs::remove_file(&p.path);
             }
@@ -122,13 +154,17 @@ impl PurchasesView {
                     ui.add_space(16.0);
                     ui.weak(t!("purchases.hint.select_or_add").as_ref());
                 }
-                Mode::Adding | Mode::Editing(_) => {
+                Mode::Adding => {
                     self.show_form(ui, db, data_dir);
-                    if matches!(self.mode, Mode::Editing(_)) {
-                        ui.add_space(16.0);
-                        ui.separator();
-                        self.show_documents(ui, db, data_dir);
-                    }
+                    ui.add_space(16.0);
+                    ui.separator();
+                    self.show_staged_documents(ui, db);
+                }
+                Mode::Editing(_) => {
+                    self.show_form(ui, db, data_dir);
+                    ui.add_space(16.0);
+                    ui.separator();
+                    self.show_documents(ui, db, data_dir);
                 }
             });
     }
@@ -143,6 +179,7 @@ impl PurchasesView {
             self.error = None;
             self.docs = Vec::new();
             self.discard_pending_doc();
+            self.discard_staged_docs();
             self.path_input = None;
             self.confirm_drop = false;
             self.capture_note = None;
@@ -199,6 +236,7 @@ impl PurchasesView {
                         self.error = None;
                         self.docs_needs_reload = true;
                         self.discard_pending_doc();
+                        self.discard_staged_docs();
                         self.path_input = None;
                         self.confirm_drop = false;
                         self.capture_note = None;
@@ -340,12 +378,63 @@ impl PurchasesView {
                 .clicked()
             {
                 if is_adding {
-                    match service::create_purchase(db, &self.draft) {
-                        Ok(new_id) => {
-                            self.mode = Mode::Editing(new_id);
+                    let documents_dir = data_dir.join("documents");
+                    // Clone into owned data first: building borrowed
+                    // `PendingDocument`s directly from `self.staged_docs`
+                    // would hold `self` borrowed across the `Ok` arm's
+                    // `self.mode = ...` mutation below and fail to compile
+                    // — the same reason `DocAction::Confirm`'s attach
+                    // handler clones path/label before calling
+                    // `service::attach_document`.
+                    let staged: Vec<(PathBuf, String)> = self
+                        .staged_docs
+                        .iter()
+                        .map(|p| (p.path.clone(), p.label.clone()))
+                        .collect();
+                    let pending: Vec<service::PendingDocument> = staged
+                        .iter()
+                        .map(|(path, label)| service::PendingDocument {
+                            path: path.as_path(),
+                            label: label.as_str(),
+                        })
+                        .collect();
+                    match service::create_purchase_with_documents(
+                        db,
+                        &documents_dir,
+                        &self.draft,
+                        &pending,
+                    ) {
+                        Ok(created) => {
+                            self.mode = Mode::Editing(created.id);
                             self.docs_needs_reload = true;
                             self.needs_reload = true;
-                            self.error = None;
+
+                            // Walk in reverse index order so `remove(i)`
+                            // doesn't shift later indices. Successes are
+                            // cleared (deleting their temp file if any);
+                            // failures stay in `staged_docs` with their
+                            // error set, for show_documents's retry
+                            // hand-off to offer again.
+                            let mut failed = 0usize;
+                            for (i, outcome) in created.attachments.iter().enumerate().rev() {
+                                match &outcome.result {
+                                    Ok(_) => {
+                                        let entry = self.staged_docs.remove(i);
+                                        if entry.is_temp {
+                                            let _ = std::fs::remove_file(&entry.path);
+                                        }
+                                    }
+                                    Err(msg) => {
+                                        failed += 1;
+                                        self.staged_docs[i].error = Some(msg.clone());
+                                    }
+                                }
+                            }
+                            self.error = if failed > 0 {
+                                Some(t!("common.doc.status.failed_count", n = failed).into_owned())
+                            } else {
+                                None
+                            };
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -387,6 +476,7 @@ impl PurchasesView {
                 self.mode = Mode::List;
                 self.error = None;
                 self.discard_pending_doc();
+                self.discard_staged_docs();
                 self.path_input = None;
                 self.confirm_drop = false;
                 self.capture_note = None;
@@ -448,6 +538,7 @@ impl PurchasesView {
     fn drop_negotiating_purchase(&mut self, db: &Connection, id: i64, data_dir: &Path) {
         let documents_dir = data_dir.join("documents");
         self.discard_pending_doc();
+        self.discard_staged_docs();
         match service::drop_negotiating_purchase(db, &documents_dir, id) {
             Ok(()) => {
                 self.mode = Mode::List;
@@ -466,46 +557,28 @@ impl PurchasesView {
         }
     }
 
-    fn show_documents(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
-        let edit_id = match self.mode {
-            Mode::Editing(id) => id,
-            _ => return,
-        };
-        let documents_dir = data_dir.join("documents");
-
-        ui.heading(t!("common.doc.heading").as_ref());
-        ui.add_space(4.0);
-
-        // Collect which doc to remove (defer mutation until after the borrow of self.docs).
-        let mut remove_doc: Option<(i64, String)> = None;
-        if self.docs.is_empty() {
-            ui.weak(t!("common.doc.none_attached").as_ref());
-        } else {
-            for doc in &self.docs {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&doc.label).strong());
-                    ui.label(&doc.filename);
-                    if ui.small_button(t!("common.doc.remove").as_ref()).clicked() {
-                        remove_doc = Some((doc.id, doc.filename.clone()));
-                    }
-                });
-            }
-        }
-
-        if let Some((doc_id, filename)) = remove_doc {
-            match docs_fs::remove_document(db, &documents_dir, doc_id, &filename) {
-                Err(e) => self.error = Some(e),
-                Ok(()) => {
-                    self.docs_needs_reload = true;
-                    self.error = None;
-                }
-            }
-        }
-
-        ui.add_space(8.0);
-
-        // Drag-and-drop: pick up a file dropped onto the window when no attachment is in progress.
-        if self.pending_doc.is_none() && self.path_input.is_none() {
+    /// Shared attachment picker: drag-and-drop pickup, the pending-file
+    /// group (filename, label combo, error, confirm/cancel), the browse-
+    /// by-path flow, and the screenshot capture button. Used by both
+    /// `show_documents` (Editing — confirming attaches immediately) and
+    /// `show_staged_documents` (Adding — confirming stages for the next
+    /// Save). `confirm_label` is the only behavioral difference between
+    /// the two callers; the caller applies the returned `DocAction` once
+    /// this method's borrow of `self.pending_doc` has ended.
+    fn show_attachment_picker(
+        &mut self,
+        ui: &mut egui::Ui,
+        db: &Connection,
+        confirm_label: &str,
+    ) -> DocAction {
+        // Drag-and-drop: pick up a file dropped onto the window when
+        // nothing is already in progress. `staged_docs.is_empty()` also
+        // guards against a stray drop jumping ahead of the Editing-mode
+        // retry queue (see show_documents's hand-off); in Adding mode it
+        // means staging a second document via drag-and-drop requires
+        // clearing the first one first — repeated use of "Attach file…"
+        // or screenshot capture to stage several isn't affected.
+        if self.pending_doc.is_none() && self.path_input.is_none() && self.staged_docs.is_empty() {
             let dropped = ui.input(|i| i.raw.dropped_files.clone());
             if let Some(file) = dropped.first() {
                 if let Some(path) = &file.path {
@@ -526,12 +599,6 @@ impl PurchasesView {
             }
         }
 
-        // Pending attachment — use deferred action to avoid split-borrow on self.pending_doc.
-        enum DocAction {
-            None,
-            Confirm,
-            Cancel,
-        }
         let mut doc_action = DocAction::None;
 
         if self.pending_doc.is_some() {
@@ -563,7 +630,7 @@ impl PurchasesView {
                         ui.colored_label(egui::Color32::RED, err);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button(t!("common.doc.button.attach").as_ref()).clicked() {
+                        if ui.button(confirm_label).clicked() {
                             doc_action = DocAction::Confirm;
                         }
                         if ui.button(t!("common.cancel").as_ref()).clicked() {
@@ -670,6 +737,61 @@ impl PurchasesView {
             }
         }
 
+        doc_action
+    }
+
+    fn show_documents(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
+        let edit_id = match self.mode {
+            Mode::Editing(id) => id,
+            _ => return,
+        };
+        let documents_dir = data_dir.join("documents");
+
+        ui.heading(t!("common.doc.heading").as_ref());
+        ui.add_space(4.0);
+
+        // Collect which doc to remove (defer mutation until after the borrow of self.docs).
+        let mut remove_doc: Option<(i64, String)> = None;
+        if self.docs.is_empty() {
+            ui.weak(t!("common.doc.none_attached").as_ref());
+        } else {
+            for doc in &self.docs {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&doc.label).strong());
+                    ui.label(&doc.filename);
+                    if ui.small_button(t!("common.doc.remove").as_ref()).clicked() {
+                        remove_doc = Some((doc.id, doc.filename.clone()));
+                    }
+                });
+            }
+        }
+
+        if let Some((doc_id, filename)) = remove_doc {
+            match docs_fs::remove_document(db, &documents_dir, doc_id, &filename) {
+                Err(e) => self.error = Some(e),
+                Ok(()) => {
+                    self.docs_needs_reload = true;
+                    self.error = None;
+                }
+            }
+        }
+
+        ui.add_space(8.0);
+
+        // Retry hand-off: pull the first still-failed staged document (left
+        // over from a create-with-documents Save that partially failed)
+        // into the normal pending-attachment flow, so it goes through the
+        // exact same Attach/Cancel affordance as any other document — no
+        // separate retry UI. Must run before show_attachment_picker's own
+        // drag-and-drop pickup, which additionally checks
+        // `staged_docs.is_empty()` so a dropped file can't jump this queue.
+        if self.pending_doc.is_none() && !self.staged_docs.is_empty() {
+            self.pending_doc = Some(self.staged_docs.remove(0));
+        }
+
+        let confirm_label = t!("common.doc.button.attach").into_owned();
+        let doc_action = self.show_attachment_picker(ui, db, &confirm_label);
+
         // Apply the action now that all borrows of self.pending_doc are released.
         match doc_action {
             DocAction::Cancel => self.discard_pending_doc(),
@@ -708,6 +830,57 @@ impl PurchasesView {
                         }
                     }
                 } // if let Some(p)
+            }
+            DocAction::None => {}
+        }
+    }
+
+    /// Adding-mode counterpart of `show_documents`: lists documents already
+    /// staged (label + file picked, not yet filed) and offers the shared
+    /// picker to stage more. Nothing is written to disk or the DB here —
+    /// staged entries are filed together with the purchase itself on Save
+    /// (`service::create_purchase_with_documents`), so this needs `db` (for
+    /// labels and the screenshot command) but not a documents directory.
+    fn show_staged_documents(&mut self, ui: &mut egui::Ui, db: &Connection) {
+        ui.heading(t!("common.doc.heading.staged").as_ref());
+        ui.add_space(4.0);
+
+        let mut remove_idx: Option<usize> = None;
+        if self.staged_docs.is_empty() {
+            ui.weak(t!("common.doc.staged_none").as_ref());
+        } else {
+            for (i, doc) in self.staged_docs.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&doc.label).strong());
+                    ui.label(doc.path.file_name().unwrap_or_default().to_string_lossy());
+                    if let Some(err) = &doc.error {
+                        ui.colored_label(egui::Color32::RED, err);
+                    }
+                    if ui.small_button(t!("common.doc.remove").as_ref()).clicked() {
+                        remove_idx = Some(i);
+                    }
+                });
+            }
+        }
+
+        if let Some(i) = remove_idx {
+            let removed = self.staged_docs.remove(i);
+            if removed.is_temp {
+                let _ = std::fs::remove_file(&removed.path);
+            }
+        }
+
+        ui.add_space(8.0);
+
+        let confirm_label = t!("common.doc.button.add_to_list").into_owned();
+        let doc_action = self.show_attachment_picker(ui, db, &confirm_label);
+
+        match doc_action {
+            DocAction::Cancel => self.discard_pending_doc(),
+            DocAction::Confirm => {
+                if let Some(p) = self.pending_doc.take() {
+                    self.staged_docs.push(p);
+                }
             }
             DocAction::None => {}
         }

@@ -118,6 +118,120 @@ pub fn donate_items(
     outbound_qry::insert(conn, draft, item_ids)
 }
 
+/// One document staged for a batch attach — a caller-owned source path plus
+/// the label to file it under, not yet written anywhere.
+pub struct PendingDocument<'a> {
+    pub path: &'a Path,
+    pub label: &'a str,
+}
+
+/// The result of attempting to attach one staged document, in the same
+/// order as the `pending` slice passed to `attach_documents` — callers
+/// (both front-ends) rely on `outcomes[i]` corresponding to `pending[i]` to
+/// map a failure back to the staged entry it came from.
+pub struct AttachmentOutcome {
+    pub source_name: String,
+    pub label: String,
+    pub result: std::result::Result<String, String>,
+}
+
+/// Attaches every entry in `pending` to `record`, via the existing
+/// single-document `attach_document` (reusing its label validation, date
+/// resolution, and `docs_fs::file_document` filename/copy/cleanup logic
+/// unchanged). Never stops at the first failure — every entry is attempted
+/// and every outcome collected, since a caller-visible partial failure
+/// (some documents attached, one didn't) is an accepted result here, not a
+/// reason to abandon the rest of the batch.
+///
+/// Each successful filename is folded into the de-dupe list before the next
+/// entry is attempted, so two staged documents that would otherwise
+/// generate the identical filename (same date, same label) get
+/// disambiguated within the batch instead of the second one colliding with
+/// the first on `document.filename`'s `UNIQUE` constraint.
+pub fn attach_documents(
+    conn: &Connection,
+    documents_dir: &Path,
+    draft_date_input: &str,
+    persisted_iso_date: Option<&str>,
+    record: (&str, i64),
+    pending: &[PendingDocument<'_>],
+) -> Vec<AttachmentOutcome> {
+    let mut existing: Vec<String> = documents_qry::list_for_record(conn, record.0, record.1)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.filename)
+        .collect();
+
+    let mut outcomes = Vec::with_capacity(pending.len());
+    for doc in pending {
+        let source_name = doc
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let result = attach_document(
+            conn,
+            documents_dir,
+            doc.path,
+            draft_date_input,
+            persisted_iso_date,
+            record,
+            doc.label,
+            &existing,
+        );
+        if let Ok(filename) = &result {
+            existing.push(filename.clone());
+        }
+        outcomes.push(AttachmentOutcome {
+            source_name,
+            label: doc.label.to_string(),
+            result,
+        });
+    }
+    outcomes
+}
+
+/// A newly-created purchase and the outcome of attempting to attach every
+/// document staged alongside it. `#[must_use]` because ignoring this value
+/// entirely means silently dropping any document-attach failures it
+/// carries — a caller must at least look at `attachments`, not just call
+/// `create_purchase_with_documents` and discard the result outright.
+#[must_use]
+pub struct CreatedPurchase {
+    pub id: i64,
+    pub attachments: Vec<AttachmentOutcome>,
+}
+
+/// Creates a purchase and attaches every staged document to it in one call.
+///
+/// Deliberately returns `Ok` even when some (or all) of `pending` failed to
+/// attach — the purchase row is real and saved either way, and there is no
+/// shared transaction wrapping the insert and the file operations (file
+/// copies aren't transactional, and unwinding a saved purchase because one
+/// unrelated document upload failed is not the desired behavior). `Err` is
+/// reserved for the purchase itself failing to save, in which case none of
+/// `pending` is attempted at all. Callers must inspect
+/// `CreatedPurchase::attachments` to know whether every document actually
+/// made it — do not "fix" this into a `Result` that fails on partial
+/// attachment failure.
+pub fn create_purchase_with_documents(
+    conn: &Connection,
+    documents_dir: &Path,
+    draft: &PurchaseDraft,
+    pending: &[PendingDocument<'_>],
+) -> Result<CreatedPurchase> {
+    let id = create_purchase(conn, draft)?;
+    let attachments = attach_documents(
+        conn,
+        documents_dir,
+        &draft.date,
+        None,
+        ("purchase", id),
+        pending,
+    );
+    Ok(CreatedPurchase { id, attachments })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +418,192 @@ mod tests {
                 .len(),
             1
         );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn create_with_docs_test_dir(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let tmp = std::env::temp_dir().join(format!(
+            "adm-sfa-create-purchase-with-documents-test-{tag}-{}",
+            std::process::id()
+        ));
+        let documents_dir = tmp.join("documents");
+        std::fs::create_dir_all(&documents_dir).unwrap();
+        (tmp, documents_dir)
+    }
+
+    #[test]
+    fn create_purchase_with_documents_attaches_every_staged_file() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("attaches-every-file");
+        let chat_src = tmp.join("chat.png");
+        std::fs::write(&chat_src, b"fake").unwrap();
+        let receipt_src = tmp.join("receipt.pdf");
+        std::fs::write(&receipt_src, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &chat_src,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &receipt_src,
+                label: "receipt",
+            },
+        ];
+
+        let created =
+            create_purchase_with_documents(&conn, &documents_dir, &purchase_draft(), &pending)
+                .unwrap();
+
+        assert_eq!(created.attachments.len(), 2);
+        assert!(created.attachments.iter().all(|a| a.result.is_ok()));
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "purchase", created.id)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_purchase_with_documents_deduplicates_filenames_within_one_batch() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("dedup-within-batch");
+        let src_a = tmp.join("a.png");
+        std::fs::write(&src_a, b"fake").unwrap();
+        let src_b = tmp.join("b.png");
+        std::fs::write(&src_b, b"fake").unwrap();
+        // Same label, same draft date — both would generate the identical
+        // base filename if the batch didn't feed each success back into the
+        // de-dupe list before the next attempt.
+        let pending = vec![
+            PendingDocument {
+                path: &src_a,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &src_b,
+                label: "chat",
+            },
+        ];
+
+        let created =
+            create_purchase_with_documents(&conn, &documents_dir, &purchase_draft(), &pending)
+                .unwrap();
+
+        let filenames: Vec<String> = created
+            .attachments
+            .iter()
+            .map(|a| a.result.clone().unwrap())
+            .collect();
+        assert_eq!(filenames.len(), 2);
+        assert_ne!(filenames[0], filenames[1]);
+        assert!(filenames[1].contains("-2"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_purchase_with_documents_records_a_per_file_failure_without_rolling_back() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("partial-failure");
+        let good_src = tmp.join("good.png");
+        std::fs::write(&good_src, b"fake").unwrap();
+        let bad_src = tmp.join("bad.png");
+        std::fs::write(&bad_src, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &good_src,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &bad_src,
+                label: "not-a-real-label",
+            },
+        ];
+
+        let created =
+            create_purchase_with_documents(&conn, &documents_dir, &purchase_draft(), &pending)
+                .unwrap();
+
+        assert!(created.attachments[0].result.is_ok());
+        assert!(created.attachments[1].result.is_err());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "purchase", created.id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_purchase_with_documents_with_no_attachments_creates_just_the_purchase() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("no-attachments");
+
+        let created =
+            create_purchase_with_documents(&conn, &documents_dir, &purchase_draft(), &[]).unwrap();
+
+        assert!(created.attachments.is_empty());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "purchase", created.id)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_purchase_with_documents_reports_a_missing_source_file_per_file() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("missing-source");
+        let missing_src = tmp.join("does-not-exist.png");
+        let pending = vec![PendingDocument {
+            path: &missing_src,
+            label: "chat",
+        }];
+
+        let created =
+            create_purchase_with_documents(&conn, &documents_dir, &purchase_draft(), &pending)
+                .unwrap();
+
+        assert!(created.attachments[0].result.is_err());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "purchase", created.id)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_purchase_with_documents_files_nothing_when_the_purchase_cannot_be_inserted() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("purchase-insert-fails");
+        let src = tmp.join("chat.png");
+        std::fs::write(&src, b"fake").unwrap();
+        let pending = vec![PendingDocument {
+            path: &src,
+            label: "chat",
+        }];
+        let mut bad_draft = purchase_draft();
+        bad_draft.cost_str = "not a number".to_string();
+
+        let result = create_purchase_with_documents(&conn, &documents_dir, &bad_draft, &pending);
+
+        assert!(result.is_err());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
 
         std::fs::remove_dir_all(&tmp).ok();
     }
