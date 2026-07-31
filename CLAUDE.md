@@ -246,6 +246,134 @@ from a screenshot instead of the filesystem.
   self-review: a flaky test from temp-filename collisions under
   parallel test execution (fixed with an atomic counter).
 
+## Purchase creation with documents in one step (implemented)
+
+Branch `purchase-create-with-documents`. Creating a purchase and attaching
+documents to it used to be two separate steps on both front-ends: Save the
+purchase fields, land on the now-existing record, *then* attach a document
+via a separate action, one at a time. Now the "new purchase" flow on both
+`desktop` and `web` lets the user stage one or more documents (label +
+file) alongside the purchase fields and files everything in a single Save.
+
+- New `crates/core/src/service.rs` primitives: `PendingDocument<'a>`
+  (borrowed path + label), `AttachmentOutcome` (per-file result),
+  `attach_documents` (loops the existing single-document `attach_document`
+  over a batch, folding each success's filename into the de-dupe list
+  before the next attempt so two same-label same-date files in one batch
+  don't collide), and `create_purchase_with_documents` (inserts the
+  purchase via the existing `create_purchase`, then calls
+  `attach_documents`). The composed function deliberately returns `Ok`
+  even when some staged documents failed to attach — the purchase row is
+  real and saved either way, and there's no shared transaction wrapping
+  the insert and the file operations (unwinding a saved purchase because
+  one unrelated upload failed is not the desired behavior, and file copies
+  aren't transactional regardless). `Err` is reserved for the purchase
+  itself failing to save, in which case no attachment is attempted at all.
+  `CreatedPurchase` is `#[must_use]` so a caller can't silently discard
+  attachment failures by ignoring the whole return value — it doesn't
+  catch discarding just `.attachments` while keeping `.id`, which still
+  relies on the doc comment plus both current call sites actually
+  checking it, per the code review.
+- `web`: `POST /purchases` (`crates/web/src/routes/purchases.rs`) changed
+  from urlencoded `Form<PurchaseForm>` to `Multipart`, hand-parsing
+  purchase fields plus repeated `doc_label`/`doc_file` pairs (paired
+  positionally, not by index — `Multipart` streams fields regardless of
+  name repetition, so unlike `outbound.rs`'s `RawForm` workaround for
+  repeated keys, nothing special is needed here). The original filename
+  from each `doc_file` part is tracked alongside its generated temp path
+  and label, specifically so a partial-failure status message can name
+  the file the user actually picked rather than the meaningless generated
+  temp filename `AttachmentOutcome::source_name` would otherwise show
+  (`core` derives `source_name` from whatever path it's handed, and has no
+  concept of "the caller wrote this to a temp file first") — caught during
+  manual verification, not by the code review or the automated tests, and
+  fixed with a zipped-by-index lookup plus a regression test. On full
+  success (including the zero-attachments case), redirects to `/purchases`
+  — changed from the old `/purchases/{id}/edit` target, per the owner's
+  request. On a partial attach failure, renders the edit page (the
+  purchase now has a real id) with a per-file success/failure list, via a
+  `purchase_form_response` helper generalized from the old
+  `purchase_form_error_response`. `purchases/form.html` gained a
+  "Documents? Yes/No" toggle (conditional `enctype="multipart/form-data"`,
+  since the edit page's `update()` route must keep reading a plain
+  urlencoded body) revealing repeatable label+file rows via vanilla JS —
+  modeled on the only prior client-side toggle in this codebase
+  (`eur_ledger/form.html`), extended with row-cloning and, critically,
+  explicit `disabled` toggling alongside `display:none` (a hidden but
+  still-enabled control is still submitted).
+- `desktop`: `crates/desktop/src/ui/views/purchases.rs`'s existing
+  single-attachment picker UI (drag-and-drop, browse-by-path, screenshot
+  capture, the pending-file confirm/cancel group) was extracted into a
+  shared `show_attachment_picker`, used by both the existing Editing-mode
+  `show_documents` and a new Adding-mode `show_staged_documents`. A new
+  `staged_docs: Vec<PendingAttachment>` field holds documents confirmed
+  via the picker before Save; the Save button's `Mode::Adding` branch now
+  calls `create_purchase_with_documents` with all staged docs, then walks
+  the per-file outcomes in *reverse* index order (so `remove(i)` doesn't
+  shift later indices) to prune successes — deleting their temp file if
+  screenshot-sourced — while leaving failures in `staged_docs` with their
+  error set. `show_documents` (now Editing-mode) pulls the first
+  still-failed staged doc into the normal `pending_doc` slot at the top of
+  its render, before the picker's own drag-and-drop pickup runs, so a
+  failed attachment gets retried through the exact same Attach/Cancel flow
+  as any other document — no separate retry UI. `discard_staged_docs`
+  (mirroring `discard_pending_doc`) is called at all four existing
+  form-reset sites so an abandoned "new purchase" flow can't leak staged
+  screenshot temp files.
+- Both front-ends' new-purchase flow now supports staging *multiple*
+  documents before the first Save (not just one), per the owner's
+  explicit choice — they expect to often attach 2-3 documents (e.g. a
+  chat screenshot plus an invoice) when logging a purchase, and didn't
+  want to bounce to the edit page immediately after Save just to attach a
+  second one. Attaching a document to an *already-saved* purchase (a
+  third, fourth, ... document, or one added in a later session) is
+  unchanged — that still goes through the edit page's existing
+  one-at-a-time attach mini-form on both front-ends.
+- 6 new tests in `crates/core/src/service.rs` (batch success, in-batch
+  filename dedup, partial failure without rollback, zero attachments,
+  missing source file, purchase-insert failure files nothing) and 6 new
+  route tests in `crates/web/src/routes/purchases.rs` (two-document
+  success redirecting to the list, zero-document success, an empty file
+  row being silently skipped, one unknown label producing a partial
+  failure with the original filenames shown, an invalid date rerendering
+  the new form with nothing created, unauthenticated access redirecting
+  to login) — the latter needed `test_support::multipart_request_with_parts`,
+  a generalization of the existing single-label/single-file
+  `multipart_request` to an arbitrary ordered list of parts, with the old
+  function reimplemented on top of it unchanged in signature so its five
+  existing callers kept passing untouched.
+- Manually verified end-to-end against the running `web` server (not just
+  automated tests): the "Documents?" toggle markup renders on
+  `/purchases/new`; a two-document submission redirects to `/purchases`
+  and both files land on disk under the new purchase's id with correct
+  `document` rows; a mixed valid/invalid-label submission returns 200 on
+  the edit page with a per-file status list showing the *original*
+  filenames. Desktop could **not** be interactively verified in this
+  session — no display server was available in the environment (`DISPLAY`
+  was empty) — but it compiles cleanly, passes `clippy -D warnings`, and
+  shares the same `core::service::create_purchase_with_documents` logic
+  that's fully unit-tested and that web's manual verification exercised
+  through the identical code path. Flagging this explicitly rather than
+  claiming full manual coverage: desktop's GUI-specific wiring (the
+  staged-list rendering, the reverse-index prune, the retry hand-off)
+  has not been clicked through by a human or an agent, only read and
+  reasoned about.
+- Reviewed by `rust-code-reviewer`: no 🔴 findings. Two 🟡s surfaced, not
+  fixed as part of this branch:
+  - `create_purchase_with_documents`'s "partial failure is `Ok`" contract
+    relies on callers actually inspecting `.attachments` — `#[must_use]`
+    on `CreatedPurchase` (added after the review) catches a caller that
+    discards the whole return value, but not one that reads `.id` and
+    never touches `.attachments`. Both current call sites do check it;
+    revisit if a third call site is ever added.
+  - `create`'s multipart-parsing loop (`while let Ok(Some(field)) = ...`)
+    silently stops on a mid-stream read error (e.g. a client disconnecting
+    partway through an upload) rather than surfacing it distinctly from
+    "the user left a field blank" — pre-existing debt shared by the
+    analogous loops in `attach_document` here and in `transfers.rs`/
+    `inventory.rs`, not introduced by this branch, and not fixed as part
+    of it.
+
 ## Workspace restructure and web front-end (in progress)
 
 Goal: extract the domain layer into a shared crate so a web front-end can

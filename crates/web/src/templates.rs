@@ -84,6 +84,17 @@ pub struct PurchasesListTemplate {
     pub locale: String,
 }
 
+/// One line of the per-file status list shown after a create-with-
+/// documents submission where the purchase saved but not every staged
+/// document attached — see `PurchaseFormTemplate::attach_results`.
+/// `message` is pre-formatted (interpolated `%{name}`/`%{label}`/
+/// `%{error}`) in the route handler, same reasoning as `PurchaseRow`'s doc
+/// comment: the Askama `t` filter is static-string-only.
+pub struct AttachResult {
+    pub ok: bool,
+    pub message: String,
+}
+
 #[derive(Template)]
 #[template(path = "purchases/form.html")]
 pub struct PurchaseFormTemplate {
@@ -92,12 +103,18 @@ pub struct PurchaseFormTemplate {
     pub error: Option<String>,
     pub documents: Vec<adm_sfa_core::model::document::Document>,
     pub is_negotiating: bool,
-    /// Document labels for the "Attach a document" picker — sourced from
+    /// Document labels for the document picker(s) — sourced from
     /// `document_label`, same allow-list `core::service::attach_document`
     /// enforces authoritatively, so the web form can't submit a value that
-    /// gets rejected. Empty (and unused, since the template only renders
-    /// the picker when `id` is `Some`) on the create form.
+    /// gets rejected. Populated on both the create form (the "Documents?"
+    /// section's repeatable label pickers) and the edit form (the
+    /// "Attach a document" mini-form).
     pub labels: Vec<String>,
+    /// Per-document outcome of a create-with-documents submission where the
+    /// purchase saved but at least one staged document failed to attach.
+    /// Empty on every other render path (a fresh new-purchase form, a plain
+    /// edit-page load, a fully-successful create that redirected away).
+    pub attach_results: Vec<AttachResult>,
     pub locale: String,
 }
 

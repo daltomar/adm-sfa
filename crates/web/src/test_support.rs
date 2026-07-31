@@ -94,28 +94,61 @@ pub async fn login(app: &axum::Router) -> String {
         .to_string()
 }
 
+/// One field of a hand-built `multipart/form-data` body — see
+/// `multipart_request_with_parts`.
+pub enum MultipartPart<'a> {
+    Text {
+        name: &'a str,
+        value: &'a str,
+    },
+    File {
+        name: &'a str,
+        filename: &'a str,
+        bytes: &'a [u8],
+    },
+}
+
 /// Builds a `multipart/form-data` body by hand (no client library — this is
 /// a dev-only dependency-avoidance choice, not a claim it's the ergonomic
-/// way to do this): one text field (`label`) and one file field (`file`),
-/// matching what a browser's `<form enctype="multipart/form-data">` sends.
-pub fn multipart_request(uri: &str, cookie: &str, label: &str, file_bytes: &[u8]) -> Request<Body> {
+/// way to do this) from an arbitrary, ordered list of parts — matching what
+/// a browser's `<form enctype="multipart/form-data">` sends for any number
+/// of text and file fields, including repeated field names (e.g. several
+/// `doc_label`/`doc_file` pairs).
+pub fn multipart_request_with_parts(
+    uri: &str,
+    cookie: &str,
+    parts: &[MultipartPart<'_>],
+) -> Request<Body> {
     const BOUNDARY: &str = "adm-sfa-test-boundary";
     let mut body = Vec::new();
-    body.extend_from_slice(
-        format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"label\"\r\n\r\n{label}\r\n"
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(
-        format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.jpg\"\r\n\
-             Content-Type: application/octet-stream\r\n\r\n"
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(file_bytes);
-    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+    for part in parts {
+        match part {
+            MultipartPart::Text { name, value } => {
+                body.extend_from_slice(
+                    format!(
+                        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+                    )
+                    .as_bytes(),
+                );
+            }
+            MultipartPart::File {
+                name,
+                filename,
+                bytes,
+            } => {
+                body.extend_from_slice(
+                    format!(
+                        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n\
+                         Content-Type: application/octet-stream\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(bytes);
+                body.extend_from_slice(b"\r\n");
+            }
+        }
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
 
     let mut builder = Request::builder().method("POST").uri(uri).header(
         "content-type",
@@ -125,4 +158,25 @@ pub fn multipart_request(uri: &str, cookie: &str, label: &str, file_bytes: &[u8]
         builder = builder.header("cookie", cookie);
     }
     builder.body(Body::from(body)).unwrap()
+}
+
+/// One text field (`label`) and one file field (`file`) — the shape every
+/// existing single-document attach test already used, now built on top of
+/// `multipart_request_with_parts`.
+pub fn multipart_request(uri: &str, cookie: &str, label: &str, file_bytes: &[u8]) -> Request<Body> {
+    multipart_request_with_parts(
+        uri,
+        cookie,
+        &[
+            MultipartPart::Text {
+                name: "label",
+                value: label,
+            },
+            MultipartPart::File {
+                name: "file",
+                filename: "test.jpg",
+                bytes: file_bytes,
+            },
+        ],
+    )
 }
