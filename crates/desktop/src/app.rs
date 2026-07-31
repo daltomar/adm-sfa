@@ -106,5 +106,26 @@ impl eframe::App for App {
             Section::Reports => self.reports_view.show(ui, &self.db),
             Section::Settings => self.settings_view.show(ui, &self.db, &self.data_dir),
         });
+
+        // EUR Ledger's "Open in Purchases"/"Open in Transfers" buttons (on a
+        // Purchase-/Transfer-linked row's read-only detail view) can only
+        // *ask* to navigate — only `App` has both a `Section` to switch to
+        // and the target view to hand the id to. One frame lands late (this
+        // frame already rendered EurLedger's content above); harmless and
+        // imperceptible at 60fps, and `select_for_edit` sets `mode` before
+        // next frame's section-change `invalidate()` runs, which doesn't
+        // touch `mode` anyway.
+        if let Some(target) = self.eur_ledger_view.take_nav_request() {
+            match target {
+                ui::views::eur_ledger::LedgerNavTarget::Purchase(id) => {
+                    self.section = Section::Purchases;
+                    self.purchases_view.select_for_edit(&self.db, id);
+                }
+                ui::views::eur_ledger::LedgerNavTarget::Transfer(id) => {
+                    self.section = Section::Transfers;
+                    self.transfers_view.select_for_edit(&self.db, id);
+                }
+            }
+        }
     }
 }

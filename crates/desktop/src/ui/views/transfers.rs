@@ -78,6 +78,36 @@ impl TransfersView {
         self.labels.clear();
     }
 
+    /// Jumps straight into editing transfer `id` — the entry point for EUR
+    /// Ledger's "Open in Transfers" cross-section navigation (`app.rs`'s
+    /// handling of `eur_ledger::LedgerNavTarget`). Fetches the row
+    /// directly rather than relying on `self.transfers` already containing
+    /// it, since the caller may be jumping here without this section ever
+    /// having been visited yet this session.
+    pub fn select_for_edit(&mut self, db: &Connection, id: i64) {
+        let Ok(Some(t)) = qry::get(db, id) else {
+            // Shouldn't happen — the caller only reaches this with an id
+            // from a live `linked_transfer_id` FK — but silently landing on
+            // an unexplained list view would be worse than a rare stale
+            // error banner, so this surfaces something rather than nothing.
+            self.mode = Mode::List;
+            self.error = Some(t!("transfers.error.linked_record_not_found").into_owned());
+            return;
+        };
+        self.draft = TransferDraft {
+            date: format::date(&t.date),
+            eur_amount_sent_str: t.eur_amount_sent.to_string(),
+            exchange_rate_str: t.exchange_rate.to_string(),
+            notes: t.notes.clone().unwrap_or_default(),
+        };
+        self.mode = Mode::Editing(id);
+        self.error = None;
+        self.docs_needs_reload = true;
+        self.discard_pending_doc();
+        self.path_input = None;
+        self.capture_note = None;
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         if self.needs_reload {
             match qry::list(db) {

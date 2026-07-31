@@ -16,6 +16,19 @@ enum Mode {
     ViewingLinked(i64),
 }
 
+/// Where the "Open in Purchases"/"Open in Transfers" button on a
+/// Purchase-/Transfer-linked row's read-only detail view wants to
+/// navigate — set by `show_linked_info`, drained once per frame by
+/// `App::ui` via `take_nav_request`. This view can only *ask* to switch
+/// section, not act on it: it has no `Section` to set and no reference to
+/// `PurchasesView`/`TransfersView` to hand the id to. `App` is the only
+/// place with both.
+#[derive(Debug, Clone, Copy)]
+pub enum LedgerNavTarget {
+    Purchase(i64),
+    Transfer(i64),
+}
+
 pub struct EurLedgerView {
     rows: Vec<EurTxRow>,
     balance: Decimal,
@@ -26,6 +39,7 @@ pub struct EurLedgerView {
     donors: Vec<(i64, String)>,
     donors_loaded: bool,
     new_donor: Option<DonorDraft>,
+    nav_request: Option<LedgerNavTarget>,
 }
 
 impl Default for EurLedgerView {
@@ -40,6 +54,7 @@ impl Default for EurLedgerView {
             donors: Vec::new(),
             donors_loaded: false,
             new_donor: None,
+            nav_request: None,
         }
     }
 }
@@ -48,6 +63,12 @@ impl EurLedgerView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
         self.donors_loaded = false;
+    }
+
+    /// Drains a pending cross-section navigation request — see
+    /// `LedgerNavTarget`. Called once per frame by `App::ui`.
+    pub fn take_nav_request(&mut self) -> Option<LedgerNavTarget> {
+        self.nav_request.take()
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
@@ -433,7 +454,7 @@ impl EurLedgerView {
         });
     }
 
-    fn show_linked_info(&self, ui: &mut egui::Ui, id: i64) {
+    fn show_linked_info(&mut self, ui: &mut egui::Ui, id: i64) {
         let Some(row) = self.rows.iter().find(|r| r.id == id) else {
             return;
         };
@@ -464,6 +485,15 @@ impl EurLedgerView {
                     )
                     .into_owned(),
                 );
+                if let Some(purchase_id) = row.linked_purchase_id {
+                    ui.add_space(4.0);
+                    if ui
+                        .button(t!("eur_ledger.detail.purchase.open_button").as_ref())
+                        .clicked()
+                    {
+                        self.nav_request = Some(LedgerNavTarget::Purchase(purchase_id));
+                    }
+                }
             }
             EurTxType::TransferToBrlOut => {
                 ui.heading(t!("eur_ledger.detail.transfer.heading").as_ref());
@@ -488,6 +518,15 @@ impl EurLedgerView {
                     )
                     .into_owned(),
                 );
+                if let Some(transfer_id) = row.linked_transfer_id {
+                    ui.add_space(4.0);
+                    if ui
+                        .button(t!("eur_ledger.detail.transfer.open_button").as_ref())
+                        .clicked()
+                    {
+                        self.nav_request = Some(LedgerNavTarget::Transfer(transfer_id));
+                    }
+                }
             }
             _ => {}
         }

@@ -374,6 +374,66 @@ file) alongside the purchase fields and files everything in a single Save.
     `inventory.rs`, not introduced by this branch, and not fixed as part
     of it.
 
+## EUR Ledger: linking Purchase-/Transfer-typed rows to their record (implemented)
+
+Branch `eur-ledger-linked-record-link`. Bug report: a "Purchase"-typed EUR
+Ledger row had no way to open the purchase it was auto-created from. Same
+gap existed for "Transfer"-typed rows. Both are now linked on both
+front-ends.
+
+- **Web**: `EurLedgerRow.editable: bool` (and its now-unused `id` field)
+  replaced with `link_href: Option<String>`
+  (`crates/web/src/templates.rs`), computed per-row by a new `link_href()`
+  in `crates/web/src/routes/eur_ledger.rs` — a manual entry
+  (Donation/Self-funding) links to its own `/eur-ledger/{id}/edit` as
+  before; a Purchase-typed row links to `/purchases/{linked_purchase_id}
+  /edit`; a Transfer-typed row links to
+  `/transfers/{linked_transfer_id}/edit`. No core/query change needed —
+  `EurTxRow.linked_purchase_id`/`linked_transfer_id` were already
+  populated by the existing query, just unused by the route until now.
+  `crates/web/templates/eur_ledger/list.html` renders the link whenever
+  `link_href` is `Some`. Two new tests in
+  `crates/web/src/routes/eur_ledger.rs` cover both linked types.
+- **Desktop**: clicking a Purchase-/Transfer-typed row already opened a
+  read-only detail panel (`EurLedgerView::show_linked_info`,
+  `Mode::ViewingLinked`) — it just had no way to jump to the actual record.
+  This needed new cross-section navigation plumbing, since nothing in the
+  app previously let one view tell `App` to switch `Section` and
+  pre-select a record in a different view:
+  - `crates/desktop/src/ui/views/eur_ledger.rs`: new `pub enum
+    LedgerNavTarget { Purchase(i64), Transfer(i64) }`, a `nav_request:
+    Option<LedgerNavTarget>` field, and `take_nav_request()`.
+    `show_linked_info` (now `&mut self`) renders an "Open in
+    Purchases"/"Open in Transfers" button when the row's
+    `linked_purchase_id`/`linked_transfer_id` is `Some`, setting
+    `nav_request` on click.
+  - `crates/desktop/src/ui/views/{purchases,transfers}.rs`: new `pub fn
+    select_for_edit(&mut self, db: &Connection, id: i64)` on each view —
+    fetches the record directly via the existing `qry::get` (doesn't
+    assume the view's already-loaded list contains it, since the caller
+    may jump here without ever having visited that section this session)
+    and enters `Mode::Editing(id)` with the right draft. Deliberately not
+    factored into a shared helper with each view's existing list-row-click
+    handler — small, two call sites, different data source (a single
+    fetch vs. an already-loaded list element).
+  - `crates/desktop/src/app.rs`: after the `CentralPanel` block, checks
+    `eur_ledger_view.take_nav_request()` and, if `Some`, switches
+    `self.section` and calls the target view's `select_for_edit`. One
+    frame lands late (the request is set *during* the same frame's
+    `CentralPanel` closure, so the section switch only takes visible
+    effect next frame) — harmless at 60fps, and confirmed neither view's
+    `invalidate()` touches `mode`, so the just-set `Editing(id)` survives
+    the next frame's section-change invalidation.
+- Reviewed by `rust-code-reviewer`: no 🔴 findings. One 🟡 fixed before
+  commit: `select_for_edit`'s fetch-fails path (unreachable in practice —
+  the button only exists when the linked FK is live — but not impossible,
+  e.g. the linked record was deleted through some other path) used to
+  return silently, landing the user on an unexplained list view with no
+  error after `app.rs` had already switched sections. Now sets
+  `self.error` (a new `purchases.error.linked_record_not_found`/
+  `transfers.error.linked_record_not_found` key) and resets to
+  `Mode::List` instead.
+
 ## Workspace restructure and web front-end (in progress)
 
 Goal: extract the domain layer into a shared crate so a web front-end can
