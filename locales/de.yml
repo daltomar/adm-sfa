@@ -418,6 +418,7 @@ web.inventory.purchase_combo.in_use: "%{label} (bereits verknüpft)"
 
 web.eur_ledger.donor_hint_link: "Neuer Spender anlegen"
 web.eur_ledger.error.type_required: "Bitte einen Typ auswählen."
+web.inventory.error.source_type_required: "Bitte eine Quelle auswählen."
 
 web.reports.filter.recipient: "Empfänger (nur Ausgehend/Prüfprotokoll)"
 web.reports.button.apply_filters: "Filter anwenden"

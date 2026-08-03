@@ -31,15 +31,19 @@
   </div>
   <div class="field">
     <label>{{ "common.field.location"|t(locale) }}</label>
-    <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.germany"|t(locale) }}</label>
-    <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.brazil"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.germany"|t(locale) }}</label>
+      <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.brazil"|t(locale) }}</label>
+    </div>
     {% if locked %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
   </div>
   <div class="field">
     <label>{{ "common.field.status"|t(locale) }}</label>
-    <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.available"|t(locale) }}</label>
-    <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.reserved"|t(locale) }}</label>
-    <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.donated"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.available"|t(locale) }}</label>
+      <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.reserved"|t(locale) }}</label>
+      <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.donated"|t(locale) }}</label>
+    </div>
     {% if locked %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
   </div>
   <div class="field">
@@ -49,11 +53,13 @@
 
   <div class="field">
     <label>{{ "common.field.source"|t(locale) }}</label>
-    <label><input type="radio" name="source_type" value="donation" {% if source_type == "donation" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.donation"|t(locale) }}</label>
-    <label><input type="radio" name="source_type" value="purchase" {% if source_type == "purchase" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.purchase"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="source_type" value="donation" required {% if source_type == "donation" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.donation"|t(locale) }}</label>
+      <label><input type="radio" name="source_type" value="purchase" required {% if source_type == "purchase" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.purchase"|t(locale) }}</label>
+    </div>
     {% if locked %}<input type="hidden" name="source_type" value="{{ source_type }}">{% endif %}
   </div>
-  <div class="field">
+  <div class="field" id="source_donation_field"{% if source_type != "donation" %} style="display:none"{% endif %}>
     <label for="source_donation_id">{{ "status.source_type.donation"|t(locale) }}</label>
     <select id="source_donation_id" name="source_donation_id" {% if locked %}disabled{% endif %}>
       <option value="">{{ "common.combo.choose_one"|t(locale) }}</option>
@@ -64,7 +70,7 @@
     {% if locked %}<input type="hidden" name="source_donation_id" value="{% if let Some(did) = source_donation_id %}{{ did }}{% endif %}">{% endif %}
     <p class="hint">{{ "web.inventory.hint.new_donation_before"|t(locale) }}<a href="/inventory/donations">{{ "web.inventory.hint.new_donation_link"|t(locale) }}</a>{{ "web.inventory.hint.new_donation_after"|t(locale) }}</p>
   </div>
-  <div class="field">
+  <div class="field" id="source_purchase_field"{% if source_type != "purchase" %} style="display:none"{% endif %}>
     <label for="source_purchase_id">{{ "status.source_type.purchase"|t(locale) }}</label>
     <select id="source_purchase_id" name="source_purchase_id" {% if locked %}disabled{% endif %}>
       <option value="">{{ "common.combo.choose_one"|t(locale) }}</option>
@@ -81,6 +87,22 @@
     <a class="button secondary" href="/inventory">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
+
+<script>
+(function() {
+  var radios = document.querySelectorAll('input[name="source_type"]');
+  var donationField = document.getElementById('source_donation_field');
+  var purchaseField = document.getElementById('source_purchase_field');
+  if (!radios.length || !donationField || !purchaseField) { return; }
+  function sync() {
+    var checked = document.querySelector('input[name="source_type"]:checked');
+    var value = checked ? checked.value : '';
+    donationField.style.display = value === 'donation' ? '' : 'none';
+    purchaseField.style.display = value === 'purchase' ? '' : 'none';
+  }
+  radios.forEach(function(r) { r.addEventListener('change', sync); });
+})();
+</script>
 
 {% if let Some(id) = id %}
   <h2>{{ "common.doc.heading"|t(locale) }}</h2>

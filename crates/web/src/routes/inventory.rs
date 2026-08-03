@@ -173,6 +173,19 @@ fn form_template(
     error: Option<String>,
     documents: Vec<adm_sfa_core::model::document::Document>,
     locale: String,
+    // Overrides which Source radio renders `checked`, independent of
+    // `draft.source_type` (a required enum with no "unset" variant) — the
+    // mandatory/unselected-by-default behaviour on the New Item form needs
+    // to represent "no source chosen yet", which the enum itself can't.
+    // `Some("")` renders neither radio checked (fresh New Item form, or a
+    // rejected submission with a missing/invalid source); `None` uses
+    // `draft.source_type` as before (Edit form's persisted value, or a
+    // validation error unrelated to the source type, which should keep
+    // whatever was actually submitted checked). Mirrors `eur_ledger.rs`'s
+    // `donation_checked`/`self_funding_checked`, just as one overridable
+    // string instead of two bools since this template already compares
+    // `source_type` directly rather than using per-radio bools.
+    source_type_override: Option<&str>,
 ) -> InventoryFormTemplate {
     let categories = cat_qry::list(conn).unwrap_or_default();
     let donations = donors_qry::list_donations(conn).unwrap_or_default();
@@ -189,12 +202,16 @@ fn form_template(
         .and_then(|id| qry::get(conn, id).ok().flatten())
         .is_some_and(|item| item.status == ItemStatus::Donated);
 
+    let source_type = source_type_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| draft.source_type.as_str().to_string());
+
     InventoryFormTemplate {
         id,
         name: draft.name.clone(),
         location: draft.location.as_str().to_string(),
         status: draft.status.as_str().to_string(),
-        source_type: draft.source_type.as_str().to_string(),
+        source_type,
         category_id: draft.category_id,
         source_donation_id: draft.source_donation_id,
         source_purchase_id: draft.source_purchase_id,
@@ -239,6 +256,7 @@ fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String)
         Some(error),
         documents,
         locale,
+        None,
     ))
     .into_response()
 }
@@ -274,6 +292,7 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
         None,
         Vec::new(),
         locale,
+        Some(""),
     ))
 }
 
@@ -301,6 +320,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         None,
         documents,
         locale,
+        None,
     ))
     .into_response()
 }
@@ -311,6 +331,12 @@ struct InventoryForm {
     category_id: String,
     location: String,
     status: String,
+    /// Missing entirely (not just empty) when a crafted POST omits the
+    /// field outright — `#[serde(default)]` so `axum::Form` still
+    /// deserializes instead of rejecting the request with a raw 422 before
+    /// `create()`/`update()` ever run their own mandatory-source check and
+    /// can render a translated, in-form error banner instead.
+    #[serde(default)]
     source_type: String,
     #[serde(default)]
     source_donation_id: String,
@@ -329,12 +355,16 @@ fn parsed_id(s: &str) -> Option<i64> {
     }
 }
 
-fn draft_from_form(form: InventoryForm) -> InventoryItemDraft {
-    let source_type = if form.source_type == "purchase" {
-        SourceType::Purchase
-    } else {
-        SourceType::Donation
-    };
+/// `source_type` is taken already-parsed rather than derived from
+/// `form.source_type` here — the mandatory-source check now happens
+/// authoritatively in `create()`/`update()` *before* this is called,
+/// mirroring `eur_ledger.rs::create()`'s `tx_type` match. This function no
+/// longer has a silent fallback for a missing/invalid source: that used to
+/// default to `SourceType::Donation`, exactly the bug class the eur-ledger
+/// mandatory-Typ fix closed (a crafted or bugged submission with no source
+/// would previously become a Donation-sourced item without the user ever
+/// choosing that).
+fn draft_from_form(form: InventoryForm, source_type: SourceType) -> InventoryItemDraft {
     let (source_donation_id, source_purchase_id) = match source_type {
         SourceType::Donation => (parsed_id(&form.source_donation_id), None),
         SourceType::Purchase => (None, parsed_id(&form.source_purchase_id)),
@@ -352,22 +382,41 @@ fn draft_from_form(form: InventoryForm) -> InventoryItemDraft {
 }
 
 async fn create(State(state): State<AppState>, Form(form): Form<InventoryForm>) -> Response {
-    let draft = draft_from_form(form);
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
+    let Some(source_type) = SourceType::from_str(&form.source_type) else {
+        // `SourceType::Donation` here is a placeholder purely so the rest of
+        // what was typed (name, category, location, status, notes) can
+        // still be echoed back — `Some("")` below is what actually makes
+        // neither Source radio render checked, same as a fresh New Item
+        // form.
+        let draft = draft_from_form(form, SourceType::Donation);
+        let error =
+            rust_i18n::t!("web.inventory.error.source_type_required", locale = &locale).to_string();
+        return HtmlTemplate(form_template(
+            &conn,
+            None,
+            &draft,
+            Some(error),
+            Vec::new(),
+            locale,
+            Some(""),
+        ))
+        .into_response();
+    };
+    let draft = draft_from_form(form, source_type);
     match qry::insert(&conn, &draft) {
         Ok(id) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
-        Err(e) => {
-            let locale = crate::i18n::resolve_locale(&conn);
-            HtmlTemplate(form_template(
-                &conn,
-                None,
-                &draft,
-                Some(e.to_string()),
-                Vec::new(),
-                locale,
-            ))
-            .into_response()
-        }
+        Err(e) => HtmlTemplate(form_template(
+            &conn,
+            None,
+            &draft,
+            Some(e.to_string()),
+            Vec::new(),
+            locale,
+            None,
+        ))
+        .into_response(),
     }
 }
 
@@ -376,8 +425,27 @@ async fn update(
     Path(id): Path<i64>,
     Form(form): Form<InventoryForm>,
 ) -> Response {
-    let draft = draft_from_form(form);
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
+    let Some(source_type) = SourceType::from_str(&form.source_type) else {
+        let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
+        // Same placeholder-draft-plus-override reasoning as `create()`'s
+        // equivalent branch.
+        let draft = draft_from_form(form, SourceType::Donation);
+        let error =
+            rust_i18n::t!("web.inventory.error.source_type_required", locale = &locale).to_string();
+        return HtmlTemplate(form_template(
+            &conn,
+            Some(id),
+            &draft,
+            Some(error),
+            documents,
+            locale,
+            Some(""),
+        ))
+        .into_response();
+    };
+    let draft = draft_from_form(form, source_type);
     match qry::update(&conn, id, &draft) {
         Ok(()) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
         Err(e) => {
@@ -412,7 +480,6 @@ async fn update(
             } else {
                 draft.clone()
             };
-            let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
                 &conn,
                 Some(id),
@@ -420,6 +487,7 @@ async fn update(
                 Some(e.to_string()),
                 documents,
                 locale,
+                None,
             ))
             .into_response()
         }
@@ -831,6 +899,201 @@ mod tests {
         let body_text = test_support::body_text(res).await;
         assert!(body_text.contains("has been donated"));
         assert!(body_text.contains("disabled"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A purchase-sourced item to POST a create/update against — mirrors
+    /// `setup_donated_item`'s purchase setup, minus the donated transition.
+    fn setup_purchase(conn: &rusqlite::Connection) -> (i64, i64) {
+        let cat_id = cat_qry::insert(conn, "Decks").unwrap();
+        let purchase_id = purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: true,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        (cat_id, purchase_id)
+    }
+
+    fn create_form_body(
+        name: &str,
+        category_id: i64,
+        source_type: &str,
+        source_purchase_id: i64,
+    ) -> String {
+        format!(
+            "name={name}&category_id={category_id}&location=germany&status=available\
+             &source_type={source_type}&source_purchase_id={source_purchase_id}&notes="
+        )
+    }
+
+    /// A valid `source_type` should still redirect and insert a row —
+    /// guards the happy path through `create()`'s new early-return match,
+    /// mirroring `eur_ledger.rs`'s equivalent regression test.
+    #[tokio::test]
+    async fn create_with_a_valid_source_type_redirects_and_inserts_a_row() {
+        let (state, dir) = test_support::test_app("inventory-create-valid-source-type");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = create_form_body("Deck", cat_id, "purchase", purchase_id);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(qry::list(&state.conn()).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `source_donation_id` submitted alongside `source_type=purchase`
+    /// must never leak into the persisted row — `draft_from_form` forces it
+    /// to `None` unless `source_type == Donation`, keyed off the
+    /// authoritative parsed type rather than which `<select>`s happened to
+    /// be present in the body. The donation `<select>` is always present in
+    /// the DOM now (hidden via inline style, not removed via Askama) so the
+    /// JS toggle works, which is exactly why this guard matters: a
+    /// hidden-but-present field still submits its value. Mirrors
+    /// `eur_ledger.rs`'s `create_ignores_a_submitted_donor_id_for_self_funding`.
+    #[tokio::test]
+    async fn create_ignores_a_submitted_source_donation_id_for_purchase_source() {
+        let (state, dir) = test_support::test_app("inventory-create-stray-donation-id-ignored");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = format!(
+            "name=Deck&category_id={cat_id}&location=germany&status=available\
+             &source_type=purchase&source_purchase_id={purchase_id}&source_donation_id=999999&notes="
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let items = qry::list(&state.conn()).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_donation_id, None);
+        assert_eq!(items[0].source_purchase_id, Some(purchase_id));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression coverage for making the Source radios actually mandatory
+    /// (CLAUDE.md-tracked follow-up to the eur-ledger Typ fix): a missing
+    /// `source_type` used to silently default to Donation server-side even
+    /// though the HTML `required` attribute is trivially bypassable.
+    #[tokio::test]
+    async fn create_rejects_a_missing_source_type_and_inserts_nothing() {
+        let (state, dir) = test_support::test_app("inventory-create-missing-source-type");
+        let (cat_id, _purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body =
+            format!("name=Deck&category_id={cat_id}&location=germany&status=available&notes=");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Please select a source."));
+        assert!(qry::list(&state.conn()).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Same guard, but for a non-empty value that isn't one of the two
+    /// allowed `source_type`s — confirms the catch-all arm (via
+    /// `SourceType::from_str` returning `None`) rejects garbage too, not
+    /// just the empty-string/missing-field case above.
+    #[tokio::test]
+    async fn create_rejects_an_invalid_source_type_and_inserts_nothing() {
+        let (state, dir) = test_support::test_app("inventory-create-invalid-source-type");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = create_form_body("Deck", cat_id, "nonsense-value", purchase_id);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Please select a source."));
+        assert!(qry::list(&state.conn()).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Same mandatory-source guard, applied to `update()` too (per the
+    /// owner's explicit choice — not just `create()`).
+    #[tokio::test]
+    async fn update_rejects_a_missing_source_type_and_leaves_the_item_unchanged() {
+        let (state, dir) = test_support::test_app("inventory-update-missing-source-type");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let item_id = qry::insert(
+            &state.conn(),
+            &InventoryItemDraft {
+                name: "Deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Purchase,
+                source_donation_id: None,
+                source_purchase_id: Some(purchase_id),
+                location: Location::Germany,
+                status: ItemStatus::Available,
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body =
+            format!("name=Renamed&category_id={cat_id}&location=germany&status=available&notes=");
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/inventory/{item_id}"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Please select a source."));
+        assert_eq!(
+            qry::get(&state.conn(), item_id).unwrap().unwrap().name,
+            "Deck"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
