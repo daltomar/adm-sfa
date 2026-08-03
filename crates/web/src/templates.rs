@@ -334,6 +334,8 @@ pub struct InventoryFormTemplate {
     /// `core::db::queries::inventory::update` enforces this authoritatively;
     /// the template only needs to match it for the UI indication.
     pub locked: bool,
+    /// See `PurchaseFormTemplate::attach_results`.
+    pub attach_results: Vec<AttachResult>,
     pub locale: String,
 }
 

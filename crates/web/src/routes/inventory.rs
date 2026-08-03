@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::extract::{Multipart, Path, State};
@@ -19,11 +20,11 @@ use adm_sfa_core::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
-use adm_sfa_core::service;
+use adm_sfa_core::service::{self, PendingDocument};
 
 use crate::state::AppState;
 use crate::templates::{
-    CategoryOption, DonationOption, DonationRow, DonationsTemplate, HtmlTemplate,
+    AttachResult, CategoryOption, DonationOption, DonationRow, DonationsTemplate, HtmlTemplate,
     InventoryFormTemplate, InventoryListTemplate, InventoryRow, PurchaseOption,
 };
 
@@ -186,6 +187,10 @@ fn form_template(
     // string instead of two bools since this template already compares
     // `source_type` directly rather than using per-radio bools.
     source_type_override: Option<&str>,
+    // See `PurchaseFormTemplate::attach_results`. Empty on every render
+    // path except a create-with-documents submission where the item
+    // saved but at least one staged document failed to attach.
+    attach_results: Vec<AttachResult>,
 ) -> InventoryFormTemplate {
     let categories = cat_qry::list(conn).unwrap_or_default();
     let donations = donors_qry::list_donations(conn).unwrap_or_default();
@@ -223,17 +228,23 @@ fn form_template(
         documents,
         labels,
         locked,
+        attach_results,
         locale,
     }
 }
 
-/// Re-fetches the persisted item and re-renders its edit form with an error
-/// banner — same pattern as `purchases.rs::purchase_form_error_response`.
-/// `attach_document` has no in-flight draft of its own (it's a
-/// document-only upload, not a full item edit), so this is the shared
-/// "rebuild the draft from what's in the DB" path used both when no file
-/// was submitted and when `service::attach_document` rejects the upload.
-fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
+/// Re-fetches the persisted item and re-renders its edit form — same
+/// pattern as `purchases.rs::purchase_form_response`. Used for a document
+/// upload/removal error (no in-flight draft of its own — a document-only
+/// action, not a full item edit), and for a create-with-documents
+/// submission whose item saved but not every staged document attached (see
+/// `create`).
+fn item_form_response(
+    conn: &rusqlite::Connection,
+    id: i64,
+    error: Option<String>,
+    attach_results: Vec<AttachResult>,
+) -> Response {
     let Some(item) = qry::get(conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
     };
@@ -253,12 +264,19 @@ fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String)
         conn,
         Some(id),
         &draft,
-        Some(error),
+        error,
         documents,
         locale,
         None,
+        attach_results,
     ))
     .into_response()
+}
+
+/// Re-renders the edit form with an error banner and no attach-results —
+/// the common case among `item_form_response`'s callers.
+fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
+    item_form_response(conn, id, Some(error), Vec::new())
 }
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
@@ -293,6 +311,7 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
         Vec::new(),
         locale,
         Some(""),
+        Vec::new(),
     ))
 }
 
@@ -321,6 +340,7 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         documents,
         locale,
         None,
+        Vec::new(),
     ))
     .into_response()
 }
@@ -381,7 +401,84 @@ fn draft_from_form(form: InventoryForm, source_type: SourceType) -> InventoryIte
     }
 }
 
-async fn create(State(state): State<AppState>, Form(form): Form<InventoryForm>) -> Response {
+/// Creates an inventory item and, in the same submission, attaches every
+/// document staged in the "Documents?" section of the New Item form — a
+/// single `multipart/form-data` POST rather than the urlencoded
+/// `Form<InventoryForm>` `update()` still uses, since a file can only
+/// travel in a multipart body. Mirrors `purchases.rs::create` and
+/// `transfers.rs::create` field-for-field (repeated `doc_label`/`doc_file`
+/// pairs paired positionally, not by index).
+async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+    let mut name = String::new();
+    let mut category_id = String::new();
+    let mut location = String::new();
+    let mut status = String::new();
+    let mut source_type_str = String::new();
+    let mut source_donation_id = String::new();
+    let mut source_purchase_id = String::new();
+    let mut notes = String::new();
+
+    let mut last_label: Option<String> = None;
+    let mut pending: Vec<(PathBuf, String, String)> = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name().unwrap_or("") {
+            "name" => name = field.text().await.unwrap_or_default(),
+            "category_id" => category_id = field.text().await.unwrap_or_default(),
+            "location" => location = field.text().await.unwrap_or_default(),
+            "status" => status = field.text().await.unwrap_or_default(),
+            "source_type" => source_type_str = field.text().await.unwrap_or_default(),
+            "source_donation_id" => source_donation_id = field.text().await.unwrap_or_default(),
+            "source_purchase_id" => source_purchase_id = field.text().await.unwrap_or_default(),
+            "notes" => notes = field.text().await.unwrap_or_default(),
+            "doc_label" => {
+                last_label = field.text().await.ok();
+            }
+            "doc_file" => {
+                // `take()` unconditionally, even for a row whose file ends up
+                // empty — otherwise an unused row's label could leak onto
+                // the next row's file.
+                let label = last_label
+                    .take()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "other".to_string());
+                let original_name = field.file_name().unwrap_or("upload.bin").to_string();
+                if let Ok(bytes) = field.bytes().await {
+                    // A "Documents? Yes" section with an unused extra row is
+                    // legitimate — an empty file here is silently skipped,
+                    // not an error, unlike the edit page's dedicated attach
+                    // form where a submission implies real upload intent.
+                    if !bytes.is_empty() {
+                        let ext = std::path::Path::new(&original_name)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("bin");
+                        let unique = UPLOAD_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let path = std::env::temp_dir().join(format!(
+                            "adm-sfa-web-upload-item-new-{}-{unique}.{ext}",
+                            std::process::id()
+                        ));
+                        if std::fs::write(&path, &bytes).is_ok() {
+                            pending.push((path, label, original_name));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let form = InventoryForm {
+        name,
+        category_id,
+        location,
+        status,
+        source_type: source_type_str,
+        source_donation_id,
+        source_purchase_id,
+        notes,
+    };
+
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let Some(source_type) = SourceType::from_str(&form.source_type) else {
@@ -391,8 +488,20 @@ async fn create(State(state): State<AppState>, Form(form): Form<InventoryForm>) 
         // neither Source radio render checked, same as a fresh New Item
         // form.
         let draft = draft_from_form(form, SourceType::Donation);
-        let error =
+        let mut error =
             rust_i18n::t!("web.inventory.error.source_type_required", locale = &locale).to_string();
+        // A browser cannot repopulate a file input for security reasons, so
+        // any staged files are unavoidably lost on this path — tell the
+        // user rather than silently dropping them, same as a later
+        // create-with-documents failure below.
+        if !pending.is_empty() {
+            let notice =
+                rust_i18n::t!("web.doc.notice.reselect_after_error", locale = &locale).to_string();
+            error = format!("{error} {notice}");
+        }
+        for (path, _, _) in &pending {
+            let _ = std::fs::remove_file(path);
+        }
         return HtmlTemplate(form_template(
             &conn,
             None,
@@ -401,22 +510,88 @@ async fn create(State(state): State<AppState>, Form(form): Form<InventoryForm>) 
             Vec::new(),
             locale,
             Some(""),
+            Vec::new(),
         ))
         .into_response();
     };
     let draft = draft_from_form(form, source_type);
-    match qry::insert(&conn, &draft) {
-        Ok(id) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
-        Err(e) => HtmlTemplate(form_template(
-            &conn,
-            None,
-            &draft,
-            Some(e.to_string()),
-            Vec::new(),
-            locale,
-            None,
-        ))
-        .into_response(),
+
+    let pending_docs: Vec<PendingDocument> = pending
+        .iter()
+        .map(|(path, label, _)| PendingDocument {
+            path: path.as_path(),
+            label: label.as_str(),
+        })
+        .collect();
+
+    let result =
+        service::create_item_with_documents(&conn, &state.documents_dir, &draft, &pending_docs);
+
+    // Unconditional cleanup — the batch call above never keeps a temp path
+    // around, whether it attached, failed, or was never reached because the
+    // item itself failed to save.
+    for (path, _, _) in &pending {
+        let _ = std::fs::remove_file(path);
+    }
+
+    match result {
+        Err(e) => {
+            let mut error = e.to_string();
+            if !pending.is_empty() {
+                let notice = rust_i18n::t!("web.doc.notice.reselect_after_error", locale = &locale)
+                    .to_string();
+                error = format!("{error} {notice}");
+            }
+            HtmlTemplate(form_template(
+                &conn,
+                None,
+                &draft,
+                Some(error),
+                Vec::new(),
+                locale,
+                None,
+                Vec::new(),
+            ))
+            .into_response()
+        }
+        Ok(created) if created.attachments.iter().all(|a| a.result.is_ok()) => {
+            Redirect::to("/inventory").into_response()
+        }
+        Ok(created) => {
+            // Zipped by index rather than using `a.source_name` — `pending`
+            // and `created.attachments` are guaranteed the same length and
+            // order (see `attach_documents`'s doc comment), and `pending`
+            // carries the original filename the user picked, not the
+            // generated temp path `source_name` would otherwise show.
+            let attach_results: Vec<AttachResult> = created
+                .attachments
+                .iter()
+                .zip(pending.iter())
+                .map(|(a, (_, _, original_name))| match &a.result {
+                    Ok(_) => AttachResult {
+                        ok: true,
+                        message: rust_i18n::t!(
+                            "common.doc.status.attached",
+                            locale = &locale,
+                            name = original_name,
+                            label = &a.label
+                        )
+                        .to_string(),
+                    },
+                    Err(err) => AttachResult {
+                        ok: false,
+                        message: rust_i18n::t!(
+                            "common.doc.status.failed",
+                            locale = &locale,
+                            name = original_name,
+                            error = err
+                        )
+                        .to_string(),
+                    },
+                })
+                .collect();
+            item_form_response(&conn, created.id, None, attach_results)
+        }
     }
 }
 
@@ -442,6 +617,7 @@ async fn update(
             documents,
             locale,
             Some(""),
+            Vec::new(),
         ))
         .into_response();
     };
@@ -488,6 +664,7 @@ async fn update(
                 documents,
                 locale,
                 None,
+                Vec::new(),
             ))
             .into_response()
         }
@@ -686,7 +863,8 @@ async fn create_donation(
 mod tests {
     use crate::test_support;
     use adm_sfa_core::db::queries::{
-        categories as cat_qry, inventory as qry, purchases as purchases_qry,
+        categories as cat_qry, documents as documents_qry, inventory as qry,
+        purchases as purchases_qry,
     };
     use adm_sfa_core::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
@@ -922,16 +1100,38 @@ mod tests {
         (cat_id, purchase_id)
     }
 
-    fn create_form_body(
-        name: &str,
-        category_id: i64,
-        source_type: &str,
-        source_purchase_id: i64,
-    ) -> String {
-        format!(
-            "name={name}&category_id={category_id}&location=germany&status=available\
-             &source_type={source_type}&source_purchase_id={source_purchase_id}&notes="
-        )
+    /// Base item-fields-only parts for `create`'s multipart body, shared by
+    /// the tests below — mirrors `purchases.rs`'s `base_create_parts`.
+    /// `name`/`category_id_str` are owned by the caller (not `String`
+    /// literals baked in here) since every test needs a distinct
+    /// `category_id`.
+    fn base_create_parts<'a>(
+        name: &'a str,
+        category_id_str: &'a str,
+    ) -> Vec<test_support::MultipartPart<'a>> {
+        use test_support::MultipartPart::Text;
+        vec![
+            Text {
+                name: "name",
+                value: name,
+            },
+            Text {
+                name: "category_id",
+                value: category_id_str,
+            },
+            Text {
+                name: "location",
+                value: "germany",
+            },
+            Text {
+                name: "status",
+                value: "available",
+            },
+            Text {
+                name: "notes",
+                value: "",
+            },
+        ]
     }
 
     /// A valid `source_type` should still redirect and insert a row —
@@ -939,22 +1139,29 @@ mod tests {
     /// mirroring `eur_ledger.rs`'s equivalent regression test.
     #[tokio::test]
     async fn create_with_a_valid_source_type_redirects_and_inserts_a_row() {
+        use test_support::MultipartPart::Text;
         let (state, dir) = test_support::test_app("inventory-create-valid-source-type");
         let (cat_id, purchase_id) = setup_purchase(&state.conn());
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
-        let body = create_form_body("Deck", cat_id, "purchase", purchase_id);
-        let req = Request::builder()
-            .method("POST")
-            .uri("/inventory")
-            .header("cookie", &cookie)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .unwrap();
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
         let res = test_support::send(app, req).await;
 
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
         assert_eq!(qry::list(&state.conn()).unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -970,22 +1177,29 @@ mod tests {
     /// `eur_ledger.rs`'s `create_ignores_a_submitted_donor_id_for_self_funding`.
     #[tokio::test]
     async fn create_ignores_a_submitted_source_donation_id_for_purchase_source() {
+        use test_support::MultipartPart::Text;
         let (state, dir) = test_support::test_app("inventory-create-stray-donation-id-ignored");
         let (cat_id, purchase_id) = setup_purchase(&state.conn());
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
-        let body = format!(
-            "name=Deck&category_id={cat_id}&location=germany&status=available\
-             &source_type=purchase&source_purchase_id={purchase_id}&source_donation_id=999999&notes="
-        );
-        let req = Request::builder()
-            .method("POST")
-            .uri("/inventory")
-            .header("cookie", &cookie)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .unwrap();
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "source_donation_id",
+            value: "999999",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
         let res = test_support::send(app, req).await;
 
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -1007,15 +1221,10 @@ mod tests {
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
-        let body =
-            format!("name=Deck&category_id={cat_id}&location=germany&status=available&notes=");
-        let req = Request::builder()
-            .method("POST")
-            .uri("/inventory")
-            .header("cookie", &cookie)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .unwrap();
+        let cat_id_str = cat_id.to_string();
+        let parts = base_create_parts("Deck", &cat_id_str);
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
         let res = test_support::send(app, req).await;
 
         assert_eq!(res.status(), StatusCode::OK);
@@ -1031,25 +1240,254 @@ mod tests {
     /// just the empty-string/missing-field case above.
     #[tokio::test]
     async fn create_rejects_an_invalid_source_type_and_inserts_nothing() {
+        use test_support::MultipartPart::Text;
         let (state, dir) = test_support::test_app("inventory-create-invalid-source-type");
         let (cat_id, purchase_id) = setup_purchase(&state.conn());
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
-        let body = create_form_body("Deck", cat_id, "nonsense-value", purchase_id);
-        let req = Request::builder()
-            .method("POST")
-            .uri("/inventory")
-            .header("cookie", &cookie)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .unwrap();
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "nonsense-value",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
         let res = test_support::send(app, req).await;
 
         assert_eq!(res.status(), StatusCode::OK);
         let body_text = test_support::body_text(res).await;
         assert!(body_text.contains("Please select a source."));
         assert!(qry::list(&state.conn()).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_two_documents_saves_the_item_and_both_files_then_redirects_to_the_list() {
+        use test_support::MultipartPart::{File, Text};
+        let (state, dir) = test_support::test_app("inventory-create-with-two-documents");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "chat",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "chat.png",
+            bytes: b"fake chat bytes",
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "receipt",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "receipt.pdf",
+            bytes: b"fake receipt bytes",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let conn = state.conn();
+        let items = qry::list(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", items[0].id)
+                .unwrap()
+                .len(),
+            2
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_without_documents_still_redirects_to_the_list() {
+        use test_support::MultipartPart::Text;
+        let (state, dir) = test_support::test_app("inventory-create-without-documents");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let conn = state.conn();
+        assert_eq!(qry::list(&conn).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_an_empty_file_row_ignores_it() {
+        use test_support::MultipartPart::{File, Text};
+        let (state, dir) = test_support::test_app("inventory-create-empty-file-row");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "chat",
+        });
+        // An untouched `<input type="file">` row: present, but empty.
+        parts.push(File {
+            name: "doc_file",
+            filename: "",
+            bytes: b"",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let conn = state.conn();
+        let items = qry::list(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", items[0].id)
+                .unwrap()
+                .len(),
+            0
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_one_unknown_label_keeps_the_item_and_reports_the_failure() {
+        use test_support::MultipartPart::{File, Text};
+        let (state, dir) = test_support::test_app("inventory-create-one-unknown-label");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "chat",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "chat.png",
+            bytes: b"fake chat bytes",
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "not-a-real-label",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "bad.png",
+            bytes: b"fake bad bytes",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("Unknown document label"));
+        assert!(body.contains("Edit Item"));
+        // The status list must name the file the user actually picked
+        // (`chat.png`/`bad.png`), not the internal generated temp upload
+        // path it was written to on the way to `service::attach_documents`.
+        assert!(body.contains("chat.png"));
+        assert!(body.contains("bad.png"));
+        assert!(!body.contains("adm-sfa-web-upload-item-new-"));
+        let conn = state.conn();
+        let items = qry::list(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", items[0].id)
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_without_a_session_cookie_redirects_to_login() {
+        let (state, dir) = test_support::test_app("inventory-create-unauthenticated");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(test_support::MultipartPart::Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(test_support::MultipartPart::Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", "", &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/login");
+        let conn = state.conn();
+        assert_eq!(qry::list(&conn).unwrap().len(), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

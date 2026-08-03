@@ -10,10 +10,11 @@ use std::path::Path;
 use rusqlite::{Connection, Result};
 
 use crate::db::queries::{
-    documents as documents_qry, outbound as outbound_qry, purchases as purchases_qry,
-    transfers as transfers_qry,
+    documents as documents_qry, inventory as inventory_qry, outbound as outbound_qry,
+    purchases as purchases_qry, transfers as transfers_qry,
 };
 use crate::docs_fs;
+use crate::model::inventory::InventoryItemDraft;
 use crate::model::outbound::OutboundEventDraft;
 use crate::model::purchase::{PurchaseDraft, PurchaseStatus};
 use crate::model::transfer::TransferDraft;
@@ -270,6 +271,42 @@ pub fn create_transfer_with_documents(
         pending,
     );
     Ok(CreatedTransfer { id, attachments })
+}
+
+pub fn create_item(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {
+    inventory_qry::insert(conn, draft)
+}
+
+/// A newly-created inventory item and the outcome of attempting to attach
+/// every document staged alongside it — same shape and same `#[must_use]`
+/// reasoning as `CreatedPurchase`.
+#[must_use]
+pub struct CreatedItem {
+    pub id: i64,
+    pub attachments: Vec<AttachmentOutcome>,
+}
+
+/// Creates an inventory item and attaches every staged document to it in
+/// one call. Same partial-failure contract as `create_purchase_with_documents`:
+/// `Err` only if the item itself fails to save (see
+/// `db::queries::inventory::insert`'s `check_purchase_source` guard); a
+/// saved item with some documents failing to attach is still `Ok`, with the
+/// per-file outcomes in `CreatedItem::attachments`.
+///
+/// `""`/`None` for `attach_documents`'s date-resolution arguments —
+/// inventory items have no date field of their own (acquisition date comes
+/// from the linked donation/purchase), so this always falls through to
+/// today's date, matching the single-document `attach_document` call sites
+/// in both `desktop`'s and `web`'s item-editing views.
+pub fn create_item_with_documents(
+    conn: &Connection,
+    documents_dir: &Path,
+    draft: &InventoryItemDraft,
+    pending: &[PendingDocument<'_>],
+) -> Result<CreatedItem> {
+    let id = create_item(conn, draft)?;
+    let attachments = attach_documents(conn, documents_dir, "", None, ("item", id), pending);
+    Ok(CreatedItem { id, attachments })
 }
 
 #[cfg(test)]
@@ -795,6 +832,214 @@ mod tests {
         bad_draft.eur_amount_sent_str = "not a number".to_string();
 
         let result = create_transfer_with_documents(&conn, &documents_dir, &bad_draft, &pending);
+
+        assert!(result.is_err());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn item_draft(cat_id: i64, purchase_id: i64) -> InventoryItemDraft {
+        use crate::model::inventory::{ItemStatus, Location, SourceType};
+        InventoryItemDraft {
+            name: "Deck".to_string(),
+            category_id: Some(cat_id),
+            source_type: SourceType::Purchase,
+            source_donation_id: None,
+            source_purchase_id: Some(purchase_id),
+            location: Location::Germany,
+            status: ItemStatus::Available,
+            notes: String::new(),
+        }
+    }
+
+    /// A purchase to source an inventory item from — `multiple_items: true`
+    /// so more than one item test can link to the same purchase within a
+    /// single test run without tripping `check_purchase_source`.
+    fn item_purchase(conn: &Connection) -> i64 {
+        purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: true,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn create_item_with_documents_attaches_every_staged_file() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = item_purchase(&conn);
+        let (tmp, documents_dir) = create_with_docs_test_dir("item-attaches-every-file");
+        let chat_src = tmp.join("chat.png");
+        std::fs::write(&chat_src, b"fake").unwrap();
+        let receipt_src = tmp.join("receipt.pdf");
+        std::fs::write(&receipt_src, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &chat_src,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &receipt_src,
+                label: "receipt",
+            },
+        ];
+
+        let created = create_item_with_documents(
+            &conn,
+            &documents_dir,
+            &item_draft(cat_id, purchase_id),
+            &pending,
+        )
+        .unwrap();
+
+        assert_eq!(created.attachments.len(), 2);
+        assert!(created.attachments.iter().all(|a| a.result.is_ok()));
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", created.id)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_item_with_documents_deduplicates_filenames_within_one_batch() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = item_purchase(&conn);
+        let (tmp, documents_dir) = create_with_docs_test_dir("item-dedup-within-batch");
+        let src_a = tmp.join("a.png");
+        std::fs::write(&src_a, b"fake").unwrap();
+        let src_b = tmp.join("b.png");
+        std::fs::write(&src_b, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &src_a,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &src_b,
+                label: "chat",
+            },
+        ];
+
+        let created = create_item_with_documents(
+            &conn,
+            &documents_dir,
+            &item_draft(cat_id, purchase_id),
+            &pending,
+        )
+        .unwrap();
+
+        let filenames: Vec<String> = created
+            .attachments
+            .iter()
+            .map(|a| a.result.clone().unwrap())
+            .collect();
+        assert_eq!(filenames.len(), 2);
+        assert_ne!(filenames[0], filenames[1]);
+        assert!(filenames[1].contains("-2"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_item_with_documents_records_a_per_file_failure_without_rolling_back() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = item_purchase(&conn);
+        let (tmp, documents_dir) = create_with_docs_test_dir("item-partial-failure");
+        let good_src = tmp.join("good.png");
+        std::fs::write(&good_src, b"fake").unwrap();
+        let bad_src = tmp.join("bad.png");
+        std::fs::write(&bad_src, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &good_src,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &bad_src,
+                label: "not-a-real-label",
+            },
+        ];
+
+        let created = create_item_with_documents(
+            &conn,
+            &documents_dir,
+            &item_draft(cat_id, purchase_id),
+            &pending,
+        )
+        .unwrap();
+
+        assert!(created.attachments[0].result.is_ok());
+        assert!(created.attachments[1].result.is_err());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", created.id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_item_with_documents_with_no_attachments_creates_just_the_item() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = item_purchase(&conn);
+        let (tmp, documents_dir) = create_with_docs_test_dir("item-no-attachments");
+
+        let created = create_item_with_documents(
+            &conn,
+            &documents_dir,
+            &item_draft(cat_id, purchase_id),
+            &[],
+        )
+        .unwrap();
+
+        assert!(created.attachments.is_empty());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", created.id)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_item_with_documents_files_nothing_when_the_item_cannot_be_inserted() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("item-insert-fails");
+        let src = tmp.join("chat.png");
+        std::fs::write(&src, b"fake").unwrap();
+        let pending = vec![PendingDocument {
+            path: &src,
+            label: "chat",
+        }];
+        // No category_id — `category_id` is `NOT NULL` in schema.sql, so
+        // this fails at the DB layer before any document is touched.
+        let mut bad_draft = item_draft(1, 1);
+        bad_draft.category_id = None;
+
+        let result = create_item_with_documents(&conn, &documents_dir, &bad_draft, &pending);
 
         assert!(result.is_err());
         let count: i64 = conn
