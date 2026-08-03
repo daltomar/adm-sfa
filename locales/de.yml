@@ -245,6 +245,7 @@ inventory.donation_label: "%{date} — %{name}"
 inventory.donation_label_anonymous: "%{date} — Anonym"
 inventory.purchase_label: "%{date}  %{channel}  %{symbol}%{cost}%{multi}"
 inventory.donated_locked_notice: "Dieser Artikel wurde bereits gespendet — nur Notizen können noch bearbeitet werden."
+inventory.doc.status.partial_intro: "Der Artikel wurde gespeichert, aber nicht alle Dokumente konnten angehängt werden:"
 
 reports.tab.donors: "Spenderübersicht"
 reports.tab.eur: "EUR-Kassenbuch-Zusammenfassung"
@@ -418,6 +419,8 @@ web.inventory.purchase_combo.in_use: "%{label} (bereits verknüpft)"
 
 web.eur_ledger.donor_hint_link: "Neuer Spender anlegen"
 web.eur_ledger.error.type_required: "Bitte einen Typ auswählen."
+web.inventory.error.source_type_required: "Bitte eine Quelle auswählen."
+web.inventory.docs.question: "Dokumente zu diesem Artikel anhängen?"
 
 web.reports.filter.recipient: "Empfänger (nur Ausgehend/Prüfprotokoll)"
 web.reports.button.apply_filters: "Filter anwenden"

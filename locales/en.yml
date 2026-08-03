@@ -260,6 +260,7 @@ inventory.donation_label: "%{date} — %{name}"
 inventory.donation_label_anonymous: "%{date} — Anonymous"
 inventory.purchase_label: "%{date}  %{channel}  %{symbol}%{cost}%{multi}"
 inventory.donated_locked_notice: "This item has been donated — only Notes can still be edited."
+inventory.doc.status.partial_intro: "The item was saved, but not every document could be attached:"
 
 reports.tab.donors: "Donor breakdown"
 reports.tab.eur: "EUR ledger summary"
@@ -439,6 +440,8 @@ web.inventory.purchase_combo.in_use: "%{label} (in use)"
 
 web.eur_ledger.donor_hint_link: "Create new donor"
 web.eur_ledger.error.type_required: "Please select a type."
+web.inventory.error.source_type_required: "Please select a source."
+web.inventory.docs.question: "Attach documents to this item?"
 
 web.reports.filter.recipient: "Recipient (Outbound/Audit only)"
 web.reports.button.apply_filters: "Apply filters"

@@ -1,6 +1,7 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
@@ -19,11 +20,12 @@ use adm_sfa_core::model::inventory::{
     InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
 };
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
-use adm_sfa_core::service;
+use adm_sfa_core::service::{self, PendingDocument};
 
+use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{
-    CategoryOption, DonationOption, DonationRow, DonationsTemplate, HtmlTemplate,
+    AttachResult, CategoryOption, DonationOption, DonationRow, DonationsTemplate, HtmlTemplate,
     InventoryFormTemplate, InventoryListTemplate, InventoryRow, PurchaseOption,
 };
 
@@ -173,6 +175,23 @@ fn form_template(
     error: Option<String>,
     documents: Vec<adm_sfa_core::model::document::Document>,
     locale: String,
+    // Overrides which Source radio renders `checked`, independent of
+    // `draft.source_type` (a required enum with no "unset" variant) — the
+    // mandatory/unselected-by-default behaviour on the New Item form needs
+    // to represent "no source chosen yet", which the enum itself can't.
+    // `Some("")` renders neither radio checked (fresh New Item form, or a
+    // rejected submission with a missing/invalid source); `None` uses
+    // `draft.source_type` as before (Edit form's persisted value, or a
+    // validation error unrelated to the source type, which should keep
+    // whatever was actually submitted checked). Mirrors `eur_ledger.rs`'s
+    // `donation_checked`/`self_funding_checked`, just as one overridable
+    // string instead of two bools since this template already compares
+    // `source_type` directly rather than using per-radio bools.
+    source_type_override: Option<&str>,
+    // See `PurchaseFormTemplate::attach_results`. Empty on every render
+    // path except a create-with-documents submission where the item
+    // saved but at least one staged document failed to attach.
+    attach_results: Vec<AttachResult>,
 ) -> InventoryFormTemplate {
     let categories = cat_qry::list(conn).unwrap_or_default();
     let donations = donors_qry::list_donations(conn).unwrap_or_default();
@@ -189,12 +208,16 @@ fn form_template(
         .and_then(|id| qry::get(conn, id).ok().flatten())
         .is_some_and(|item| item.status == ItemStatus::Donated);
 
+    let source_type = source_type_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| draft.source_type.as_str().to_string());
+
     InventoryFormTemplate {
         id,
         name: draft.name.clone(),
         location: draft.location.as_str().to_string(),
         status: draft.status.as_str().to_string(),
-        source_type: draft.source_type.as_str().to_string(),
+        source_type,
         category_id: draft.category_id,
         source_donation_id: draft.source_donation_id,
         source_purchase_id: draft.source_purchase_id,
@@ -206,17 +229,23 @@ fn form_template(
         documents,
         labels,
         locked,
+        attach_results,
         locale,
     }
 }
 
-/// Re-fetches the persisted item and re-renders its edit form with an error
-/// banner — same pattern as `purchases.rs::purchase_form_error_response`.
-/// `attach_document` has no in-flight draft of its own (it's a
-/// document-only upload, not a full item edit), so this is the shared
-/// "rebuild the draft from what's in the DB" path used both when no file
-/// was submitted and when `service::attach_document` rejects the upload.
-fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
+/// Re-fetches the persisted item and re-renders its edit form — same
+/// pattern as `purchases.rs::purchase_form_response`. Used for a document
+/// upload/removal error (no in-flight draft of its own — a document-only
+/// action, not a full item edit), and for a create-with-documents
+/// submission whose item saved but not every staged document attached (see
+/// `create`).
+fn item_form_response(
+    conn: &rusqlite::Connection,
+    id: i64,
+    error: Option<String>,
+    attach_results: Vec<AttachResult>,
+) -> Response {
     let Some(item) = qry::get(conn, id).ok().flatten() else {
         return (axum::http::StatusCode::NOT_FOUND, "item not found").into_response();
     };
@@ -236,11 +265,19 @@ fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String)
         conn,
         Some(id),
         &draft,
-        Some(error),
+        error,
         documents,
         locale,
+        None,
+        attach_results,
     ))
     .into_response()
+}
+
+/// Re-renders the edit form with an error banner and no attach-results —
+/// the common case among `item_form_response`'s callers.
+fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String) -> Response {
+    item_form_response(conn, id, Some(error), Vec::new())
 }
 
 async fn list(State(state): State<AppState>) -> impl IntoResponse {
@@ -264,16 +301,74 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
-async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
+/// Query params the "+ New donation" round trip comes back with — the New
+/// Item form's own JS populates these onto the link's `return_to` on the
+/// way out (`inventory/form.html`'s `updateNewDonationLink`), and
+/// `create_donation` appends `donation_id` on the way back in, mirroring
+/// `eur_ledger.rs::new_form`'s `NewEntryQuery`/`donor_id` handling. Absent
+/// entirely on a normal fresh `/inventory/new` visit, in which case every
+/// field below is empty and `donation_id` is `None` — same as
+/// `InventoryItemDraft::default()` used to render directly.
+#[derive(Deserialize)]
+struct NewItemQuery {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    category_id: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    notes: String,
+    donation_id: Option<i64>,
+}
+
+async fn new_form(
+    State(state): State<AppState>,
+    Query(query): Query<NewItemQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
+    // Validate the id actually resolves before trusting it — mirrors
+    // `eur_ledger.rs::new_form`'s `donor_id` check: a stale link or a
+    // hand-edited query string with a nonexistent `donation_id` would
+    // otherwise still force the Source radio to Donation around a dropdown
+    // selection that doesn't exist.
+    let donations = donors_qry::list_donations(&conn).unwrap_or_default();
+    let donation_id = query
+        .donation_id
+        .filter(|id| donations.iter().any(|d| d.id == *id));
+    let draft = InventoryItemDraft {
+        name: query.name,
+        category_id: parsed_id(&query.category_id),
+        source_type: SourceType::Donation,
+        source_donation_id: donation_id,
+        source_purchase_id: None,
+        location: Location::from_str(&query.location).unwrap_or(Location::Germany),
+        status: ItemStatus::from_str(&query.status).unwrap_or(ItemStatus::Available),
+        notes: query.notes,
+    };
+    // `Some("")` keeps Source unselected for a genuinely fresh visit (no
+    // `donation_id` at all — the New Item form's usual mandatory,
+    // nothing-checked-yet state); `None` falls back to `draft.source_type`
+    // (forced to `Donation` above) once a valid `donation_id` comes back
+    // from the round trip, so that radio renders checked and its dropdown
+    // shows the newly created donation pre-selected.
+    let source_type_override = if donation_id.is_some() {
+        None
+    } else {
+        Some("")
+    };
     HtmlTemplate(form_template(
         &conn,
         None,
-        &InventoryItemDraft::default(),
+        &draft,
         None,
         Vec::new(),
         locale,
+        source_type_override,
+        Vec::new(),
     ))
 }
 
@@ -301,6 +396,8 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         None,
         documents,
         locale,
+        None,
+        Vec::new(),
     ))
     .into_response()
 }
@@ -311,6 +408,12 @@ struct InventoryForm {
     category_id: String,
     location: String,
     status: String,
+    /// Missing entirely (not just empty) when a crafted POST omits the
+    /// field outright — `#[serde(default)]` so `axum::Form` still
+    /// deserializes instead of rejecting the request with a raw 422 before
+    /// `create()`/`update()` ever run their own mandatory-source check and
+    /// can render a translated, in-form error banner instead.
+    #[serde(default)]
     source_type: String,
     #[serde(default)]
     source_donation_id: String,
@@ -329,12 +432,16 @@ fn parsed_id(s: &str) -> Option<i64> {
     }
 }
 
-fn draft_from_form(form: InventoryForm) -> InventoryItemDraft {
-    let source_type = if form.source_type == "purchase" {
-        SourceType::Purchase
-    } else {
-        SourceType::Donation
-    };
+/// `source_type` is taken already-parsed rather than derived from
+/// `form.source_type` here — the mandatory-source check now happens
+/// authoritatively in `create()`/`update()` *before* this is called,
+/// mirroring `eur_ledger.rs::create()`'s `tx_type` match. This function no
+/// longer has a silent fallback for a missing/invalid source: that used to
+/// default to `SourceType::Donation`, exactly the bug class the eur-ledger
+/// mandatory-Typ fix closed (a crafted or bugged submission with no source
+/// would previously become a Donation-sourced item without the user ever
+/// choosing that).
+fn draft_from_form(form: InventoryForm, source_type: SourceType) -> InventoryItemDraft {
     let (source_donation_id, source_purchase_id) = match source_type {
         SourceType::Donation => (parsed_id(&form.source_donation_id), None),
         SourceType::Purchase => (None, parsed_id(&form.source_purchase_id)),
@@ -351,22 +458,196 @@ fn draft_from_form(form: InventoryForm) -> InventoryItemDraft {
     }
 }
 
-async fn create(State(state): State<AppState>, Form(form): Form<InventoryForm>) -> Response {
-    let draft = draft_from_form(form);
+/// Creates an inventory item and, in the same submission, attaches every
+/// document staged in the "Documents?" section of the New Item form — a
+/// single `multipart/form-data` POST rather than the urlencoded
+/// `Form<InventoryForm>` `update()` still uses, since a file can only
+/// travel in a multipart body. Mirrors `purchases.rs::create` and
+/// `transfers.rs::create` field-for-field (repeated `doc_label`/`doc_file`
+/// pairs paired positionally, not by index).
+async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+    let mut name = String::new();
+    let mut category_id = String::new();
+    let mut location = String::new();
+    let mut status = String::new();
+    let mut source_type_str = String::new();
+    let mut source_donation_id = String::new();
+    let mut source_purchase_id = String::new();
+    let mut notes = String::new();
+
+    let mut last_label: Option<String> = None;
+    let mut pending: Vec<(PathBuf, String, String)> = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name().unwrap_or("") {
+            "name" => name = field.text().await.unwrap_or_default(),
+            "category_id" => category_id = field.text().await.unwrap_or_default(),
+            "location" => location = field.text().await.unwrap_or_default(),
+            "status" => status = field.text().await.unwrap_or_default(),
+            "source_type" => source_type_str = field.text().await.unwrap_or_default(),
+            "source_donation_id" => source_donation_id = field.text().await.unwrap_or_default(),
+            "source_purchase_id" => source_purchase_id = field.text().await.unwrap_or_default(),
+            "notes" => notes = field.text().await.unwrap_or_default(),
+            "doc_label" => {
+                last_label = field.text().await.ok();
+            }
+            "doc_file" => {
+                // `take()` unconditionally, even for a row whose file ends up
+                // empty — otherwise an unused row's label could leak onto
+                // the next row's file.
+                let label = last_label
+                    .take()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "other".to_string());
+                let original_name = field.file_name().unwrap_or("upload.bin").to_string();
+                if let Ok(bytes) = field.bytes().await {
+                    // A "Documents? Yes" section with an unused extra row is
+                    // legitimate — an empty file here is silently skipped,
+                    // not an error, unlike the edit page's dedicated attach
+                    // form where a submission implies real upload intent.
+                    if !bytes.is_empty() {
+                        let ext = std::path::Path::new(&original_name)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("bin");
+                        let unique = UPLOAD_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let path = std::env::temp_dir().join(format!(
+                            "adm-sfa-web-upload-item-new-{}-{unique}.{ext}",
+                            std::process::id()
+                        ));
+                        if std::fs::write(&path, &bytes).is_ok() {
+                            pending.push((path, label, original_name));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let form = InventoryForm {
+        name,
+        category_id,
+        location,
+        status,
+        source_type: source_type_str,
+        source_donation_id,
+        source_purchase_id,
+        notes,
+    };
+
     let conn = state.conn();
-    match qry::insert(&conn, &draft) {
-        Ok(id) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
+    let locale = crate::i18n::resolve_locale(&conn);
+    let Some(source_type) = SourceType::from_str(&form.source_type) else {
+        // `SourceType::Donation` here is a placeholder purely so the rest of
+        // what was typed (name, category, location, status, notes) can
+        // still be echoed back — `Some("")` below is what actually makes
+        // neither Source radio render checked, same as a fresh New Item
+        // form.
+        let draft = draft_from_form(form, SourceType::Donation);
+        let mut error =
+            rust_i18n::t!("web.inventory.error.source_type_required", locale = &locale).to_string();
+        // A browser cannot repopulate a file input for security reasons, so
+        // any staged files are unavoidably lost on this path — tell the
+        // user rather than silently dropping them, same as a later
+        // create-with-documents failure below.
+        if !pending.is_empty() {
+            let notice =
+                rust_i18n::t!("web.doc.notice.reselect_after_error", locale = &locale).to_string();
+            error = format!("{error} {notice}");
+        }
+        for (path, _, _) in &pending {
+            let _ = std::fs::remove_file(path);
+        }
+        return HtmlTemplate(form_template(
+            &conn,
+            None,
+            &draft,
+            Some(error),
+            Vec::new(),
+            locale,
+            Some(""),
+            Vec::new(),
+        ))
+        .into_response();
+    };
+    let draft = draft_from_form(form, source_type);
+
+    let pending_docs: Vec<PendingDocument> = pending
+        .iter()
+        .map(|(path, label, _)| PendingDocument {
+            path: path.as_path(),
+            label: label.as_str(),
+        })
+        .collect();
+
+    let result =
+        service::create_item_with_documents(&conn, &state.documents_dir, &draft, &pending_docs);
+
+    // Unconditional cleanup — the batch call above never keeps a temp path
+    // around, whether it attached, failed, or was never reached because the
+    // item itself failed to save.
+    for (path, _, _) in &pending {
+        let _ = std::fs::remove_file(path);
+    }
+
+    match result {
         Err(e) => {
-            let locale = crate::i18n::resolve_locale(&conn);
+            let mut error = e.to_string();
+            if !pending.is_empty() {
+                let notice = rust_i18n::t!("web.doc.notice.reselect_after_error", locale = &locale)
+                    .to_string();
+                error = format!("{error} {notice}");
+            }
             HtmlTemplate(form_template(
                 &conn,
                 None,
                 &draft,
-                Some(e.to_string()),
+                Some(error),
                 Vec::new(),
                 locale,
+                None,
+                Vec::new(),
             ))
             .into_response()
+        }
+        Ok(created) if created.attachments.iter().all(|a| a.result.is_ok()) => {
+            Redirect::to("/inventory").into_response()
+        }
+        Ok(created) => {
+            // Zipped by index rather than using `a.source_name` — `pending`
+            // and `created.attachments` are guaranteed the same length and
+            // order (see `attach_documents`'s doc comment), and `pending`
+            // carries the original filename the user picked, not the
+            // generated temp path `source_name` would otherwise show.
+            let attach_results: Vec<AttachResult> = created
+                .attachments
+                .iter()
+                .zip(pending.iter())
+                .map(|(a, (_, _, original_name))| match &a.result {
+                    Ok(_) => AttachResult {
+                        ok: true,
+                        message: rust_i18n::t!(
+                            "common.doc.status.attached",
+                            locale = &locale,
+                            name = original_name,
+                            label = &a.label
+                        )
+                        .to_string(),
+                    },
+                    Err(err) => AttachResult {
+                        ok: false,
+                        message: rust_i18n::t!(
+                            "common.doc.status.failed",
+                            locale = &locale,
+                            name = original_name,
+                            error = err
+                        )
+                        .to_string(),
+                    },
+                })
+                .collect();
+            item_form_response(&conn, created.id, None, attach_results)
         }
     }
 }
@@ -376,8 +657,28 @@ async fn update(
     Path(id): Path<i64>,
     Form(form): Form<InventoryForm>,
 ) -> Response {
-    let draft = draft_from_form(form);
     let conn = state.conn();
+    let locale = crate::i18n::resolve_locale(&conn);
+    let Some(source_type) = SourceType::from_str(&form.source_type) else {
+        let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
+        // Same placeholder-draft-plus-override reasoning as `create()`'s
+        // equivalent branch.
+        let draft = draft_from_form(form, SourceType::Donation);
+        let error =
+            rust_i18n::t!("web.inventory.error.source_type_required", locale = &locale).to_string();
+        return HtmlTemplate(form_template(
+            &conn,
+            Some(id),
+            &draft,
+            Some(error),
+            documents,
+            locale,
+            Some(""),
+            Vec::new(),
+        ))
+        .into_response();
+    };
+    let draft = draft_from_form(form, source_type);
     match qry::update(&conn, id, &draft) {
         Ok(()) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
         Err(e) => {
@@ -412,7 +713,6 @@ async fn update(
             } else {
                 draft.clone()
             };
-            let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
                 &conn,
                 Some(id),
@@ -420,6 +720,8 @@ async fn update(
                 Some(e.to_string()),
                 documents,
                 locale,
+                None,
+                Vec::new(),
             ))
             .into_response()
         }
@@ -539,7 +841,16 @@ async fn remove_document(
 /// preserving other in-progress item fields across the detour — a
 /// deliberate, documented reduced-scope tradeoff for this pass, consistent
 /// with phase 5's existing scope reductions (CLAUDE.md).
-async fn donations(State(state): State<AppState>) -> impl IntoResponse {
+#[derive(Deserialize)]
+struct DonationsQuery {
+    #[serde(default)]
+    return_to: Option<String>,
+}
+
+async fn donations(
+    State(state): State<AppState>,
+    Query(query): Query<DonationsQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let anonymous = rust_i18n::t!("common.anonymous", locale = &locale).to_string();
@@ -561,6 +872,7 @@ async fn donations(State(state): State<AppState>) -> impl IntoResponse {
         date: chrono::Local::now().format("%Y-%m-%d").to_string(),
         donors,
         error: None,
+        return_to: query.return_to.filter(|s| safe_return_to(s)),
         locale,
     })
 }
@@ -572,12 +884,15 @@ struct DonationForm {
     donor_id: String,
     #[serde(default)]
     notes: String,
+    #[serde(default)]
+    return_to: String,
 }
 
 async fn create_donation(
     State(state): State<AppState>,
     Form(form): Form<DonationForm>,
 ) -> Response {
+    let return_to = form.return_to;
     let draft = PhysicalDonationDraft {
         donor_id: parsed_id(&form.donor_id),
         date_received: form.date_received,
@@ -586,7 +901,23 @@ async fn create_donation(
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     match donors_qry::insert_donation(&conn, &draft) {
-        Ok(_) => Redirect::to("/inventory/donations").into_response(),
+        Ok(id) => {
+            if safe_return_to(&return_to) {
+                // Assumes return_to carries no #fragment (none of today's
+                // callers emit one) — appending a query after a fragment
+                // would produce a syntactically-wrong-order URL. Mirrors
+                // `donors.rs::create`.
+                let sep = if return_to.contains('?') { '&' } else { '?' };
+                Redirect::to(&format!("{return_to}{sep}donation_id={id}")).into_response()
+            } else {
+                // No caller-supplied return path (this page's own nav
+                // entry) or an unsafe one (rejected above, falls back here
+                // too) — either way lands on the donations list itself,
+                // matching the pre-existing behavior for every visit that
+                // isn't a "+ New donation" round trip.
+                Redirect::to("/inventory/donations").into_response()
+            }
+        }
         Err(e) => {
             let anonymous = rust_i18n::t!("common.anonymous", locale = &locale).to_string();
             let donations = donors_qry::list_donations(&conn).unwrap_or_default();
@@ -607,6 +938,7 @@ async fn create_donation(
                 date: draft.date_received,
                 donors,
                 error: Some(e.to_string()),
+                return_to: Some(return_to).filter(|s| safe_return_to(s)),
                 locale,
             })
             .into_response()
@@ -617,9 +949,12 @@ async fn create_donation(
 #[cfg(test)]
 mod tests {
     use crate::test_support;
+    use adm_sfa_core::db::queries::donors as donors_qry;
     use adm_sfa_core::db::queries::{
-        categories as cat_qry, inventory as qry, purchases as purchases_qry,
+        categories as cat_qry, documents as documents_qry, inventory as qry,
+        purchases as purchases_qry,
     };
+    use adm_sfa_core::model::donor::PhysicalDonationDraft;
     use adm_sfa_core::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
     use axum::body::Body;
@@ -831,6 +1166,609 @@ mod tests {
         let body_text = test_support::body_text(res).await;
         assert!(body_text.contains("has been donated"));
         assert!(body_text.contains("disabled"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A purchase-sourced item to POST a create/update against — mirrors
+    /// `setup_donated_item`'s purchase setup, minus the donated transition.
+    fn setup_purchase(conn: &rusqlite::Connection) -> (i64, i64) {
+        let cat_id = cat_qry::insert(conn, "Decks").unwrap();
+        let purchase_id = purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: true,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        (cat_id, purchase_id)
+    }
+
+    /// Base item-fields-only parts for `create`'s multipart body, shared by
+    /// the tests below — mirrors `purchases.rs`'s `base_create_parts`.
+    /// `name`/`category_id_str` are owned by the caller (not `String`
+    /// literals baked in here) since every test needs a distinct
+    /// `category_id`.
+    fn base_create_parts<'a>(
+        name: &'a str,
+        category_id_str: &'a str,
+    ) -> Vec<test_support::MultipartPart<'a>> {
+        use test_support::MultipartPart::Text;
+        vec![
+            Text {
+                name: "name",
+                value: name,
+            },
+            Text {
+                name: "category_id",
+                value: category_id_str,
+            },
+            Text {
+                name: "location",
+                value: "germany",
+            },
+            Text {
+                name: "status",
+                value: "available",
+            },
+            Text {
+                name: "notes",
+                value: "",
+            },
+        ]
+    }
+
+    /// A valid `source_type` should still redirect and insert a row —
+    /// guards the happy path through `create()`'s new early-return match,
+    /// mirroring `eur_ledger.rs`'s equivalent regression test.
+    #[tokio::test]
+    async fn create_with_a_valid_source_type_redirects_and_inserts_a_row() {
+        use test_support::MultipartPart::Text;
+        let (state, dir) = test_support::test_app("inventory-create-valid-source-type");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        assert_eq!(qry::list(&state.conn()).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `source_donation_id` submitted alongside `source_type=purchase`
+    /// must never leak into the persisted row — `draft_from_form` forces it
+    /// to `None` unless `source_type == Donation`, keyed off the
+    /// authoritative parsed type rather than which `<select>`s happened to
+    /// be present in the body. The donation `<select>` is always present in
+    /// the DOM now (hidden via inline style, not removed via Askama) so the
+    /// JS toggle works, which is exactly why this guard matters: a
+    /// hidden-but-present field still submits its value. Mirrors
+    /// `eur_ledger.rs`'s `create_ignores_a_submitted_donor_id_for_self_funding`.
+    #[tokio::test]
+    async fn create_ignores_a_submitted_source_donation_id_for_purchase_source() {
+        use test_support::MultipartPart::Text;
+        let (state, dir) = test_support::test_app("inventory-create-stray-donation-id-ignored");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "source_donation_id",
+            value: "999999",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let items = qry::list(&state.conn()).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_donation_id, None);
+        assert_eq!(items[0].source_purchase_id, Some(purchase_id));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression coverage for making the Source radios actually mandatory
+    /// (CLAUDE.md-tracked follow-up to the eur-ledger Typ fix): a missing
+    /// `source_type` used to silently default to Donation server-side even
+    /// though the HTML `required` attribute is trivially bypassable.
+    #[tokio::test]
+    async fn create_rejects_a_missing_source_type_and_inserts_nothing() {
+        let (state, dir) = test_support::test_app("inventory-create-missing-source-type");
+        let (cat_id, _purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let parts = base_create_parts("Deck", &cat_id_str);
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Please select a source."));
+        assert!(qry::list(&state.conn()).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Same guard, but for a non-empty value that isn't one of the two
+    /// allowed `source_type`s — confirms the catch-all arm (via
+    /// `SourceType::from_str` returning `None`) rejects garbage too, not
+    /// just the empty-string/missing-field case above.
+    #[tokio::test]
+    async fn create_rejects_an_invalid_source_type_and_inserts_nothing() {
+        use test_support::MultipartPart::Text;
+        let (state, dir) = test_support::test_app("inventory-create-invalid-source-type");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "nonsense-value",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Please select a source."));
+        assert!(qry::list(&state.conn()).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_two_documents_saves_the_item_and_both_files_then_redirects_to_the_list() {
+        use test_support::MultipartPart::{File, Text};
+        let (state, dir) = test_support::test_app("inventory-create-with-two-documents");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "chat",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "chat.png",
+            bytes: b"fake chat bytes",
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "receipt",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "receipt.pdf",
+            bytes: b"fake receipt bytes",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let conn = state.conn();
+        let items = qry::list(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", items[0].id)
+                .unwrap()
+                .len(),
+            2
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_without_documents_still_redirects_to_the_list() {
+        use test_support::MultipartPart::Text;
+        let (state, dir) = test_support::test_app("inventory-create-without-documents");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let conn = state.conn();
+        assert_eq!(qry::list(&conn).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_an_empty_file_row_ignores_it() {
+        use test_support::MultipartPart::{File, Text};
+        let (state, dir) = test_support::test_app("inventory-create-empty-file-row");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "chat",
+        });
+        // An untouched `<input type="file">` row: present, but empty.
+        parts.push(File {
+            name: "doc_file",
+            filename: "",
+            bytes: b"",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let conn = state.conn();
+        let items = qry::list(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", items[0].id)
+                .unwrap()
+                .len(),
+            0
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_one_unknown_label_keeps_the_item_and_reports_the_failure() {
+        use test_support::MultipartPart::{File, Text};
+        let (state, dir) = test_support::test_app("inventory-create-one-unknown-label");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "chat",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "chat.png",
+            bytes: b"fake chat bytes",
+        });
+        parts.push(Text {
+            name: "doc_label",
+            value: "not-a-real-label",
+        });
+        parts.push(File {
+            name: "doc_file",
+            filename: "bad.png",
+            bytes: b"fake bad bytes",
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", &cookie, &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("Unknown document label"));
+        assert!(body.contains("Edit Item"));
+        // The status list must name the file the user actually picked
+        // (`chat.png`/`bad.png`), not the internal generated temp upload
+        // path it was written to on the way to `service::attach_documents`.
+        assert!(body.contains("chat.png"));
+        assert!(body.contains("bad.png"));
+        assert!(!body.contains("adm-sfa-web-upload-item-new-"));
+        let conn = state.conn();
+        let items = qry::list(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "item", items[0].id)
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_without_a_session_cookie_redirects_to_login() {
+        let (state, dir) = test_support::test_app("inventory-create-unauthenticated");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+
+        let cat_id_str = cat_id.to_string();
+        let purchase_id_str = purchase_id.to_string();
+        let mut parts = base_create_parts("Deck", &cat_id_str);
+        parts.push(test_support::MultipartPart::Text {
+            name: "source_type",
+            value: "purchase",
+        });
+        parts.push(test_support::MultipartPart::Text {
+            name: "source_purchase_id",
+            value: &purchase_id_str,
+        });
+
+        let req = test_support::multipart_request_with_parts("/inventory", "", &parts);
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/login");
+        let conn = state.conn();
+        assert_eq!(qry::list(&conn).unwrap().len(), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Same mandatory-source guard, applied to `update()` too (per the
+    /// owner's explicit choice — not just `create()`).
+    #[tokio::test]
+    async fn update_rejects_a_missing_source_type_and_leaves_the_item_unchanged() {
+        let (state, dir) = test_support::test_app("inventory-update-missing-source-type");
+        let (cat_id, purchase_id) = setup_purchase(&state.conn());
+        let item_id = qry::insert(
+            &state.conn(),
+            &InventoryItemDraft {
+                name: "Deck".to_string(),
+                category_id: Some(cat_id),
+                source_type: SourceType::Purchase,
+                source_donation_id: None,
+                source_purchase_id: Some(purchase_id),
+                location: Location::Germany,
+                status: ItemStatus::Available,
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body =
+            format!("name=Renamed&category_id={cat_id}&location=germany&status=available&notes=");
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/inventory/{item_id}"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Please select a source."));
+        assert_eq!(
+            qry::get(&state.conn(), item_id).unwrap().unwrap().name,
+            "Deck"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The "+ New donation" flow: creating a donation with a `return_to`
+    /// carried over from `/inventory/new` should redirect there (with the
+    /// new donation's id appended) instead of always landing on the
+    /// donations list. Mirrors `donors.rs`'s
+    /// `create_with_a_return_to_redirects_there_with_donor_id_appended`.
+    #[tokio::test]
+    async fn create_donation_with_a_return_to_redirects_there_with_donation_id_appended() {
+        let (state, dir) = test_support::test_app("inventory-donation-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date_received=2026-01-01&donor_id=&notes=\
+                     &return_to=%2Finventory%2Fnew%3Fname%3DDeck";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory/donations")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/inventory/new?name=Deck&donation_id=1");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_donation_without_a_return_to_redirects_to_the_donations_list() {
+        let (state, dir) = test_support::test_app("inventory-donation-no-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date_received=2026-01-01&donor_id=&notes=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory/donations")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/inventory/donations");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `return_to` that isn't a root-relative path (an open-redirect
+    /// attempt) is rejected — falls back to the donations list instead of
+    /// ever being handed to `Redirect::to`. Mirrors `donors.rs`'s
+    /// `create_ignores_an_unsafe_return_to`.
+    #[tokio::test]
+    async fn create_donation_ignores_an_unsafe_return_to() {
+        let (state, dir) = test_support::test_app("inventory-donation-unsafe-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date_received=2026-01-01&donor_id=&notes=\
+                     &return_to=https%3A%2F%2Fevil.example";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory/donations")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/inventory/donations");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The read-back side of the round trip: a valid `donation_id` query
+    /// param on `/inventory/new` should preselect Source=Donation, show the
+    /// dropdown, and select the new donation — plus the other in-progress
+    /// fields (name, category, location, status, notes) the New Item form's
+    /// own JS carried along on the way out. Mirrors `eur_ledger.rs`'s
+    /// `new_form_with_a_donor_id_query_param_preselects_and_shows_donor`.
+    #[tokio::test]
+    async fn new_form_with_a_donation_id_query_param_preselects_and_shows_donation() {
+        let (state, dir) = test_support::test_app("inventory-new-form-donation-prefill");
+        let cat_id = cat_qry::insert(&state.conn(), "Decks").unwrap();
+        let donation_id = donors_qry::insert_donation(
+            &state.conn(),
+            &PhysicalDonationDraft {
+                donor_id: None,
+                date_received: "2026-01-05".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/inventory/new?name=Deck&category_id={cat_id}&location=brazil&status=reserved\
+                 &notes=handled+with+care&donation_id={donation_id}"
+            ))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains(r#"value="Deck""#));
+        assert!(body_text.contains(&format!(r#"value="{cat_id}" selected"#)));
+        assert!(body_text.contains(r#"value="brazil" checked"#));
+        assert!(body_text.contains(r#"value="reserved" checked"#));
+        assert!(body_text.contains("handled with care"));
+        assert!(body_text.contains(r#"value="donation" required checked"#));
+        assert!(body_text.contains(&format!(r#"value="{donation_id}" selected"#)));
+        assert!(!body_text.contains(r#"id="source_donation_field" style="display:none""#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `donation_id` that doesn't resolve to a real donation (stale link,
+    /// or a hand-edited query string) must not force Source open — mirrors
+    /// `eur_ledger.rs`'s
+    /// `new_form_with_a_nonexistent_donor_id_does_not_show_the_donor_field`.
+    #[tokio::test]
+    async fn new_form_with_a_nonexistent_donation_id_does_not_preselect_source() {
+        let (state, dir) = test_support::test_app("inventory-new-form-bad-donation-id");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/inventory/new?donation_id=999999")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains(r#"id="source_donation_field" style="display:none""#));
+        assert!(!body_text.contains(r#"value="donation" required checked"#));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

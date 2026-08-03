@@ -14,7 +14,18 @@
 <div class="notice">{{ "inventory.donated_locked_notice"|t(locale) }}</div>
 {% endif %}
 
-<form method="post" action="{% if let Some(id) = id %}/inventory/{{ id }}{% else %}/inventory{% endif %}">
+{% if !attach_results.is_empty() %}
+<div class="notice">
+  <p>{{ "inventory.doc.status.partial_intro"|t(locale) }}</p>
+  <ul>
+    {% for r in attach_results %}
+    <li{% if !r.ok %} class="error"{% endif %}>{{ r.message }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/inventory/{{ id }}{% else %}/inventory{% endif %}" {% if id.is_none() %}enctype="multipart/form-data"{% endif %}>
   <div class="field">
     <label for="name">{{ "common.field.name"|t(locale) }}</label>
     <input type="text" id="name" name="name" value="{{ name }}" required autofocus {% if locked %}readonly{% endif %}>
@@ -31,15 +42,19 @@
   </div>
   <div class="field">
     <label>{{ "common.field.location"|t(locale) }}</label>
-    <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.germany"|t(locale) }}</label>
-    <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.brazil"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="location" value="germany" {% if location == "germany" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.germany"|t(locale) }}</label>
+      <label><input type="radio" name="location" value="brazil" {% if location == "brazil" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.location.brazil"|t(locale) }}</label>
+    </div>
     {% if locked %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
   </div>
   <div class="field">
     <label>{{ "common.field.status"|t(locale) }}</label>
-    <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.available"|t(locale) }}</label>
-    <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.reserved"|t(locale) }}</label>
-    <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.donated"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="status" value="available" {% if status == "available" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.available"|t(locale) }}</label>
+      <label><input type="radio" name="status" value="reserved" {% if status == "reserved" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.reserved"|t(locale) }}</label>
+      <label><input type="radio" name="status" value="donated" {% if status == "donated" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.item.donated"|t(locale) }}</label>
+    </div>
     {% if locked %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
   </div>
   <div class="field">
@@ -49,11 +64,13 @@
 
   <div class="field">
     <label>{{ "common.field.source"|t(locale) }}</label>
-    <label><input type="radio" name="source_type" value="donation" {% if source_type == "donation" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.donation"|t(locale) }}</label>
-    <label><input type="radio" name="source_type" value="purchase" {% if source_type == "purchase" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.purchase"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="source_type" value="donation" required {% if source_type == "donation" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.donation"|t(locale) }}</label>
+      <label><input type="radio" name="source_type" value="purchase" required {% if source_type == "purchase" %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ "status.source_type.purchase"|t(locale) }}</label>
+    </div>
     {% if locked %}<input type="hidden" name="source_type" value="{{ source_type }}">{% endif %}
   </div>
-  <div class="field">
+  <div class="field" id="source_donation_field"{% if source_type != "donation" %} style="display:none"{% endif %}>
     <label for="source_donation_id">{{ "status.source_type.donation"|t(locale) }}</label>
     <select id="source_donation_id" name="source_donation_id" {% if locked %}disabled{% endif %}>
       <option value="">{{ "common.combo.choose_one"|t(locale) }}</option>
@@ -62,9 +79,9 @@
       {% endfor %}
     </select>
     {% if locked %}<input type="hidden" name="source_donation_id" value="{% if let Some(did) = source_donation_id %}{{ did }}{% endif %}">{% endif %}
-    <p class="hint">{{ "web.inventory.hint.new_donation_before"|t(locale) }}<a href="/inventory/donations">{{ "web.inventory.hint.new_donation_link"|t(locale) }}</a>{{ "web.inventory.hint.new_donation_after"|t(locale) }}</p>
+    <p class="hint">{{ "web.inventory.hint.new_donation_before"|t(locale) }}<a id="new_donation_link" href="/inventory/donations">{{ "web.inventory.hint.new_donation_link"|t(locale) }}</a>{{ "web.inventory.hint.new_donation_after"|t(locale) }}</p>
   </div>
-  <div class="field">
+  <div class="field" id="source_purchase_field"{% if source_type != "purchase" %} style="display:none"{% endif %}>
     <label for="source_purchase_id">{{ "status.source_type.purchase"|t(locale) }}</label>
     <select id="source_purchase_id" name="source_purchase_id" {% if locked %}disabled{% endif %}>
       <option value="">{{ "common.combo.choose_one"|t(locale) }}</option>
@@ -76,11 +93,158 @@
     <p class="hint">{{ "web.inventory.hint.purchase_source"|t(locale) }}</p>
   </div>
 
+  {% if id.is_none() %}
+  <div class="field">
+    <label>{{ "web.inventory.docs.question"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="docs_toggle" value="no" checked> {{ "common.no"|t(locale) }}</label>
+      <label><input type="radio" name="docs_toggle" value="yes"> {{ "common.yes"|t(locale) }}</label>
+    </div>
+  </div>
+  <div class="field" id="docs_section" style="display:none">
+    <div id="doc_rows">
+      <div class="doc-row">
+        <label>{{ "web.doc.col.label"|t(locale) }}
+          <select name="doc_label">
+            {% for l in labels %}
+            <option value="{{ l }}">{{ l }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>{{ "web.doc.col.file"|t(locale) }}
+          <input type="file" name="doc_file">
+        </label>
+        <button type="button" class="doc-row-remove secondary">{{ "common.doc.remove"|t(locale) }}</button>
+      </div>
+    </div>
+    <button type="button" id="doc_row_add" class="secondary">{{ "web.doc.button.add_row"|t(locale) }}</button>
+  </div>
+  {% endif %}
+
   <div class="actions">
     <button type="submit">{{ "common.save"|t(locale) }}</button>
     <a class="button secondary" href="/inventory">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
+
+{% if id.is_none() %}
+<script>
+(function() {
+  var yesRadio = document.querySelector('input[name="docs_toggle"][value="yes"]');
+  var noRadio = document.querySelector('input[name="docs_toggle"][value="no"]');
+  var section = document.getElementById('docs_section');
+  var rowsContainer = document.getElementById('doc_rows');
+  var addBtn = document.getElementById('doc_row_add');
+  if (!yesRadio || !section || !rowsContainer || !addBtn) { return; }
+
+  function setRowDisabled(row, disabled) {
+    var controls = row.querySelectorAll('select, input');
+    controls.forEach(function(c) { c.disabled = disabled; });
+  }
+
+  // display:none alone does not stop a control from being submitted — a
+  // user who picks files then flips back to "No" must not have them
+  // uploaded anyway, so every row's controls are explicitly disabled too.
+  function sync() {
+    var show = yesRadio.checked;
+    section.style.display = show ? '' : 'none';
+    rowsContainer.querySelectorAll('.doc-row').forEach(function(row) {
+      setRowDisabled(row, !show);
+    });
+  }
+
+  [yesRadio, noRadio].forEach(function(r) {
+    if (r) { r.addEventListener('change', sync); }
+  });
+
+  addBtn.addEventListener('click', function() {
+    var template = rowsContainer.querySelector('.doc-row');
+    var clone = template.cloneNode(true);
+    // Clones can retain a selected file / selection in some browsers.
+    var fileInput = clone.querySelector('input[type="file"]');
+    if (fileInput) { fileInput.value = ''; }
+    var select = clone.querySelector('select');
+    if (select) { select.selectedIndex = 0; }
+    rowsContainer.appendChild(clone);
+    setRowDisabled(clone, !yesRadio.checked);
+  });
+
+  // Delegated so it covers rows added later by the clone button too.
+  rowsContainer.addEventListener('click', function(e) {
+    if (!e.target || !e.target.classList.contains('doc-row-remove')) { return; }
+    var row = e.target.closest('.doc-row');
+    var rows = rowsContainer.querySelectorAll('.doc-row');
+    if (rows.length > 1) {
+      row.remove();
+    } else {
+      var fileInput = row.querySelector('input[type="file"]');
+      if (fileInput) { fileInput.value = ''; }
+      var select = row.querySelector('select');
+      if (select) { select.selectedIndex = 0; }
+    }
+  });
+
+  sync();
+})();
+</script>
+{% endif %}
+
+<script>
+(function() {
+  var radios = document.querySelectorAll('input[name="source_type"]');
+  var donationField = document.getElementById('source_donation_field');
+  var purchaseField = document.getElementById('source_purchase_field');
+  if (!radios.length || !donationField || !purchaseField) { return; }
+  function sync() {
+    var checked = document.querySelector('input[name="source_type"]:checked');
+    var value = checked ? checked.value : '';
+    donationField.style.display = value === 'donation' ? '' : 'none';
+    purchaseField.style.display = value === 'purchase' ? '' : 'none';
+  }
+  radios.forEach(function(r) { r.addEventListener('change', sync); });
+})();
+</script>
+
+{% if id.is_none() %}
+<script>
+(function() {
+  // Keep the "+ New donation" link's return_to current, so a round trip
+  // through /inventory/donations lands back here with whatever the user
+  // had already typed (this page's own fields) still in place, plus the
+  // new donation auto-selected once create_donation() appends donation_id
+  // on the way back. Mirrors eur_ledger/form.html's identical
+  // updateNewDonorLink — only the create form carries field values along,
+  // since new_form() is the only handler that reads them back from the
+  // query string (edit_form() doesn't, same deliberate scope as eur_ledger).
+  var newDonationLink = document.getElementById('new_donation_link');
+  if (!newDonationLink) { return; }
+  var nameInput = document.getElementById('name');
+  var categorySelect = document.getElementById('category_id');
+  var notesInput = document.getElementById('notes');
+  var updateNewDonationLink = function() {
+    var params = new URLSearchParams();
+    if (nameInput && nameInput.value) { params.set('name', nameInput.value); }
+    if (categorySelect && categorySelect.value) { params.set('category_id', categorySelect.value); }
+    var locationChecked = document.querySelector('input[name="location"]:checked');
+    if (locationChecked) { params.set('location', locationChecked.value); }
+    var statusChecked = document.querySelector('input[name="status"]:checked');
+    if (statusChecked) { params.set('status', statusChecked.value); }
+    if (notesInput && notesInput.value) { params.set('notes', notesInput.value); }
+    var qs = params.toString();
+    var returnTo = '/inventory/new' + (qs ? '?' + qs : '');
+    newDonationLink.href = '/inventory/donations?return_to=' + encodeURIComponent(returnTo);
+  };
+  [nameInput, notesInput].forEach(function(el) {
+    if (el) { el.addEventListener('input', updateNewDonationLink); }
+  });
+  var changeWatched = document.querySelectorAll(
+    '#category_id, input[name="location"], input[name="status"]'
+  );
+  changeWatched.forEach(function(el) { el.addEventListener('change', updateNewDonationLink); });
+  updateNewDonationLink();
+})();
+</script>
+{% endif %}
 
 {% if let Some(id) = id %}
   <h2>{{ "common.doc.heading"|t(locale) }}</h2>
