@@ -469,7 +469,76 @@ opening a per-donor edit view — so this was a web-only fix.
   Ledger's, which is JS-populated) — it already fell into the fallback
   branch before this fix and still does now, just landing on `/donors`
   instead of the old edit-page target. Pre-existing gap, not introduced or
-  worsened here.
+  worsened here. **Still open** — see "Web Inventory: Source UX,
+  create-with-documents, '+ New donation' round trip" below for the
+  now-tracked backlog item and the fix direction.
+
+## Web Inventory: Source UX, create-with-documents, "+ New donation" round trip (implemented)
+
+Branch `web-inventory-source-type-ux` (3 commits). Three related fixes to
+the web New/Edit Item form, each reviewed independently by
+`rust-code-reviewer` with no 🔴 findings:
+
+- **Same-line radios + mandatory Source.** Location/Status/Source radios
+  now render on one line each via the existing `.radio-group` class. The
+  New Item form's Source radios (Donation/Purchase) start unselected and
+  `required`, with a JS toggle showing only the matching dropdown — mirrors
+  `web-eur-ledger-type-ux`'s Typ UX. Closes the same bug class that fix
+  closed: `create()`/`update()` used to silently default a missing/invalid
+  `source_type` to Donation instead of rejecting it; both now reject
+  authoritatively via `SourceType::from_str`. The Edit form keeps
+  pre-selecting an item's persisted `source_type` (unlike eur-ledger's
+  `tx_type`, this stays editable after creation) — only New starts blank.
+  Desktop untouched: egui's `radio_value` already only shows one sub-panel
+  per selected enum value, so it never had the dual-visible-dropdown bug.
+- **Create-with-documents.** `/inventory/new` gained the same "Attach
+  documents to this item?" toggle as `/purchases/new` — stage one or more
+  label+file pairs, filed in the same submission as the item. New
+  `core::service::create_item`/`CreatedItem`/`create_item_with_documents`,
+  mirroring `create_purchase_with_documents`/`create_transfer_with_documents`
+  (`""`/`None` for date resolution, since `InventoryItemDraft` has no date
+  field of its own — matches the existing single-document `attach_document`
+  call sites for items). Full success redirects to `/inventory`; a partial
+  attach failure re-renders the edit page with a per-file status list.
+  `update()` and the edit page's one-at-a-time attach form are unchanged.
+- **"+ New donation" round trip.** Creating a donation via the Source
+  dropdown's "+ New donation" link used to strand the user on
+  `/inventory/donations` after saving. Now mirrors `/eur-ledger/new`'s "+
+  New donor" flow exactly: `safe_return_to` (the open-redirect guard) moved
+  from `donors.rs` to `routes/mod.rs` as `pub(crate)`, now shared instead of
+  duplicated; `inventory::new_form` reads back `name`/`category_id`/
+  `location`/`status`/`notes` plus a `donation_id` query param (validated
+  against the real donations list — `core` has no dedicated
+  `get_donation(conn, id)` the way `donors_qry::get` exists for donors, so
+  this checks membership in `list_donations` instead; logged as a 🟢
+  completeness nit, not fixed, since a second call site hasn't shown up
+  yet); `donations`/`create_donation` gained `return_to` handling identical
+  in shape to `donors.rs`'s. `inventory/donations.html`'s own always-visible
+  "back to New Item" hint link also honors `return_to` when present (a
+  small scope addition beyond the literal bug report, not just the
+  post-save redirect), so navigating away without saving a donation still
+  preserves the in-progress item fields.
+
+**New backlog item, found by the owner after this branch shipped (not
+fixed — logged here for a future session):** the round trip above only
+covers one level of nesting. `inventory/donations.html` has its *own* "+
+New donor" hint link (for adding a donor while filling in a new donation)
+that still has no `return_to` at all — the exact pre-existing gap flagged
+in this file's "Donors: creating one from the main Donors page lands on
+the list" section above, which predates this branch. Concretely: Item →
+"+ New donation" → Donation form → "+ New donor" → saves → lands on
+`/donors` (the no-`return_to` fallback), stranding the user two levels
+up instead of one. Not critical (the owner's own framing) since the
+donation itself still saves fine and the outer item round trip still
+works once you navigate back manually — but the fix is a small,
+well-precedented extension of the same mechanism this branch just built:
+`inventory/donations.html`'s "+ New donor" link needs the same
+JS-populated `return_to` treatment `inventory/form.html`'s own "+ New
+donation" link just got (carry the in-progress donation fields, i.e.
+`date_received`/`notes`, plus this page's *own* incoming `return_to` so a
+three-level round trip — donor → donation → item — chains all the way
+back), and `donors.rs::create`'s existing `return_to`/`donor_id` handling
+needs no changes at all, since it's already generic.
 
 ## Workspace restructure and web front-end (in progress)
 
