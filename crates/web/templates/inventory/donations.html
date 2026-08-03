@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block content %}
 <h1>{{ "web.donations.heading"|t(locale) }}</h1>
-<p class="hint">{{ "web.donations.hint_before"|t(locale) }}<a href="/inventory/new">{{ "web.donations.hint_link"|t(locale) }}</a>{{ "web.donations.hint_after"|t(locale) }}</p>
+<p class="hint">{{ "web.donations.hint_before"|t(locale) }}<a href="{% if let Some(rt) = return_to %}{{ rt }}{% else %}/inventory/new{% endif %}">{{ "web.donations.hint_link"|t(locale) }}</a>{{ "web.donations.hint_after"|t(locale) }}</p>
 
 {% if let Some(msg) = error %}
 <div class="error">{{ msg }}</div>
@@ -9,6 +9,9 @@
 
 <h2>{{ "web.donations.new_heading"|t(locale) }}</h2>
 <form method="post" action="/inventory/donations">
+  {% if let Some(rt) = return_to %}
+  <input type="hidden" name="return_to" value="{{ rt }}">
+  {% endif %}
   <div class="field">
     <label for="date_received">{{ "inventory.donation.field.date_received"|t(locale) }}</label>
     <input type="date" id="date_received" name="date_received" value="{{ date }}" required>

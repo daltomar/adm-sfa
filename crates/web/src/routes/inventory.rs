@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
@@ -22,6 +22,7 @@ use adm_sfa_core::model::inventory::{
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
 use adm_sfa_core::service::{self, PendingDocument};
 
+use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{
     AttachResult, CategoryOption, DonationOption, DonationRow, DonationsTemplate, HtmlTemplate,
@@ -300,17 +301,73 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
-async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
+/// Query params the "+ New donation" round trip comes back with — the New
+/// Item form's own JS populates these onto the link's `return_to` on the
+/// way out (`inventory/form.html`'s `updateNewDonationLink`), and
+/// `create_donation` appends `donation_id` on the way back in, mirroring
+/// `eur_ledger.rs::new_form`'s `NewEntryQuery`/`donor_id` handling. Absent
+/// entirely on a normal fresh `/inventory/new` visit, in which case every
+/// field below is empty and `donation_id` is `None` — same as
+/// `InventoryItemDraft::default()` used to render directly.
+#[derive(Deserialize)]
+struct NewItemQuery {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    category_id: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    notes: String,
+    donation_id: Option<i64>,
+}
+
+async fn new_form(
+    State(state): State<AppState>,
+    Query(query): Query<NewItemQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
+    // Validate the id actually resolves before trusting it — mirrors
+    // `eur_ledger.rs::new_form`'s `donor_id` check: a stale link or a
+    // hand-edited query string with a nonexistent `donation_id` would
+    // otherwise still force the Source radio to Donation around a dropdown
+    // selection that doesn't exist.
+    let donations = donors_qry::list_donations(&conn).unwrap_or_default();
+    let donation_id = query
+        .donation_id
+        .filter(|id| donations.iter().any(|d| d.id == *id));
+    let draft = InventoryItemDraft {
+        name: query.name,
+        category_id: parsed_id(&query.category_id),
+        source_type: SourceType::Donation,
+        source_donation_id: donation_id,
+        source_purchase_id: None,
+        location: Location::from_str(&query.location).unwrap_or(Location::Germany),
+        status: ItemStatus::from_str(&query.status).unwrap_or(ItemStatus::Available),
+        notes: query.notes,
+    };
+    // `Some("")` keeps Source unselected for a genuinely fresh visit (no
+    // `donation_id` at all — the New Item form's usual mandatory,
+    // nothing-checked-yet state); `None` falls back to `draft.source_type`
+    // (forced to `Donation` above) once a valid `donation_id` comes back
+    // from the round trip, so that radio renders checked and its dropdown
+    // shows the newly created donation pre-selected.
+    let source_type_override = if donation_id.is_some() {
+        None
+    } else {
+        Some("")
+    };
     HtmlTemplate(form_template(
         &conn,
         None,
-        &InventoryItemDraft::default(),
+        &draft,
         None,
         Vec::new(),
         locale,
-        Some(""),
+        source_type_override,
         Vec::new(),
     ))
 }
@@ -784,7 +841,16 @@ async fn remove_document(
 /// preserving other in-progress item fields across the detour — a
 /// deliberate, documented reduced-scope tradeoff for this pass, consistent
 /// with phase 5's existing scope reductions (CLAUDE.md).
-async fn donations(State(state): State<AppState>) -> impl IntoResponse {
+#[derive(Deserialize)]
+struct DonationsQuery {
+    #[serde(default)]
+    return_to: Option<String>,
+}
+
+async fn donations(
+    State(state): State<AppState>,
+    Query(query): Query<DonationsQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let anonymous = rust_i18n::t!("common.anonymous", locale = &locale).to_string();
@@ -806,6 +872,7 @@ async fn donations(State(state): State<AppState>) -> impl IntoResponse {
         date: chrono::Local::now().format("%Y-%m-%d").to_string(),
         donors,
         error: None,
+        return_to: query.return_to.filter(|s| safe_return_to(s)),
         locale,
     })
 }
@@ -817,12 +884,15 @@ struct DonationForm {
     donor_id: String,
     #[serde(default)]
     notes: String,
+    #[serde(default)]
+    return_to: String,
 }
 
 async fn create_donation(
     State(state): State<AppState>,
     Form(form): Form<DonationForm>,
 ) -> Response {
+    let return_to = form.return_to;
     let draft = PhysicalDonationDraft {
         donor_id: parsed_id(&form.donor_id),
         date_received: form.date_received,
@@ -831,7 +901,23 @@ async fn create_donation(
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     match donors_qry::insert_donation(&conn, &draft) {
-        Ok(_) => Redirect::to("/inventory/donations").into_response(),
+        Ok(id) => {
+            if safe_return_to(&return_to) {
+                // Assumes return_to carries no #fragment (none of today's
+                // callers emit one) — appending a query after a fragment
+                // would produce a syntactically-wrong-order URL. Mirrors
+                // `donors.rs::create`.
+                let sep = if return_to.contains('?') { '&' } else { '?' };
+                Redirect::to(&format!("{return_to}{sep}donation_id={id}")).into_response()
+            } else {
+                // No caller-supplied return path (this page's own nav
+                // entry) or an unsafe one (rejected above, falls back here
+                // too) — either way lands on the donations list itself,
+                // matching the pre-existing behavior for every visit that
+                // isn't a "+ New donation" round trip.
+                Redirect::to("/inventory/donations").into_response()
+            }
+        }
         Err(e) => {
             let anonymous = rust_i18n::t!("common.anonymous", locale = &locale).to_string();
             let donations = donors_qry::list_donations(&conn).unwrap_or_default();
@@ -852,6 +938,7 @@ async fn create_donation(
                 date: draft.date_received,
                 donors,
                 error: Some(e.to_string()),
+                return_to: Some(return_to).filter(|s| safe_return_to(s)),
                 locale,
             })
             .into_response()
@@ -862,10 +949,12 @@ async fn create_donation(
 #[cfg(test)]
 mod tests {
     use crate::test_support;
+    use adm_sfa_core::db::queries::donors as donors_qry;
     use adm_sfa_core::db::queries::{
         categories as cat_qry, documents as documents_qry, inventory as qry,
         purchases as purchases_qry,
     };
+    use adm_sfa_core::model::donor::PhysicalDonationDraft;
     use adm_sfa_core::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
     use axum::body::Body;
@@ -1532,6 +1621,154 @@ mod tests {
             qry::get(&state.conn(), item_id).unwrap().unwrap().name,
             "Deck"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The "+ New donation" flow: creating a donation with a `return_to`
+    /// carried over from `/inventory/new` should redirect there (with the
+    /// new donation's id appended) instead of always landing on the
+    /// donations list. Mirrors `donors.rs`'s
+    /// `create_with_a_return_to_redirects_there_with_donor_id_appended`.
+    #[tokio::test]
+    async fn create_donation_with_a_return_to_redirects_there_with_donation_id_appended() {
+        let (state, dir) = test_support::test_app("inventory-donation-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date_received=2026-01-01&donor_id=&notes=\
+                     &return_to=%2Finventory%2Fnew%3Fname%3DDeck";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory/donations")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/inventory/new?name=Deck&donation_id=1");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_donation_without_a_return_to_redirects_to_the_donations_list() {
+        let (state, dir) = test_support::test_app("inventory-donation-no-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date_received=2026-01-01&donor_id=&notes=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory/donations")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/inventory/donations");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `return_to` that isn't a root-relative path (an open-redirect
+    /// attempt) is rejected — falls back to the donations list instead of
+    /// ever being handed to `Redirect::to`. Mirrors `donors.rs`'s
+    /// `create_ignores_an_unsafe_return_to`.
+    #[tokio::test]
+    async fn create_donation_ignores_an_unsafe_return_to() {
+        let (state, dir) = test_support::test_app("inventory-donation-unsafe-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date_received=2026-01-01&donor_id=&notes=\
+                     &return_to=https%3A%2F%2Fevil.example";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/inventory/donations")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/inventory/donations");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The read-back side of the round trip: a valid `donation_id` query
+    /// param on `/inventory/new` should preselect Source=Donation, show the
+    /// dropdown, and select the new donation — plus the other in-progress
+    /// fields (name, category, location, status, notes) the New Item form's
+    /// own JS carried along on the way out. Mirrors `eur_ledger.rs`'s
+    /// `new_form_with_a_donor_id_query_param_preselects_and_shows_donor`.
+    #[tokio::test]
+    async fn new_form_with_a_donation_id_query_param_preselects_and_shows_donation() {
+        let (state, dir) = test_support::test_app("inventory-new-form-donation-prefill");
+        let cat_id = cat_qry::insert(&state.conn(), "Decks").unwrap();
+        let donation_id = donors_qry::insert_donation(
+            &state.conn(),
+            &PhysicalDonationDraft {
+                donor_id: None,
+                date_received: "2026-01-05".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/inventory/new?name=Deck&category_id={cat_id}&location=brazil&status=reserved\
+                 &notes=handled+with+care&donation_id={donation_id}"
+            ))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains(r#"value="Deck""#));
+        assert!(body_text.contains(&format!(r#"value="{cat_id}" selected"#)));
+        assert!(body_text.contains(r#"value="brazil" checked"#));
+        assert!(body_text.contains(r#"value="reserved" checked"#));
+        assert!(body_text.contains("handled with care"));
+        assert!(body_text.contains(r#"value="donation" required checked"#));
+        assert!(body_text.contains(&format!(r#"value="{donation_id}" selected"#)));
+        assert!(!body_text.contains(r#"id="source_donation_field" style="display:none""#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `donation_id` that doesn't resolve to a real donation (stale link,
+    /// or a hand-edited query string) must not force Source open — mirrors
+    /// `eur_ledger.rs`'s
+    /// `new_form_with_a_nonexistent_donor_id_does_not_show_the_donor_field`.
+    #[tokio::test]
+    async fn new_form_with_a_nonexistent_donation_id_does_not_preselect_source() {
+        let (state, dir) = test_support::test_app("inventory-new-form-bad-donation-id");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/inventory/new?donation_id=999999")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains(r#"id="source_donation_field" style="display:none""#));
+        assert!(!body_text.contains(r#"value="donation" required checked"#));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

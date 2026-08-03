@@ -8,6 +8,7 @@ use serde::Deserialize;
 use adm_sfa_core::db::queries::donors as donors_qry;
 use adm_sfa_core::model::donor::DonorDraft;
 
+use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{DonorFormTemplate, DonorRow, DonorsListTemplate, HtmlTemplate};
 
@@ -34,22 +35,6 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
         donors: rows,
         locale,
     })
-}
-
-/// A same-origin, root-relative path — rejects absolute URLs (`https://...`)
-/// and protocol-relative ones (`//evil.example`) so a crafted `return_to`
-/// can't be used as an open redirect. `create()` is the only place this
-/// value is ever used in a `Redirect::to`.
-///
-/// A bare `starts_with('/') && !starts_with("//")` isn't enough on its own:
-/// WHATWG URL parsing (what a real browser applies to a `Location` header)
-/// normalizes backslashes to forward slashes and strips ASCII tab/CR/LF
-/// *before* resolving a relative reference, so e.g. `/\evil.example` or
-/// `/\t/evil.example` both pass that check yet still resolve to an external
-/// origin. Reject any backslash or control character outright rather than
-/// trying to enumerate every such normalization individually.
-fn safe_return_to(s: &str) -> bool {
-    s.starts_with('/') && !s.starts_with("//") && !s.chars().any(|c| c == '\\' || c.is_control())
 }
 
 #[derive(Deserialize)]

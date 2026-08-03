@@ -351,6 +351,13 @@ pub struct DonationsTemplate {
     pub date: String,
     pub donors: Vec<(i64, String)>,
     pub error: Option<String>,
+    /// Round-tripped from `?return_to=` on `GET /inventory/donations`
+    /// through a hidden form field, so `create_donation()` can redirect
+    /// back to the page that linked here (`/inventory/new`) instead of
+    /// always landing on this donations list. `None` when this page was
+    /// reached any other way (e.g. its own nav entry). Mirrors
+    /// `DonorFormTemplate::return_to`.
+    pub return_to: Option<String>,
     pub locale: String,
 }
 

@@ -79,7 +79,7 @@
       {% endfor %}
     </select>
     {% if locked %}<input type="hidden" name="source_donation_id" value="{% if let Some(did) = source_donation_id %}{{ did }}{% endif %}">{% endif %}
-    <p class="hint">{{ "web.inventory.hint.new_donation_before"|t(locale) }}<a href="/inventory/donations">{{ "web.inventory.hint.new_donation_link"|t(locale) }}</a>{{ "web.inventory.hint.new_donation_after"|t(locale) }}</p>
+    <p class="hint">{{ "web.inventory.hint.new_donation_before"|t(locale) }}<a id="new_donation_link" href="/inventory/donations">{{ "web.inventory.hint.new_donation_link"|t(locale) }}</a>{{ "web.inventory.hint.new_donation_after"|t(locale) }}</p>
   </div>
   <div class="field" id="source_purchase_field"{% if source_type != "purchase" %} style="display:none"{% endif %}>
     <label for="source_purchase_id">{{ "status.source_type.purchase"|t(locale) }}</label>
@@ -204,6 +204,47 @@
   radios.forEach(function(r) { r.addEventListener('change', sync); });
 })();
 </script>
+
+{% if id.is_none() %}
+<script>
+(function() {
+  // Keep the "+ New donation" link's return_to current, so a round trip
+  // through /inventory/donations lands back here with whatever the user
+  // had already typed (this page's own fields) still in place, plus the
+  // new donation auto-selected once create_donation() appends donation_id
+  // on the way back. Mirrors eur_ledger/form.html's identical
+  // updateNewDonorLink — only the create form carries field values along,
+  // since new_form() is the only handler that reads them back from the
+  // query string (edit_form() doesn't, same deliberate scope as eur_ledger).
+  var newDonationLink = document.getElementById('new_donation_link');
+  if (!newDonationLink) { return; }
+  var nameInput = document.getElementById('name');
+  var categorySelect = document.getElementById('category_id');
+  var notesInput = document.getElementById('notes');
+  var updateNewDonationLink = function() {
+    var params = new URLSearchParams();
+    if (nameInput && nameInput.value) { params.set('name', nameInput.value); }
+    if (categorySelect && categorySelect.value) { params.set('category_id', categorySelect.value); }
+    var locationChecked = document.querySelector('input[name="location"]:checked');
+    if (locationChecked) { params.set('location', locationChecked.value); }
+    var statusChecked = document.querySelector('input[name="status"]:checked');
+    if (statusChecked) { params.set('status', statusChecked.value); }
+    if (notesInput && notesInput.value) { params.set('notes', notesInput.value); }
+    var qs = params.toString();
+    var returnTo = '/inventory/new' + (qs ? '?' + qs : '');
+    newDonationLink.href = '/inventory/donations?return_to=' + encodeURIComponent(returnTo);
+  };
+  [nameInput, notesInput].forEach(function(el) {
+    if (el) { el.addEventListener('input', updateNewDonationLink); }
+  });
+  var changeWatched = document.querySelectorAll(
+    '#category_id, input[name="location"], input[name="status"]'
+  );
+  changeWatched.forEach(function(el) { el.addEventListener('change', updateNewDonationLink); });
+  updateNewDonationLink();
+})();
+</script>
+{% endif %}
 
 {% if let Some(id) = id %}
   <h2>{{ "common.doc.heading"|t(locale) }}</h2>
