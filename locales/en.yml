@@ -196,6 +196,7 @@ transfers.error.eur_zero: "EUR amount sent must be greater than zero"
 transfers.error.rate_invalid: "Exchange rate isn't a valid amount — use e.g. 5.4321 or 5,4321"
 transfers.error.rate_zero: "Exchange rate must be greater than zero"
 transfers.error.linked_record_not_found: "The linked transfer could not be found. It may have been deleted."
+transfers.doc.status.partial_intro: "The transfer was saved, but not every document could be attached:"
 
 # Enum/status display-layer keys (SPEC.md §6, task: display-layer i18n).
 # Derived from the stored English DB value — the DB itself stays monolingual.
@@ -401,6 +402,7 @@ web.purchases.col.channel: "Channel"
 web.purchases.col.cost: "Cost"
 web.purchases.confirm.drop_negotiating: "Permanently delete this negotiating purchase? This cannot be undone."
 web.purchases.docs.question: "Attach documents to this purchase?"
+web.transfers.docs.question: "Attach documents to this transfer?"
 
 web.donations.heading: "Donation records"
 web.donations.new_heading: "New donation record"

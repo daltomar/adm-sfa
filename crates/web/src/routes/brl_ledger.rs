@@ -42,8 +42,12 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let balance = compute_balance(rows.iter().map(|r| (r.tx_type.is_inflow(), r.amount)));
     let balance_display = format::amount(balance);
 
+    // `qry::list` returns newest-first (shared with desktop, which relies on
+    // that same order — reversed here, web-presentation-only, matching the
+    // precedent set for the EUR Ledger list page).
     let view_rows = rows
         .iter()
+        .rev()
         .map(|r| BrlLedgerRow {
             date_display: format::date(&r.date),
             type_label: type_label(r.tx_type, &locale),
@@ -67,4 +71,70 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
         balance_label,
         locale,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support;
+    use adm_sfa_core::db::queries::purchases as purchases_qry;
+    use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+
+    /// Regression coverage for CLAUDE.md's "Sorting" backlog item, mirroring
+    /// `eur_ledger.rs`'s `list_shows_the_oldest_entry_first`. `brl_transaction`
+    /// rows have no direct `insert` — they're only ever created as a side
+    /// effect of a BRL-currency purchase, so that's what seeds this test.
+    #[tokio::test]
+    async fn list_shows_the_oldest_entry_first() {
+        let (state, dir) = test_support::test_app("brl-ledger-list-oldest-first");
+        let conn = state.conn();
+        purchases_qry::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Brl,
+                cost_str: "111.11".to_string(),
+                channel: "older".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        purchases_qry::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-06-01".to_string(),
+                currency: Currency::Brl,
+                cost_str: "222.22".to_string(),
+                channel: "newer".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/brl-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        let older_pos = body.find("older").expect("older channel not found");
+        let newer_pos = body.find("newer").expect("newer channel not found");
+        assert!(
+            older_pos < newer_pos,
+            "expected the older transaction to render before the newer one"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

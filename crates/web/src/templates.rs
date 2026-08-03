@@ -257,6 +257,8 @@ pub struct TransferFormTemplate {
     pub documents: Vec<adm_sfa_core::model::document::Document>,
     /// See `PurchaseFormTemplate::labels`.
     pub labels: Vec<String>,
+    /// See `PurchaseFormTemplate::attach_results`.
+    pub attach_results: Vec<AttachResult>,
     pub locale: String,
 }
 

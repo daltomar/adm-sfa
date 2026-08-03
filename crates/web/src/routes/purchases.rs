@@ -99,8 +99,12 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let purchases = purchases_qry::list(&conn).unwrap_or_default();
+    // `list` returns newest-first (shared with desktop, which relies on
+    // that same order — reversed here, web-presentation-only, matching the
+    // precedent set for the EUR Ledger list page).
     let rows = purchases
         .into_iter()
+        .rev()
         .map(|p| PurchaseRow {
             id: p.id,
             date_display: format::date(&p.date),
@@ -562,7 +566,8 @@ mod tests {
     use crate::test_support;
     use adm_sfa_core::db::queries::{documents as documents_qry, purchases as purchases_qry};
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
-    use axum::http::StatusCode;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
 
     fn a_purchase_draft() -> PurchaseDraft {
         PurchaseDraft {
@@ -949,6 +954,44 @@ mod tests {
         assert_eq!(res.headers().get("location").unwrap(), "/login");
         let conn = state.conn();
         assert_eq!(purchases_qry::list(&conn).unwrap().len(), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression coverage for CLAUDE.md's "Sorting" backlog item, mirroring
+    /// `eur_ledger.rs`'s `list_shows_the_oldest_entry_first`.
+    #[tokio::test]
+    async fn list_shows_the_oldest_purchase_first() {
+        let (state, dir) = test_support::test_app("purchases-list-oldest-first");
+        let conn = state.conn();
+        let mut older = a_purchase_draft();
+        older.date = "2026-01-01".to_string();
+        older.channel = "OlderChannel".to_string();
+        purchases_qry::insert(&conn, &older).unwrap();
+        let mut newer = a_purchase_draft();
+        newer.date = "2026-06-01".to_string();
+        newer.channel = "NewerChannel".to_string();
+        purchases_qry::insert(&conn, &newer).unwrap();
+        drop(conn);
+
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/purchases")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        let older_pos = body.find("OlderChannel").expect("older channel not found");
+        let newer_pos = body.find("NewerChannel").expect("newer channel not found");
+        assert!(
+            older_pos < newer_pos,
+            "expected the older purchase to render before the newer one"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
