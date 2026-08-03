@@ -10,7 +10,18 @@
 <div class="error">{{ msg }}</div>
 {% endif %}
 
-<form method="post" action="{% if let Some(id) = id %}/transfers/{{ id }}{% else %}/transfers{% endif %}">
+{% if !attach_results.is_empty() %}
+<div class="notice">
+  <p>{{ "transfers.doc.status.partial_intro"|t(locale) }}</p>
+  <ul>
+    {% for r in attach_results %}
+    <li{% if !r.ok %} class="error"{% endif %}>{{ r.message }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/transfers/{{ id }}{% else %}/transfers{% endif %}" {% if id.is_none() %}enctype="multipart/form-data"{% endif %}>
   <div class="field">
     <label for="date">{{ "common.field.date"|t(locale) }}</label>
     <input type="date" id="date" name="date" value="{{ date }}" required>
@@ -23,18 +34,144 @@
     <label for="exchange_rate_str">{{ "transfers.field.exchange_rate"|t(locale) }}</label>
     <input type="text" id="exchange_rate_str" name="exchange_rate_str" value="{{ exchange_rate_str }}" placeholder="{{ "transfers.field.exchange_rate_hint"|t(locale) }}" required>
   </div>
-  {% if let Some(preview) = brl_preview %}
-  <p class="hint">{{ preview }}</p>
-  {% endif %}
+  <p id="brl_preview_line" class="hint"{% if brl_preview.is_none() %} style="display:none"{% endif %}>{% if let Some(preview) = brl_preview %}{{ preview }}{% endif %}</p>
   <div class="field">
     <label for="notes">{{ "common.field.notes"|t(locale) }}</label>
     <textarea id="notes" name="notes" rows="3">{{ notes }}</textarea>
   </div>
+  {% if id.is_none() %}
+  <div class="field">
+    <label>{{ "web.transfers.docs.question"|t(locale) }}</label>
+    <div class="radio-group">
+      <label><input type="radio" name="docs_toggle" value="no" checked> {{ "common.no"|t(locale) }}</label>
+      <label><input type="radio" name="docs_toggle" value="yes"> {{ "common.yes"|t(locale) }}</label>
+    </div>
+  </div>
+  <div class="field" id="docs_section" style="display:none">
+    <div id="doc_rows">
+      <div class="doc-row">
+        <label>{{ "web.doc.col.label"|t(locale) }}
+          <select name="doc_label">
+            {% for l in labels %}
+            <option value="{{ l }}">{{ l }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>{{ "web.doc.col.file"|t(locale) }}
+          <input type="file" name="doc_file">
+        </label>
+        <button type="button" class="doc-row-remove secondary">{{ "common.doc.remove"|t(locale) }}</button>
+      </div>
+    </div>
+    <button type="button" id="doc_row_add" class="secondary">{{ "web.doc.button.add_row"|t(locale) }}</button>
+  </div>
+  {% endif %}
   <div class="actions">
     <button type="submit">{{ "common.save"|t(locale) }}</button>
     <a class="button secondary" href="/transfers">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
+
+<script>
+(function() {
+  var eurInput = document.getElementById('eur_amount_sent_str');
+  var rateInput = document.getElementById('exchange_rate_str');
+  var previewLine = document.getElementById('brl_preview_line');
+  if (!eurInput || !rateInput || !previewLine) { return; }
+
+  // Debounced round trip to the server rather than reimplementing
+  // core::format's locale-aware decimal formatting and the translated
+  // "%{amount}" sentence in JS — keeps a single source of truth for both.
+  var timer = null;
+  function scheduleUpdate() {
+    if (timer) { clearTimeout(timer); }
+    timer = setTimeout(updatePreview, 250);
+  }
+
+  function updatePreview() {
+    var params = new URLSearchParams({
+      eur_amount_sent_str: eurInput.value,
+      exchange_rate_str: rateInput.value
+    });
+    fetch('/transfers/preview?' + params.toString())
+      .then(function(res) { return res.ok ? res.text() : ''; })
+      .then(function(text) {
+        if (text) {
+          previewLine.textContent = text;
+          previewLine.style.display = '';
+        } else {
+          previewLine.style.display = 'none';
+        }
+      })
+      .catch(function() { /* network hiccup — leave the last-known preview as-is */ });
+  }
+
+  eurInput.addEventListener('input', scheduleUpdate);
+  rateInput.addEventListener('input', scheduleUpdate);
+})();
+</script>
+
+{% if id.is_none() %}
+<script>
+(function() {
+  var yesRadio = document.querySelector('input[name="docs_toggle"][value="yes"]');
+  var noRadio = document.querySelector('input[name="docs_toggle"][value="no"]');
+  var section = document.getElementById('docs_section');
+  var rowsContainer = document.getElementById('doc_rows');
+  var addBtn = document.getElementById('doc_row_add');
+  if (!yesRadio || !section || !rowsContainer || !addBtn) { return; }
+
+  function setRowDisabled(row, disabled) {
+    var controls = row.querySelectorAll('select, input');
+    controls.forEach(function(c) { c.disabled = disabled; });
+  }
+
+  // display:none alone does not stop a control from being submitted — a
+  // user who picks files then flips back to "No" must not have them
+  // uploaded anyway, so every row's controls are explicitly disabled too.
+  function sync() {
+    var show = yesRadio.checked;
+    section.style.display = show ? '' : 'none';
+    rowsContainer.querySelectorAll('.doc-row').forEach(function(row) {
+      setRowDisabled(row, !show);
+    });
+  }
+
+  [yesRadio, noRadio].forEach(function(r) {
+    if (r) { r.addEventListener('change', sync); }
+  });
+
+  addBtn.addEventListener('click', function() {
+    var template = rowsContainer.querySelector('.doc-row');
+    var clone = template.cloneNode(true);
+    // Clones can retain a selected file / selection in some browsers.
+    var fileInput = clone.querySelector('input[type="file"]');
+    if (fileInput) { fileInput.value = ''; }
+    var select = clone.querySelector('select');
+    if (select) { select.selectedIndex = 0; }
+    rowsContainer.appendChild(clone);
+    setRowDisabled(clone, !yesRadio.checked);
+  });
+
+  // Delegated so it covers rows added later by the clone button too.
+  rowsContainer.addEventListener('click', function(e) {
+    if (!e.target || !e.target.classList.contains('doc-row-remove')) { return; }
+    var row = e.target.closest('.doc-row');
+    var rows = rowsContainer.querySelectorAll('.doc-row');
+    if (rows.length > 1) {
+      row.remove();
+    } else {
+      var fileInput = row.querySelector('input[type="file"]');
+      if (fileInput) { fileInput.value = ''; }
+      var select = row.querySelector('select');
+      if (select) { select.selectedIndex = 0; }
+    }
+  });
+
+  sync();
+})();
+</script>
+{% endif %}
 
 {% if let Some(id) = id %}
   <h2>{{ "common.doc.heading"|t(locale) }}</h2>

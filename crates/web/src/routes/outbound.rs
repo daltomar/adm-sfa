@@ -116,8 +116,12 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let events = qry::list(&conn).unwrap_or_default();
+    // `list` returns newest-first (shared with desktop, which relies on
+    // that same order — reversed here, web-presentation-only, matching the
+    // precedent set for the EUR Ledger list page).
     let rows = events
         .into_iter()
+        .rev()
         .map(|e| OutboundRow {
             id: e.id,
             date_display: format::date(&e.date),
@@ -342,6 +346,74 @@ async fn create_recipient(
                 locale,
             })
             .into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support;
+    use adm_sfa_core::model::outbound::{OutboundEventDraft, RecipientProjectDraft};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+
+    /// Regression coverage for CLAUDE.md's "Sorting" backlog item, mirroring
+    /// `eur_ledger.rs`'s `list_shows_the_oldest_entry_first`.
+    #[tokio::test]
+    async fn list_shows_the_oldest_event_first() {
+        let (state, dir) = test_support::test_app("outbound-list-oldest-first");
+        let conn = state.conn();
+        let rp_id = super::qry::insert_recipient_project(&conn, &recipient_draft("OlderRecipient"))
+            .unwrap();
+        let rp2_id =
+            super::qry::insert_recipient_project(&conn, &recipient_draft("NewerRecipient"))
+                .unwrap();
+        service_donate(&conn, rp_id, "2026-01-01");
+        service_donate(&conn, rp2_id, "2026-06-01");
+        drop(conn);
+
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/outbound")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        let older_pos = body
+            .find("OlderRecipient")
+            .expect("older recipient not found");
+        let newer_pos = body
+            .find("NewerRecipient")
+            .expect("newer recipient not found");
+        assert!(
+            older_pos < newer_pos,
+            "expected the older event to render before the newer one"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn service_donate(conn: &rusqlite::Connection, recipient_project_id: i64, date: &str) {
+        let draft = OutboundEventDraft {
+            date: date.to_string(),
+            recipient_project_id: Some(recipient_project_id),
+            cash_amount_brl_str: "50.00".to_string(),
+            notes: String::new(),
+        };
+        adm_sfa_core::service::donate_items(conn, &draft, &[]).unwrap();
+    }
+
+    fn recipient_draft(name: &str) -> RecipientProjectDraft {
+        RecipientProjectDraft {
+            name: name.to_string(),
+            contact_info: String::new(),
+            location: String::new(),
+            active: true,
         }
     }
 }

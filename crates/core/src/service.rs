@@ -11,10 +11,12 @@ use rusqlite::{Connection, Result};
 
 use crate::db::queries::{
     documents as documents_qry, outbound as outbound_qry, purchases as purchases_qry,
+    transfers as transfers_qry,
 };
 use crate::docs_fs;
 use crate::model::outbound::OutboundEventDraft;
 use crate::model::purchase::{PurchaseDraft, PurchaseStatus};
+use crate::model::transfer::TransferDraft;
 
 pub fn create_purchase(conn: &Connection, draft: &PurchaseDraft) -> Result<i64> {
     purchases_qry::insert(conn, draft)
@@ -230,6 +232,44 @@ pub fn create_purchase_with_documents(
         pending,
     );
     Ok(CreatedPurchase { id, attachments })
+}
+
+pub fn create_transfer(conn: &Connection, draft: &TransferDraft) -> Result<i64> {
+    transfers_qry::insert(conn, draft)
+}
+
+/// A newly-created transfer and the outcome of attempting to attach every
+/// document staged alongside it — same shape and same `#[must_use]`
+/// reasoning as `CreatedPurchase`.
+#[must_use]
+pub struct CreatedTransfer {
+    pub id: i64,
+    pub attachments: Vec<AttachmentOutcome>,
+}
+
+/// Creates a transfer and attaches every staged document to it in one call.
+/// Same partial-failure contract as `create_purchase_with_documents`: `Err`
+/// only if the transfer itself fails to save (an invalid date, a
+/// non-positive amount/rate, or an overflowing `amount * rate` — see
+/// `db::queries::transfers::insert`); a saved transfer with some documents
+/// failing to attach is still `Ok`, with the per-file outcomes in
+/// `CreatedTransfer::attachments`.
+pub fn create_transfer_with_documents(
+    conn: &Connection,
+    documents_dir: &Path,
+    draft: &TransferDraft,
+    pending: &[PendingDocument<'_>],
+) -> Result<CreatedTransfer> {
+    let id = create_transfer(conn, draft)?;
+    let attachments = attach_documents(
+        conn,
+        documents_dir,
+        &draft.date,
+        None,
+        ("transfer", id),
+        pending,
+    );
+    Ok(CreatedTransfer { id, attachments })
 }
 
 #[cfg(test)]
@@ -598,6 +638,163 @@ mod tests {
         bad_draft.cost_str = "not a number".to_string();
 
         let result = create_purchase_with_documents(&conn, &documents_dir, &bad_draft, &pending);
+
+        assert!(result.is_err());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn transfer_draft() -> TransferDraft {
+        TransferDraft {
+            date: "2026-01-01".to_string(),
+            eur_amount_sent_str: "1000.00".to_string(),
+            exchange_rate_str: "5.5".to_string(),
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn create_transfer_with_documents_attaches_every_staged_file() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("transfer-attaches-every-file");
+        let chat_src = tmp.join("chat.png");
+        std::fs::write(&chat_src, b"fake").unwrap();
+        let receipt_src = tmp.join("receipt.pdf");
+        std::fs::write(&receipt_src, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &chat_src,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &receipt_src,
+                label: "receipt",
+            },
+        ];
+
+        let created =
+            create_transfer_with_documents(&conn, &documents_dir, &transfer_draft(), &pending)
+                .unwrap();
+
+        assert_eq!(created.attachments.len(), 2);
+        assert!(created.attachments.iter().all(|a| a.result.is_ok()));
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "transfer", created.id)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_transfer_with_documents_deduplicates_filenames_within_one_batch() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("transfer-dedup-within-batch");
+        let src_a = tmp.join("a.png");
+        std::fs::write(&src_a, b"fake").unwrap();
+        let src_b = tmp.join("b.png");
+        std::fs::write(&src_b, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &src_a,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &src_b,
+                label: "chat",
+            },
+        ];
+
+        let created =
+            create_transfer_with_documents(&conn, &documents_dir, &transfer_draft(), &pending)
+                .unwrap();
+
+        let filenames: Vec<String> = created
+            .attachments
+            .iter()
+            .map(|a| a.result.clone().unwrap())
+            .collect();
+        assert_eq!(filenames.len(), 2);
+        assert_ne!(filenames[0], filenames[1]);
+        assert!(filenames[1].contains("-2"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_transfer_with_documents_records_a_per_file_failure_without_rolling_back() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("transfer-partial-failure");
+        let good_src = tmp.join("good.png");
+        std::fs::write(&good_src, b"fake").unwrap();
+        let bad_src = tmp.join("bad.png");
+        std::fs::write(&bad_src, b"fake").unwrap();
+        let pending = vec![
+            PendingDocument {
+                path: &good_src,
+                label: "chat",
+            },
+            PendingDocument {
+                path: &bad_src,
+                label: "not-a-real-label",
+            },
+        ];
+
+        let created =
+            create_transfer_with_documents(&conn, &documents_dir, &transfer_draft(), &pending)
+                .unwrap();
+
+        assert!(created.attachments[0].result.is_ok());
+        assert!(created.attachments[1].result.is_err());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "transfer", created.id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_transfer_with_documents_with_no_attachments_creates_just_the_transfer() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("transfer-no-attachments");
+
+        let created =
+            create_transfer_with_documents(&conn, &documents_dir, &transfer_draft(), &[]).unwrap();
+
+        assert!(created.attachments.is_empty());
+        assert_eq!(
+            documents_qry::list_for_record(&conn, "transfer", created.id)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn create_transfer_with_documents_files_nothing_when_the_transfer_cannot_be_inserted() {
+        let conn = test_db();
+        let (tmp, documents_dir) = create_with_docs_test_dir("transfer-insert-fails");
+        let src = tmp.join("chat.png");
+        std::fs::write(&src, b"fake").unwrap();
+        let pending = vec![PendingDocument {
+            path: &src,
+            label: "chat",
+        }];
+        let mut bad_draft = transfer_draft();
+        bad_draft.eur_amount_sent_str = "not a number".to_string();
+
+        let result = create_transfer_with_documents(&conn, &documents_dir, &bad_draft, &pending);
 
         assert!(result.is_err());
         let count: i64 = conn
