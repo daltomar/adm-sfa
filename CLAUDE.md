@@ -745,6 +745,27 @@ arithmetic, per `rust-code-reviewer`):
   the thing that surfaced it during review. Fix direction: either have
   `generate_filename` also consult `_deleted/` filenames, or namespace
   `_deleted/` by document id so collisions can't occur at all.
+- **Open, undiagnosed — surfaced during phase 4's manual test pass, not a
+  code review finding.** Drag-and-drop document attach may not work.
+  Reported against `phase4.md`'s manual checklist; this code is untouched
+  by any of phases 1–4 (the service-layer work never touched
+  `dropped_files`/`hovered_files` handling), so if real, it isn't a
+  restructure regression — it was already broken, or platform-dependent,
+  before this work started. Never diagnosed: no display server was
+  available in that session to exercise the drag-and-drop path
+  (`ui.input(|i| i.raw.dropped_files...)` in `purchases.rs`/`transfers.rs`/
+  `inventory.rs`'s `show_documents`, relying on `eframe`/`winit` 0.35's
+  native OS file-drop delivery). The "Attach file" button (manual path
+  entry, same three views) doesn't depend on native drag-and-drop and is a
+  working fallback in the meantime. Needs: reproduce on the actual target
+  OS/desktop environment, check whether `hovered_files` (the drag-in-
+  progress highlight) fires at all vs. only the drop event, and check
+  `eframe`/`winit`'s changelog for known Wayland/X11 drag-and-drop
+  regressions around the pinned `0.35` version. (This note was originally
+  written on a local branch, `phase-4-service-layer`, whose last commit
+  never got merged with the rest of that phase's PR — recovered and logged
+  here so it isn't lost; the branch itself is being kept around rather
+  than deleted, in case its exact commit history is wanted later.)
 
 **New backlog items found during phase 5's review** (the three 🟡s that
 *were* fixed before commit are described in the phase 5 summary above, not
