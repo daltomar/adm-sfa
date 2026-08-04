@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block content %}
 <h1>{{ "web.outbound.recipients.heading"|t(locale) }}</h1>
-<p class="hint">{{ "web.outbound.recipients.hint_before"|t(locale) }}<a href="/outbound/new">{{ "web.outbound.recipients.hint_link"|t(locale) }}</a>{{ "web.outbound.recipients.hint_after"|t(locale) }}</p>
+<p class="hint">{{ "web.outbound.recipients.hint_before"|t(locale) }}<a href="{% if let Some(rt) = return_to %}{{ rt }}{% else %}/outbound/new{% endif %}">{{ "web.outbound.recipients.hint_link"|t(locale) }}</a>{{ "web.outbound.recipients.hint_after"|t(locale) }}</p>
 
 {% if let Some(msg) = error %}
 <div class="error">{{ msg }}</div>
@@ -9,6 +9,9 @@
 
 <h2>{{ "web.outbound.recipients.new_heading"|t(locale) }}</h2>
 <form method="post" action="/outbound/recipients">
+  {% if let Some(rt) = return_to %}
+  <input type="hidden" name="return_to" value="{{ rt }}">
+  {% endif %}
   <div class="field">
     <label for="name">{{ "common.field.name"|t(locale) }}</label>
     <input type="text" id="name" name="name" required autofocus>

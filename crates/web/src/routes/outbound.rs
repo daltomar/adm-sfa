@@ -1,4 +1,4 @@
-use axum::extract::{Path, RawForm, State};
+use axum::extract::{Path, Query, RawForm, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Form;
@@ -12,6 +12,7 @@ use adm_sfa_core::model::inventory::{InventoryItemRow, ItemStatus};
 use adm_sfa_core::model::outbound::{OutboundEventDraft, RecipientProject, RecipientProjectDraft};
 use adm_sfa_core::service;
 
+use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{
     HtmlTemplate, ItemOption, OutboundFormTemplate, OutboundListTemplate, OutboundRow,
@@ -135,12 +136,45 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
-async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
+/// Query params the "+ New recipient" round trip comes back with —
+/// `form.html`'s JS populates these onto the link's `return_to` on the way
+/// out, and `create_recipient` appends `recipient_project_id` on the way
+/// back in. Mirrors `eur_ledger.rs`'s `NewEntryQuery`/`donor_id` handling.
+/// All fields optional so a plain `GET /outbound/new` behaves exactly as
+/// before.
+#[derive(Deserialize)]
+struct NewEventQuery {
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    cash_amount_brl_str: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    recipient_project_id: Option<i64>,
+}
+
+async fn new_form(
+    State(state): State<AppState>,
+    Query(query): Query<NewEventQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
+    // Validate the id actually resolves before trusting it — mirrors
+    // `eur_ledger.rs::new_form`'s `donor_id` check: a stale link or a
+    // hand-edited query string with a nonexistent `recipient_project_id`
+    // would otherwise silently fail to preselect anything.
+    let recipients = qry::list_recipient_projects(&conn).unwrap_or_default();
+    let recipient_project_id = query
+        .recipient_project_id
+        .filter(|id| recipients.iter().any(|r| r.id == *id));
     let draft = OutboundEventDraft {
-        date: chrono::Local::now().format("%Y-%m-%d").to_string(),
-        ..OutboundEventDraft::default()
+        date: query
+            .date
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string()),
+        recipient_project_id,
+        cash_amount_brl_str: query.cash_amount_brl_str.unwrap_or_default(),
+        notes: query.notes.unwrap_or_default(),
     };
     HtmlTemplate(form_template(&conn, None, &draft, &[], None, locale))
 }
@@ -232,7 +266,12 @@ async fn create(State(state): State<AppState>, RawForm(bytes): RawForm) -> Respo
     };
     let conn = state.conn();
     match service::donate_items(&conn, &draft, &form.item_ids) {
-        Ok(id) => Redirect::to(&format!("/outbound/{id}/edit")).into_response(),
+        // Lands on the Outbound list, not this event's own edit page — matches
+        // the same fix already applied to donors.rs's create() and
+        // inventory.rs's create_donation(): the normal "section page → + New
+        // X" flow should return to the list, not detour through an edit view
+        // the user didn't ask to open.
+        Ok(_id) => Redirect::to("/outbound").into_response(),
         Err(e) => {
             let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
@@ -278,15 +317,28 @@ async fn update(
     }
 }
 
+#[derive(Deserialize)]
+struct RecipientsQuery {
+    #[serde(default)]
+    return_to: Option<String>,
+}
+
 /// Recipient projects, like physical donations (see `inventory.rs`'s
 /// `/inventory/donations`), are only ever created inline from this
 /// section's own sub-form in desktop — no standalone CRUD page. Same
 /// no-JS constraint, same standalone-detour solution: create here, then
-/// pick it from the dropdown back on `/outbound/new`. Unlike donations,
-/// recipient projects *can* be edited in principle (an `active` flag
-/// exists), but `core` has no `update` for this table either — matching
-/// what's actually implemented rather than adding one speculatively.
-async fn recipients(State(state): State<AppState>) -> impl IntoResponse {
+/// get carried straight back to `/outbound/new` via the `return_to` round
+/// trip (mirroring `donors.rs` / `inventory.rs`'s "+ New donor"/"+ New
+/// donation" flows) with the new recipient preselected in the dropdown —
+/// `create_recipient` appends `recipient_project_id` on the way back, and
+/// `new_form` reads it back to preselect. Unlike donations, recipient
+/// projects *can* be edited in principle (an `active` flag exists), but
+/// `core` has no `update` for this table either — matching what's
+/// actually implemented rather than adding one speculatively.
+async fn recipients(
+    State(state): State<AppState>,
+    Query(query): Query<RecipientsQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let recipients = qry::list_recipient_projects(&conn).unwrap_or_default();
@@ -302,6 +354,7 @@ async fn recipients(State(state): State<AppState>) -> impl IntoResponse {
     HtmlTemplate(RecipientsTemplate {
         recipients: rows,
         error: None,
+        return_to: query.return_to.filter(|s| safe_return_to(s)),
         locale,
     })
 }
@@ -313,12 +366,15 @@ struct RecipientForm {
     contact_info: String,
     #[serde(default)]
     location: String,
+    #[serde(default)]
+    return_to: String,
 }
 
 async fn create_recipient(
     State(state): State<AppState>,
     Form(form): Form<RecipientForm>,
 ) -> Response {
+    let return_to = form.return_to;
     let draft = RecipientProjectDraft {
         name: form.name,
         contact_info: form.contact_info,
@@ -327,7 +383,24 @@ async fn create_recipient(
     };
     let conn = state.conn();
     match qry::insert_recipient_project(&conn, &draft) {
-        Ok(_) => Redirect::to("/outbound/recipients").into_response(),
+        Ok(id) => {
+            if safe_return_to(&return_to) {
+                // Assumes return_to carries no #fragment (none of today's
+                // callers emit one) — appending a query after a fragment
+                // would produce a syntactically-wrong-order URL. Mirrors
+                // `donors.rs::create` / `inventory.rs::create_donation`.
+                let sep = if return_to.contains('?') { '&' } else { '?' };
+                Redirect::to(&format!("{return_to}{sep}recipient_project_id={id}"))
+                    .into_response()
+            } else {
+                // No caller-supplied return path (a direct visit to this
+                // page's own nav entry) or an unsafe one (rejected above,
+                // falls back here too) — either way lands on the recipients
+                // list itself, matching the pre-existing behavior for every
+                // visit that isn't a "+ New recipient" round trip.
+                Redirect::to("/outbound/recipients").into_response()
+            }
+        }
         Err(e) => {
             let locale = crate::i18n::resolve_locale(&conn);
             let recipients = qry::list_recipient_projects(&conn).unwrap_or_default();
@@ -343,6 +416,7 @@ async fn create_recipient(
             HtmlTemplate(RecipientsTemplate {
                 recipients: rows,
                 error: Some(e.to_string()),
+                return_to: Some(return_to).filter(|s| safe_return_to(s)),
                 locale,
             })
             .into_response()
@@ -415,5 +489,174 @@ mod tests {
             location: String::new(),
             active: true,
         }
+    }
+
+    /// Regression coverage for the bug report: creating an outbound event
+    /// used to redirect to this event's own `/outbound/{id}/edit` instead of
+    /// back to the Outbound list — the same fix already applied to
+    /// `donors.rs::create` and `inventory.rs::create_donation`.
+    #[tokio::test]
+    async fn create_redirects_to_the_outbound_list_not_the_edit_page() {
+        let (state, dir) = test_support::test_app("outbound-create-redirect");
+        let conn = state.conn();
+        let rp_id =
+            super::qry::insert_recipient_project(&conn, &recipient_draft("Recipient")).unwrap();
+        drop(conn);
+
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = format!(
+            "date=2026-01-01&recipient_project_id={rp_id}&cash_amount_brl_str=50.00&notes="
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/outbound")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/outbound");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The "+ New recipient" flow: creating a recipient with a `return_to`
+    /// carried over from `/outbound/new` should redirect there (with the new
+    /// recipient's id appended) instead of landing on the recipients list —
+    /// mirrors `donors.rs`'s
+    /// `create_with_a_return_to_redirects_there_with_donor_id_appended`.
+    #[tokio::test]
+    async fn create_recipient_with_a_return_to_redirects_there_with_recipient_id_appended() {
+        let (state, dir) = test_support::test_app("outbound-recipient-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "name=NewOrg&contact_info=&location=\
+                     &return_to=%2Foutbound%2Fnew%3Fdate%3D2026-01-01";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/outbound/recipients")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/outbound/new?date=2026-01-01&recipient_project_id=1");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// No caller-supplied `return_to` (a direct visit to `/outbound/recipients`
+    /// from its own nav entry) still lands on the recipients list, unchanged
+    /// from before this fix.
+    #[tokio::test]
+    async fn create_recipient_without_a_return_to_redirects_to_the_recipients_list() {
+        let (state, dir) = test_support::test_app("outbound-recipient-no-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "name=NewOrg&contact_info=&location=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/outbound/recipients")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/outbound/recipients");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `return_to` that isn't a root-relative path (an open-redirect
+    /// attempt) is rejected — falls back to the recipients list instead of
+    /// ever being handed to `Redirect::to`. Same guard as `donors.rs`'s
+    /// `create_ignores_an_unsafe_return_to`.
+    #[tokio::test]
+    async fn create_recipient_ignores_an_unsafe_return_to() {
+        let (state, dir) = test_support::test_app("outbound-recipient-unsafe-return-to");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "name=NewOrg&contact_info=&location=&return_to=https%3A%2F%2Fevil.example";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/outbound/recipients")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/outbound/recipients");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The read-back side of the round trip: a valid `recipient_project_id`
+    /// query param on `/outbound/new` preselects it in the dropdown — mirrors
+    /// `eur_ledger.rs`'s
+    /// `new_form_with_a_donor_id_query_param_preselects_and_shows_donor`.
+    #[tokio::test]
+    async fn new_form_with_a_recipient_project_id_query_param_preselects_it() {
+        let (state, dir) = test_support::test_app("outbound-new-form-preselect");
+        let conn = state.conn();
+        let rp_id =
+            super::qry::insert_recipient_project(&conn, &recipient_draft("PreselectedOrg"))
+                .unwrap();
+        drop(conn);
+
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/outbound/new?date=2026-02-02&recipient_project_id={rp_id}"
+            ))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains(&format!(r#"value="{rp_id}" selected"#)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `recipient_project_id` that doesn't resolve to a real recipient
+    /// (stale link, hand-edited query string) doesn't preselect anything —
+    /// mirrors `eur_ledger.rs`'s
+    /// `new_form_with_a_nonexistent_donor_id_query_param_does_not_preselect_donor`-shaped
+    /// precedent.
+    #[tokio::test]
+    async fn new_form_with_a_nonexistent_recipient_project_id_does_not_preselect() {
+        let (state, dir) = test_support::test_app("outbound-new-form-bad-preselect");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/outbound/new?recipient_project_id=999999")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(!body.contains("999999"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
