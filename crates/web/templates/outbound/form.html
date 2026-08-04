@@ -23,7 +23,7 @@
       <option value="{{ r.id }}" {% if r.selected %}selected{% endif %}>{{ r.name }}</option>
       {% endfor %}
     </select>
-    <p class="hint">{{ "web.outbound.hint.new_recipient_before"|t(locale) }}<a href="/outbound/recipients">{{ "web.outbound.hint.new_recipient_link"|t(locale) }}</a>{{ "web.outbound.hint.new_recipient_after"|t(locale) }}</p>
+    <p class="hint">{{ "web.outbound.hint.new_recipient_before"|t(locale) }}<a id="new_recipient_link" href="/outbound/recipients">{{ "web.outbound.hint.new_recipient_link"|t(locale) }}</a>{{ "web.outbound.hint.new_recipient_after"|t(locale) }}</p>
   </div>
   <div class="field">
     <label for="cash_amount_brl_str">{{ "outbound.field.cash"|t(locale) }}</label>
@@ -53,4 +53,38 @@
     <a class="button secondary" href="/outbound">{{ "common.cancel"|t(locale) }}</a>
   </div>
 </form>
+
+{% if id.is_none() %}
+<script>
+(function() {
+  // Keep the "+ New recipient" link's return_to current, so a round trip
+  // through /outbound/recipients lands back here with whatever the user had
+  // already typed (this page's own fields) still in place, plus the new
+  // recipient auto-selected once create_recipient() appends
+  // recipient_project_id on the way back. Mirrors inventory/form.html's
+  // identical updateNewDonationLink / eur_ledger/form.html's
+  // updateNewDonorLink — only the create form carries field values along,
+  // since new_form() is the only handler that reads them back from the
+  // query string (edit_form() doesn't, same deliberate scope as those two).
+  var newRecipientLink = document.getElementById('new_recipient_link');
+  if (!newRecipientLink) { return; }
+  var dateInput = document.getElementById('date');
+  var cashInput = document.getElementById('cash_amount_brl_str');
+  var notesInput = document.getElementById('notes');
+  var updateNewRecipientLink = function() {
+    var params = new URLSearchParams();
+    if (dateInput && dateInput.value) { params.set('date', dateInput.value); }
+    if (cashInput && cashInput.value) { params.set('cash_amount_brl_str', cashInput.value); }
+    if (notesInput && notesInput.value) { params.set('notes', notesInput.value); }
+    var qs = params.toString();
+    var returnTo = '/outbound/new' + (qs ? '?' + qs : '');
+    newRecipientLink.href = '/outbound/recipients?return_to=' + encodeURIComponent(returnTo);
+  };
+  [dateInput, cashInput, notesInput].forEach(function(el) {
+    if (el) { el.addEventListener('input', updateNewRecipientLink); }
+  });
+  updateNewRecipientLink();
+})();
+</script>
+{% endif %}
 {% endblock %}

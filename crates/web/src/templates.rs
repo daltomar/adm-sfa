@@ -412,6 +412,7 @@ pub struct RecipientRow {
 pub struct RecipientsTemplate {
     pub recipients: Vec<RecipientRow>,
     pub error: Option<String>,
+    pub return_to: Option<String>,
     pub locale: String,
 }
 
