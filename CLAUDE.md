@@ -540,6 +540,33 @@ three-level round trip — donor → donation → item — chains all the way
 back), and `donors.rs::create`'s existing `return_to`/`donor_id` handling
 needs no changes at all, since it's already generic.
 
+## Web date picker format (backlog — not started)
+
+Owner request, not yet implemented: the web front-end's date fields (all
+seven `<input type="date">` fields — Outbound, EUR Ledger, Transfers,
+Purchases, Inventory's donation sub-form, and the two Reports date-range
+fields) currently display in whatever format the user's browser renders,
+which the owner reported as mm/dd/yyyy and wants as dd/mm/yyyy instead.
+
+Investigated but not fixed: a native `<input type="date">`'s *displayed*
+format (the value attribute/wire format is always ISO `yyyy-mm-dd`
+regardless) is controlled by the browser, not the page. Firefox honors the
+page's `lang` attribute (already set correctly today — `layout.html`'s
+`<html lang="{{ locale }}">` reflects the active `ui_locale`); Chrome/Edge
+ignore the page's `lang` entirely and always follow the browser's own
+UI-language/OS-locale setting, independent of anything this app does. So
+there are two genuinely different-scoped fixes, not yet decided between:
+- Do nothing beyond the existing `lang` attribute — fixes Firefox only,
+  a no-op for Chrome/Edge users.
+- Replace the native picker with a small self-built vanilla-JS date-picker
+  widget (text input + calendar popup, submitting the same ISO string
+  underneath) that renders dd/mm/yyyy in every browser regardless of
+  locale — real fix, but touches all seven templates and adds a new UI
+  component to maintain, so it's a deliberate scope/effort tradeoff, not a
+  quick patch.
+Owner asked to shelve this for now and revisit later — no direction chosen
+yet between the two options above.
+
 ## Workspace restructure and web front-end (in progress)
 
 Goal: extract the domain layer into a shared crate so a web front-end can
