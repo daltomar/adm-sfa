@@ -349,7 +349,14 @@ pub struct DonationRow {
 pub struct DonationsTemplate {
     pub donations: Vec<DonationRow>,
     pub date: String,
-    pub donors: Vec<(i64, String)>,
+    /// Free-text notes for the in-progress donation being created —
+    /// round-tripped the same way as `date`/`donors`' selection, so a
+    /// detour through "+ New donor" doesn't lose what the user already
+    /// typed here.
+    pub notes: String,
+    /// `(id, name, selected)` — mirrors `eur_ledger.rs::donor_options`,
+    /// selected once a `donor_id` round-trips back from "+ New donor".
+    pub donors: Vec<(i64, String, bool)>,
     pub error: Option<String>,
     /// Round-tripped from `?return_to=` on `GET /inventory/donations`
     /// through a hidden form field, so `create_donation()` can redirect

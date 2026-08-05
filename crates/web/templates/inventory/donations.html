@@ -21,19 +21,49 @@
     <select id="donor_id" name="donor_id">
       <option value="">{{ "common.anonymous"|t(locale) }}</option>
       {% for d in donors %}
-      <option value="{{ d.0 }}">{{ d.1 }}</option>
+      <option value="{{ d.0 }}" {% if d.2 %}selected{% endif %}>{{ d.1 }}</option>
       {% endfor %}
     </select>
-    <p class="hint">{{ "web.donations.donor_hint_before"|t(locale) }}<a href="/donors/new">{{ "web.donations.donor_hint_link"|t(locale) }}</a>{{ "web.donations.donor_hint_after"|t(locale) }}</p>
+    <p class="hint">{{ "web.donations.donor_hint_before"|t(locale) }}<a id="new_donor_link" href="/donors/new" {% if let Some(rt) = return_to %}data-outer-return-to="{{ rt }}"{% endif %}>{{ "web.donations.donor_hint_link"|t(locale) }}</a>{{ "web.donations.donor_hint_after"|t(locale) }}</p>
   </div>
   <div class="field">
     <label for="notes">{{ "common.field.notes"|t(locale) }}</label>
-    <textarea id="notes" name="notes" rows="2"></textarea>
+    <textarea id="notes" name="notes" rows="2">{{ notes }}</textarea>
   </div>
   <div class="actions">
     <button type="submit">{{ "common.create"|t(locale) }}</button>
   </div>
 </form>
+
+<script>
+(function() {
+  // Keep the "+ New donor" link's return_to current, so a round trip
+  // through /donors/new lands back here with whatever the user had already
+  // typed on *this* page (date_received/notes) still in place, plus this
+  // page's own incoming return_to (the item page one level up) carried
+  // through untouched — chaining donor -> donation -> item all the way
+  // back. Mirrors inventory/form.html's own updateNewDonationLink, which
+  // does the identical thing one level up.
+  var newDonorLink = document.getElementById('new_donor_link');
+  if (!newDonorLink) { return; }
+  var dateInput = document.getElementById('date_received');
+  var notesInput = document.getElementById('notes');
+  var outerReturnTo = newDonorLink.dataset.outerReturnTo || null;
+  var updateNewDonorLink = function() {
+    var params = new URLSearchParams();
+    if (dateInput && dateInput.value) { params.set('date_received', dateInput.value); }
+    if (notesInput && notesInput.value) { params.set('notes', notesInput.value); }
+    if (outerReturnTo) { params.set('return_to', outerReturnTo); }
+    var qs = params.toString();
+    var returnTo = '/inventory/donations' + (qs ? '?' + qs : '');
+    newDonorLink.href = '/donors/new?return_to=' + encodeURIComponent(returnTo);
+  };
+  [dateInput, notesInput].forEach(function(el) {
+    if (el) { el.addEventListener('input', updateNewDonorLink); }
+  });
+  updateNewDonorLink();
+})();
+</script>
 
 <h2>{{ "web.donations.existing_heading"|t(locale) }}</h2>
 <table>

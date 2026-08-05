@@ -837,14 +837,39 @@ async fn remove_document(
 /// and a plain HTML form can't nest one form inside another), so this is a
 /// standalone create-only mini page instead: create a donation record here
 /// first, then it appears in the Donation dropdown back on the item form.
-/// Loses the desktop convenience of auto-selecting the new donation and
-/// preserving other in-progress item fields across the detour — a
-/// deliberate, documented reduced-scope tradeoff for this pass, consistent
-/// with phase 5's existing scope reductions (CLAUDE.md).
+///
+/// Round-trips two levels deep: the item form's "+ New donation" link
+/// carries its own in-progress fields via `return_to`
+/// (`new_form`'s `NewItemQuery`), and this page's own "+ New donor" link
+/// (`donations.html`'s `updateNewDonorLink`) carries *its* in-progress
+/// fields (`date_received`/`notes`) plus that same incoming `return_to`
+/// onward to `/donors/new` — so `donor_id`, once created there, flows all
+/// the way back here via `donors.rs::create`'s already-generic `return_to`
+/// handling (no changes needed there), and the item page's own fields are
+/// never lost in between. Mirrors `eur_ledger.rs`'s `NewEntryQuery`/
+/// `donor_options`.
 #[derive(Deserialize)]
 struct DonationsQuery {
     #[serde(default)]
     return_to: Option<String>,
+    #[serde(default)]
+    date_received: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    donor_id: Option<i64>,
+}
+
+/// `(id, name, selected)` — mirrors `eur_ledger.rs::donor_options`.
+fn donor_options(conn: &rusqlite::Connection, selected: Option<i64>) -> Vec<(i64, String, bool)> {
+    donors_qry::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| {
+            let is_selected = selected == Some(d.id);
+            (d.id, d.name, is_selected)
+        })
+        .collect()
 }
 
 async fn donations(
@@ -862,15 +887,22 @@ async fn donations(
             donor_display: d.donor_name.unwrap_or_else(|| anonymous.clone()),
         })
         .collect();
-    let donors = donors_qry::list(&conn)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|d| (d.id, d.name))
-        .collect();
+    // Validate the id actually resolves before trusting it — mirrors
+    // `eur_ledger.rs::new_form`'s `donor_id` check: a stale link or a
+    // hand-edited query string with a nonexistent donor_id would otherwise
+    // silently attribute the donation to the browser's default (usually
+    // first) option instead of leaving the selection visibly unset.
+    let donor_id = query
+        .donor_id
+        .filter(|id| donors_qry::get(&conn, *id).ok().flatten().is_some());
     HtmlTemplate(DonationsTemplate {
         donations: rows,
-        date: chrono::Local::now().format("%Y-%m-%d").to_string(),
-        donors,
+        date: query
+            .date_received
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string()),
+        notes: query.notes.unwrap_or_default(),
+        donors: donor_options(&conn, donor_id),
         error: None,
         return_to: query.return_to.filter(|s| safe_return_to(s)),
         locale,
@@ -928,15 +960,11 @@ async fn create_donation(
                     donor_display: d.donor_name.unwrap_or_else(|| anonymous.clone()),
                 })
                 .collect();
-            let donors = donors_qry::list(&conn)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|d| (d.id, d.name))
-                .collect();
             HtmlTemplate(DonationsTemplate {
                 donations: rows,
                 date: draft.date_received,
-                donors,
+                notes: draft.notes,
+                donors: donor_options(&conn, draft.donor_id),
                 error: Some(e.to_string()),
                 return_to: Some(return_to).filter(|s| safe_return_to(s)),
                 locale,
@@ -954,7 +982,7 @@ mod tests {
         categories as cat_qry, documents as documents_qry, inventory as qry,
         purchases as purchases_qry,
     };
-    use adm_sfa_core::model::donor::PhysicalDonationDraft;
+    use adm_sfa_core::model::donor::{DonorDraft, PhysicalDonationDraft};
     use adm_sfa_core::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
     use axum::body::Body;
@@ -1698,6 +1726,74 @@ mod tests {
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str().unwrap();
         assert_eq!(location, "/inventory/donations");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The read-back side of the third-level "+ New donor" round trip:
+    /// `donors.rs::create` appends `donor_id` onto whatever `return_to` it
+    /// was handed, which for this page is `/inventory/donations` carrying
+    /// `date_received`/`notes`/its own incoming `return_to` (the item page,
+    /// one level further up). `GET /inventory/donations` with all of that
+    /// on the query string should prefill the donation form and preselect
+    /// the new donor, without losing the outer `return_to` for the
+    /// donation's own eventual redirect back to the item page.
+    #[tokio::test]
+    async fn donations_page_with_a_donor_id_query_param_preselects_and_prefills() {
+        let (state, dir) = test_support::test_app("inventory-donations-donor-prefill");
+        let donor_id = donors_qry::insert(
+            &state.conn(),
+            &DonorDraft {
+                name: "Alex".to_string(),
+                contact_info: String::new(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/inventory/donations?date_received=2026-02-01&notes=from+alex\
+                 &donor_id={donor_id}&return_to=%2Finventory%2Fnew%3Fname%3DDeck"
+            ))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains(r#"value="2026-02-01""#));
+        assert!(body_text.contains("from alex"));
+        assert!(body_text.contains(&format!(r#"value="{donor_id}" selected"#)));
+        assert!(body_text.contains(r#"name="return_to" value="/inventory/new?name=Deck""#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `donor_id` that doesn't resolve to a real donor (stale link, or a
+    /// hand-edited query string) must not silently preselect the browser's
+    /// default option — mirrors `new_form_with_a_nonexistent_donation_id_
+    /// does_not_preselect_source` below and `eur_ledger.rs`'s equivalent
+    /// donor check.
+    #[tokio::test]
+    async fn donations_page_with_a_nonexistent_donor_id_does_not_preselect_a_donor() {
+        let (state, dir) = test_support::test_app("inventory-donations-bad-donor-id");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/inventory/donations?donor_id=999999")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(!body_text.contains("selected"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
