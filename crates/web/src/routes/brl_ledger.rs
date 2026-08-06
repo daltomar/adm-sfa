@@ -40,7 +40,7 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let locale = crate::i18n::resolve_locale(&conn);
     let rows = qry::list(&conn).unwrap_or_default();
     let balance = compute_balance(rows.iter().map(|r| (r.tx_type.is_inflow(), r.amount)));
-    let balance_display = format::amount(balance);
+    let balance_display = format::amount_in(balance, &locale);
 
     // `qry::list` returns newest-first (shared with desktop, which relies on
     // that same order — reversed here, web-presentation-only, matching the
@@ -52,7 +52,7 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             date_display: format::date(&r.date),
             type_label: type_label(r.tx_type, &locale),
             sign: if r.tx_type.is_inflow() { "+" } else { "-" },
-            amount_display: format::amount(r.amount),
+            amount_display: format::amount_in(r.amount, &locale),
             desc: row_desc(r),
         })
         .collect();
@@ -76,7 +76,7 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use crate::test_support;
-    use adm_sfa_core::db::queries::purchases as purchases_qry;
+    use adm_sfa_core::db::queries::{purchases as purchases_qry, settings as settings_qry};
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -134,6 +134,56 @@ mod tests {
         assert!(
             older_pos < newer_pos,
             "expected the older transaction to render before the newer one"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test: `list()` used to call `format::amount()` (the
+    /// *ambient* `rust_i18n::locale()`, which `web` never sets — see
+    /// `core::format::amount()`'s doc comment) instead of
+    /// `format::amount_in(value, &locale)` (the already-resolved
+    /// `ui_locale`). With `ui_locale` set to German, both the row amount and
+    /// the balance line must render with a comma decimal separator
+    /// (`1.234,56`), not the English default (`1,234.56`).
+    #[tokio::test]
+    async fn list_formats_amounts_using_the_resolved_ui_locale() {
+        let (state, dir) = test_support::test_app("brl-ledger-locale-amount-format");
+        let conn = state.conn();
+        settings_qry::set(&conn, "ui_locale", "de").unwrap();
+        purchases_qry::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Brl,
+                cost_str: "1234.56".to_string(),
+                channel: "TestChannel".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/brl-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("1.234,56"),
+            "expected the German-formatted amount in the body: {body}"
+        );
+        assert!(
+            !body.contains("1,234.56"),
+            "amount rendered in English format despite ui_locale=de: {body}"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -60,7 +60,9 @@ fn brl_preview(draft: &TransferDraft, locale: &str) -> Option<String> {
     // (like the existing "unparseable" case) is fine since `insert`/`update`
     // is the actual authority and will reject the same input with a real
     // error banner instead of a preview.
-    let amount = eur.checked_mul(rate).map(format::amount)?;
+    let amount = eur
+        .checked_mul(rate)
+        .map(|amt| format::amount_in(amt, locale))?;
     Some(
         rust_i18n::t!(
             "transfers.field.brl_received",
@@ -146,9 +148,9 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
         .map(|t| TransferRow {
             id: t.id,
             date_display: format::date(&t.date),
-            eur_display: format::amount(t.eur_amount_sent),
-            brl_display: format::amount(t.brl_amount_received),
-            rate_display: format::number(t.exchange_rate, 4),
+            eur_display: format::amount_in(t.eur_amount_sent, &locale),
+            brl_display: format::amount_in(t.brl_amount_received, &locale),
+            rate_display: format::number_in(t.exchange_rate, 4, &locale),
         })
         .collect();
     HtmlTemplate(TransfersListTemplate {
@@ -800,6 +802,40 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Regression test: `brl_preview()` used to call `format::amount()` (the
+    /// *ambient* locale, which `web` never sets) instead of
+    /// `format::amount_in(amt, locale)` — mirrors `brl_ledger.rs`'s
+    /// identical regression test. With `ui_locale` set to German, the
+    /// previewed BRL amount must render with a comma decimal separator
+    /// (`5.500,00`), not the English default (`5,500.00`).
+    #[tokio::test]
+    async fn preview_formats_the_brl_amount_using_the_resolved_ui_locale() {
+        let (state, dir) = test_support::test_app("transfer-preview-locale-amount-format");
+        adm_sfa_core::db::queries::settings::set(&state.conn(), "ui_locale", "de").unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/transfers/preview?eur_amount_sent_str=1000&exchange_rate_str=5.5")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("5.500,00"),
+            "expected the German-formatted amount in the body: {body}"
+        );
+        assert!(
+            !body.contains("5,500.00"),
+            "amount rendered in English format despite ui_locale=de: {body}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn preview_without_a_session_cookie_redirects_to_login() {
         let (state, dir) = test_support::test_app("transfer-preview-unauthenticated");
@@ -866,6 +902,60 @@ mod tests {
         assert!(
             older_pos < newer_pos,
             "expected the older transfer to render before the newer one"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test: `list()` used to call `format::amount()`/
+    /// `format::number()` (the *ambient* locale, which `web` never sets)
+    /// for `eur_display`/`brl_display`/`rate_display` — mirrors
+    /// `brl_ledger.rs`'s identical regression test. With `ui_locale` set to
+    /// German, all three must render with a comma decimal separator, not
+    /// the English default.
+    #[tokio::test]
+    async fn list_formats_amounts_and_rate_using_the_resolved_ui_locale() {
+        let (state, dir) = test_support::test_app("transfer-list-locale-amount-format");
+        let conn = state.conn();
+        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+        qry::insert(
+            &conn,
+            &adm_sfa_core::model::transfer::TransferDraft {
+                date: "2026-01-01".to_string(),
+                eur_amount_sent_str: "1000.00".to_string(),
+                exchange_rate_str: "5.5".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/transfers")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("1.000,00"),
+            "expected the German-formatted EUR amount in the body: {body}"
+        );
+        assert!(
+            body.contains("5.500,00"),
+            "expected the German-formatted BRL amount in the body: {body}"
+        );
+        assert!(
+            body.contains("5,5000"),
+            "expected the German-formatted exchange rate in the body: {body}"
+        );
+        assert!(
+            !body.contains("1,000.00") && !body.contains("5,500.00"),
+            "an amount rendered in English format despite ui_locale=de: {body}"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

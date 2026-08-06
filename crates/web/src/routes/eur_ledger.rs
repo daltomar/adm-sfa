@@ -84,7 +84,7 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let locale = crate::i18n::resolve_locale(&conn);
     let rows = qry::list(&conn).unwrap_or_default();
     let balance = compute_balance(rows.iter().map(|r| (r.tx_type.is_inflow(), r.amount)));
-    let balance_display = format::amount(balance);
+    let balance_display = format::amount_in(balance, &locale);
 
     // `qry::list` returns newest-first (shared with desktop, which relies on
     // that same order — reversed here, web-presentation-only, per the
@@ -96,7 +96,7 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             date_display: format::date(&r.date),
             type_label: type_label(r.tx_type, &locale),
             sign: if r.tx_type.is_inflow() { "+" } else { "-" },
-            amount_display: format::amount(r.amount),
+            amount_display: format::amount_in(r.amount, &locale),
             desc: row_desc(r),
             link_href: link_href(r),
         })
@@ -697,6 +697,52 @@ mod tests {
         let body_text = test_support::body_text(res).await;
 
         assert!(body_text.contains(&format!(r#"href="/transfers/{transfer_id}/edit""#)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test: `list()` used to call `format::amount()` (the
+    /// *ambient* locale, which `web` never sets) for both the row amount and
+    /// the balance line, instead of `format::amount_in(value, &locale)` —
+    /// mirrors `brl_ledger.rs`'s identical regression test. With
+    /// `ui_locale` set to German, amounts must render with a comma decimal
+    /// separator (`1.234,56`), not the English default (`1,234.56`).
+    #[tokio::test]
+    async fn list_formats_amounts_using_the_resolved_ui_locale() {
+        use adm_sfa_core::db::queries::settings as settings_qry;
+
+        let (state, dir) = test_support::test_app("eur-ledger-locale-amount-format");
+        settings_qry::set(&state.conn(), "ui_locale", "de").unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date=2026-01-01&tx_type=self_funding_in&amount_str=1234.56&note=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/eur-ledger")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let create_res = test_support::send(app.clone(), req).await;
+        assert_eq!(create_res.status(), StatusCode::SEE_OTHER);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/eur-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        let body_text = test_support::body_text(res).await;
+
+        assert!(
+            body_text.contains("1.234,56"),
+            "expected the German-formatted amount in the body: {body_text}"
+        );
+        assert!(
+            !body_text.contains("1,234.56"),
+            "amount rendered in English format despite ui_locale=de: {body_text}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

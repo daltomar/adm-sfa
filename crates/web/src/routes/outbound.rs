@@ -99,7 +99,7 @@ fn event_summary(item_count: i64, cash: Option<Decimal>, locale: &str) -> String
     };
     if let Some(cash) = cash {
         if cash > Decimal::ZERO {
-            let amount = format::amount(cash);
+            let amount = format::amount_in(cash, locale);
             s.push_str(
                 rust_i18n::t!(
                     "web.outbound.summary_cash_suffix",
@@ -657,6 +657,56 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let body = test_support::body_text(res).await;
         assert!(!body.contains("999999"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test: `event_summary()`'s cash suffix used to call
+    /// `format::amount()` (the *ambient* locale, which `web` never sets)
+    /// instead of `format::amount_in(cash, locale)` — mirrors
+    /// `brl_ledger.rs`'s identical regression test. With `ui_locale` set to
+    /// German, the cash amount in the list's summary column must render
+    /// with a comma decimal separator (`1.234,56`), not the English default
+    /// (`1,234.56`).
+    #[tokio::test]
+    async fn list_formats_the_cash_summary_using_the_resolved_ui_locale() {
+        let (state, dir) = test_support::test_app("outbound-locale-amount-format");
+        let conn = state.conn();
+        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+        let rp_id =
+            super::qry::insert_recipient_project(&conn, &recipient_draft("Recipient")).unwrap();
+        adm_sfa_core::service::donate_items(
+            &conn,
+            &OutboundEventDraft {
+                date: "2026-01-01".to_string(),
+                recipient_project_id: Some(rp_id),
+                cash_amount_brl_str: "1234.56".to_string(),
+                notes: String::new(),
+            },
+            &[],
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/outbound")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("1.234,56"),
+            "expected the German-formatted cash amount in the body: {body}"
+        );
+        assert!(
+            !body.contains("1,234.56"),
+            "cash amount rendered in English format despite ui_locale=de: {body}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

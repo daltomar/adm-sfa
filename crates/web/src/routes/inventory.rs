@@ -68,14 +68,14 @@ fn status_label(s: ItemStatus, locale: &str) -> String {
     rust_i18n::t!(key, locale = locale).to_string()
 }
 
-fn purchase_label(p: &Purchase) -> String {
+fn purchase_label(p: &Purchase, locale: &str) -> String {
     let multi = if p.multiple_items { " (multi)" } else { "" };
     format!(
         "{} \u{2014} {} \u{2014} {} {}{multi}",
         format::date(&p.date),
         p.channel,
         p.currency.symbol(),
-        format::amount(p.cost)
+        format::amount_in(p.cost, locale)
     )
 }
 
@@ -117,7 +117,7 @@ fn purchase_options(
         .filter(|p| p.status == PurchaseStatus::Bought)
         .map(|p| {
             let blocked = purchase_source_blocked(items, p, edit_id);
-            let base_label = purchase_label(p);
+            let base_label = purchase_label(p, locale);
             // The blocked/"(in use)" suffix has to be baked into the
             // `<option>` text here rather than in the template: a disabled
             // `<option>` still needs to explain *why* it's unpickable, and
@@ -1865,6 +1865,56 @@ mod tests {
         let body_text = test_support::body_text(res).await;
         assert!(body_text.contains(r#"id="source_donation_field" style="display:none""#));
         assert!(!body_text.contains(r#"value="donation" required checked"#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test: `purchase_label()` used to call `format::amount()`
+    /// (the *ambient* locale, which `web` never sets) instead of
+    /// `format::amount_in(p.cost, locale)` — mirrors `brl_ledger.rs`'s
+    /// identical regression test. With `ui_locale` set to German, the
+    /// purchase picker's option text must render the cost with a comma
+    /// decimal separator (`1.234,56`), not the English default
+    /// (`1,234.56`).
+    #[tokio::test]
+    async fn purchase_picker_formats_cost_using_the_resolved_ui_locale() {
+        let (state, dir) = test_support::test_app("inventory-purchase-picker-locale-format");
+        let conn = state.conn();
+        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+        purchases_qry::insert(
+            &conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "1234.56".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/inventory/new")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(
+            body_text.contains("1.234,56"),
+            "expected the German-formatted cost in the purchase picker: {body_text}"
+        );
+        assert!(
+            !body_text.contains("1,234.56"),
+            "cost rendered in English format despite ui_locale=de: {body_text}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

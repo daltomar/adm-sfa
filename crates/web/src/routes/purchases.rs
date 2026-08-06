@@ -109,7 +109,7 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             id: p.id,
             date_display: format::date(&p.date),
             channel: p.channel,
-            cost_display: format::amount(p.cost),
+            cost_display: format::amount_in(p.cost, &locale),
             currency_symbol: p.currency.symbol(),
             status_label: status_label(p.status, &locale),
             multiple_items: p.multiple_items,
@@ -991,6 +991,46 @@ mod tests {
         assert!(
             older_pos < newer_pos,
             "expected the older purchase to render before the newer one"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test: `list()` used to call `format::amount()` (the
+    /// *ambient* locale, which `web` never sets) for `cost_display` instead
+    /// of `format::amount_in(p.cost, &locale)` — mirrors `brl_ledger.rs`'s
+    /// identical regression test. With `ui_locale` set to German, the cost
+    /// must render with a comma decimal separator (`1.234,56`), not the
+    /// English default (`1,234.56`).
+    #[tokio::test]
+    async fn list_formats_cost_using_the_resolved_ui_locale() {
+        let (state, dir) = test_support::test_app("purchases-list-locale-amount-format");
+        let conn = state.conn();
+        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+        let mut draft = a_purchase_draft();
+        draft.cost_str = "1234.56".to_string();
+        purchases_qry::insert(&conn, &draft).unwrap();
+        drop(conn);
+
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/purchases")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("1.234,56"),
+            "expected the German-formatted cost in the body: {body}"
+        );
+        assert!(
+            !body.contains("1,234.56"),
+            "cost rendered in English format despite ui_locale=de: {body}"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

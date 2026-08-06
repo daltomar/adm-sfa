@@ -58,14 +58,24 @@ fn date_for_locale(iso: &str, _locale: &str) -> String {
 }
 
 /// Formats a money amount to 2 decimal places with the currently active
-/// locale's decimal/thousands separators. Never includes a currency symbol.
+/// *ambient* locale's decimal/thousands separators (`rust_i18n::locale()`).
+/// Never includes a currency symbol. Safe for `desktop`, which calls
+/// `rust_i18n::set_locale()` on every locale change (single-user, single
+/// thread). **Not safe for `web`**: `web` deliberately never calls
+/// `rust_i18n::set_locale` (its runtime locale state is one process-wide
+/// global — setting it per-request would race across concurrent requests
+/// from different users), so this always renders in the process's fallback
+/// locale regardless of the resolved `ui_locale`. Every `web` call site
+/// must use `amount_in()` instead, threading the already-resolved
+/// `crate::i18n::resolve_locale(&conn)` value through explicitly.
 pub fn amount(value: Decimal) -> String {
     number(value, 2)
 }
 
 /// Same as `amount()`, but for an explicitly chosen locale rather than the
-/// ambient UI locale — for report export (SPEC.md §6.3). Not used by CSV
-/// export, which always uses `csv_amount()` regardless of the chosen
+/// ambient UI locale — the only correct choice in `web` (see `amount()`'s
+/// doc comment) and also what report export uses (SPEC.md §6.3). Not used
+/// by CSV export, which always uses `csv_amount()` regardless of the chosen
 /// report language (SPEC.md §6.4/T6).
 pub fn amount_in(value: Decimal, locale: &str) -> String {
     number_for_locale(value, 2, locale)
@@ -76,6 +86,14 @@ pub fn amount_in(value: Decimal, locale: &str) -> String {
 /// decimal/thousands separators.
 pub fn number(value: Decimal, decimals: usize) -> String {
     number_for_locale(value, decimals, rust_i18n::locale().as_ref())
+}
+
+/// Same as `number()`, but for an explicitly chosen locale rather than the
+/// ambient UI locale — see `amount_in()`'s doc comment for why an explicit
+/// locale matters (it's what `web` must use everywhere, since it never
+/// calls `rust_i18n::set_locale`).
+pub fn number_in(value: Decimal, decimals: usize, locale: &str) -> String {
+    number_for_locale(value, decimals, locale)
 }
 
 /// Formats a money amount to 2 decimal places in the fixed German/Brazilian
