@@ -723,3 +723,232 @@ async fn export_pdf(State(state): State<AppState>, Query(q): Query<ExportQuery>)
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support;
+    use adm_sfa_core::db::queries::eur_ledger as eur_qry;
+    use adm_sfa_core::model::transaction::{EurTxDraft, ManualEurTxType};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+
+    async fn body_bytes(res: axum::http::Response<Body>) -> Vec<u8> {
+        res.into_body()
+            .collect()
+            .await
+            .expect("failed to read body")
+            .to_bytes()
+            .to_vec()
+    }
+
+    /// `index`'s `tab` allowlist check (`TABS.iter().any(...)`) defaults an
+    /// unrecognized slug to `"donors"` rather than rendering nothing or
+    /// panicking — the same leniency `export_csv`'s `tab_slug` fallback
+    /// documents inline. The hidden `tab` field in the filter form
+    /// (`reports/index.html`) round-trips `active_tab`, so its value is a
+    /// direct signal of what the handler actually resolved to.
+    #[tokio::test]
+    async fn index_defaults_to_donors_tab_for_an_unknown_tab_slug() {
+        let (state, dir) = test_support::test_app("reports-index-unknown-tab");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/reports?tab=not-a-real-tab")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains(r#"name="tab" value="donors""#),
+            "expected the unknown tab to default to donors: {body}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Sanity check that switching tabs actually switches content: the EUR
+    /// tab must show its own summary lines (`eur_summary_lines`, built from
+    /// `core::reporting::eur_summary` — tested in `core` itself, this just
+    /// confirms the web route wires it up) and its own table headers/rows,
+    /// not the default Donors tab's.
+    #[tokio::test]
+    async fn index_eur_tab_shows_the_summary_and_the_row() {
+        let (state, dir) = test_support::test_app("reports-index-eur-tab");
+        let conn = state.conn();
+        eur_qry::insert(
+            &conn,
+            &EurTxDraft {
+                date: "2026-01-01".to_string(),
+                tx_type: ManualEurTxType::SelfFundingIn,
+                amount_str: "250.00".to_string(),
+                donor_id: None,
+                note: "Seed funding".to_string(),
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/reports?tab=eur")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains(r#"name="tab" value="eur""#),
+            "expected the EUR tab to stay active: {body}"
+        );
+        assert!(
+            body.contains("Starting balance"),
+            "expected the EUR summary lines: {body}"
+        );
+        assert!(
+            body.contains("Seed funding") && body.contains("250.00"),
+            "expected the seeded row's description and amount: {body}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test for the path-traversal fix documented in CLAUDE.md's
+    /// phase 5 summary (only ever "verified live" there, never given an
+    /// automated test): `export_csv`'s `tab_slug` feeds straight into a
+    /// filesystem path, so a `tab` outside `TABS` must fall back to
+    /// `"donors"`, not be trusted as-is. The response's own `Content-
+    /// Disposition` filename is a direct, observable signal of which tab
+    /// the handler actually resolved to.
+    #[tokio::test]
+    async fn export_csv_rejects_a_path_traversal_flavored_tab_and_downloads_donors_instead() {
+        let (state, dir) = test_support::test_app("reports-csv-path-traversal");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/reports/export.csv?tab=..%2F..%2F..%2Fetc%2Fpasswd&from=&to=&locale=en")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let disposition = res
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(disposition, r#"attachment; filename="donors.csv""#);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Closes the untested half of `backlog-web-i18n-tests.md` step 6
+    /// (CLAUDE.md: "the dropdown-vs-download-language half was skipped this
+    /// pass"): T3 says report generation locale is always an explicit
+    /// argument, never read from the ambient/chrome `ui_locale`. Sets the
+    /// installation's `ui_locale` to English but requests the export with
+    /// `locale=de` — if `export_csv` ever started reading the ambient
+    /// locale instead of `q.locale`, this would come back English and fail.
+    #[tokio::test]
+    async fn export_csv_amount_follows_the_explicit_locale_param_not_the_chrome_locale() {
+        let (state, dir) = test_support::test_app("reports-csv-explicit-locale");
+        let conn = state.conn();
+        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "en").unwrap();
+        eur_qry::insert(
+            &conn,
+            &EurTxDraft {
+                date: "2026-01-01".to_string(),
+                tx_type: ManualEurTxType::SelfFundingIn,
+                amount_str: "1234.56".to_string(),
+                donor_id: None,
+                note: String::new(),
+            },
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/reports/export.csv?tab=eur&from=&to=&locale=de")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = body_bytes(res).await;
+        let body = String::from_utf8(bytes).unwrap();
+        // T6 (SPEC.md §6.4) means the *data* columns here are a dead end for
+        // this test: `eur_table`'s `for_csv` branch always uses
+        // `format::csv_amount` (fixed German style) and the raw ISO date,
+        // regardless of `locale` — so a German-styled amount would pass even
+        // if `q.locale` were ignored entirely (with `locale=en` it would
+        // render identically). The *headers* are what's actually gated on
+        // `locale` here (`t(key, locale)`, not `for_csv`-conditional) — this
+        // asserts the German header text appears despite `ui_locale` being
+        // `"en"`, which can only mean `q.locale` reached `eur_table`, not the
+        // ambient locale.
+        assert!(
+            body.contains("Datum") && body.contains("Typ") && body.contains("Beschreibung"),
+            "expected German column headers for locale=de despite ui_locale=en: {body}"
+        );
+        assert!(
+            !body.contains("Date;") && !body.contains(";Type;"),
+            "headers rendered in English despite locale=de: {body}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn export_pdf_downloads_bytes_that_look_like_a_valid_pdf() {
+        let (state, dir) = test_support::test_app("reports-pdf-download");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/reports/export.pdf?from=&to=&locale=en")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "application/pdf"
+        );
+        let bytes = body_bytes(res).await;
+        assert!(bytes.starts_with(b"%PDF"), "response was not a PDF file");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn export_csv_without_a_session_cookie_redirects_to_login() {
+        let (state, dir) = test_support::test_app("reports-csv-unauthenticated");
+        let app = crate::build_app(state.clone());
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/reports/export.csv?tab=donors&from=&to=&locale=en")
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/login");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

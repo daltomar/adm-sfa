@@ -187,4 +187,114 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// `TransferIn` is the ledger's only inflow type — covers `type_label`'s
+    /// `"EUR→BRL"` mapping, `row_desc`'s empty description for this variant
+    /// (no purchase/recipient to describe), and the `"+"` sign, none of
+    /// which had any coverage before (the existing tests only ever create
+    /// `BrazilPurchaseOut` rows, an outflow).
+    #[tokio::test]
+    async fn list_shows_a_transfer_in_row_as_a_positive_inflow() {
+        use adm_sfa_core::db::queries::transfers as transfers_qry;
+        use adm_sfa_core::model::transfer::TransferDraft;
+
+        let (state, dir) = test_support::test_app("brl-ledger-transfer-in-row");
+        transfers_qry::insert(
+            &state.conn(),
+            &TransferDraft {
+                date: "2026-01-01".to_string(),
+                eur_amount_sent_str: "100.00".to_string(),
+                exchange_rate_str: "5.00".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/brl-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("EUR\u{2192}BRL"),
+            "missing transfer-in type label: {body}"
+        );
+        assert!(
+            body.contains("<td>+R$ 500.00</td>"),
+            "expected a positive-signed amount cell for the inflow: {body}"
+        );
+        assert!(
+            body.contains("balance-pos"),
+            "a lone inflow should leave the balance positive: {body}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `CashGiftOut` covers `type_label`'s `"Cash gift"` mapping and
+    /// `row_desc`'s recipient-name join (via `outbound_event` →
+    /// `recipient_project`) — the third and last `BrlTxType` variant, and
+    /// the only one whose description isn't empty or a purchase channel.
+    #[tokio::test]
+    async fn list_shows_a_cash_gift_out_row_with_the_recipient_name_as_description() {
+        use adm_sfa_core::db::queries::outbound as outbound_qry;
+        use adm_sfa_core::model::outbound::{OutboundEventDraft, RecipientProjectDraft};
+
+        let (state, dir) = test_support::test_app("brl-ledger-cash-gift-row");
+        let conn = state.conn();
+        let rp_id = outbound_qry::insert_recipient_project(
+            &conn,
+            &RecipientProjectDraft {
+                name: "Skate Project Rio".to_string(),
+                contact_info: String::new(),
+                location: String::new(),
+                active: true,
+            },
+        )
+        .unwrap();
+        adm_sfa_core::service::donate_items(
+            &conn,
+            &OutboundEventDraft {
+                date: "2026-01-01".to_string(),
+                recipient_project_id: Some(rp_id),
+                cash_amount_brl_str: "75.00".to_string(),
+                notes: String::new(),
+            },
+            &[],
+        )
+        .unwrap();
+        drop(conn);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/brl-ledger")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(
+            body.contains("Cash gift"),
+            "missing cash-gift type label: {body}"
+        );
+        assert!(
+            body.contains("<td>Skate Project Rio</td>"),
+            "expected the recipient name as the row description: {body}"
+        );
+        assert!(
+            body.contains("<td>-R$ 75.00</td>"),
+            "expected a negative-signed amount cell for the outflow: {body}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
