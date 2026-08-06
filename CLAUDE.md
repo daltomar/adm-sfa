@@ -519,26 +519,63 @@ the web New/Edit Item form, each reviewed independently by
   post-save redirect), so navigating away without saving a donation still
   preserves the in-progress item fields.
 
-**New backlog item, found by the owner after this branch shipped (not
-fixed — logged here for a future session):** the round trip above only
-covers one level of nesting. `inventory/donations.html` has its *own* "+
-New donor" hint link (for adding a donor while filling in a new donation)
-that still has no `return_to` at all — the exact pre-existing gap flagged
-in this file's "Donors: creating one from the main Donors page lands on
-the list" section above, which predates this branch. Concretely: Item →
-"+ New donation" → Donation form → "+ New donor" → saves → lands on
-`/donors` (the no-`return_to` fallback), stranding the user two levels
-up instead of one. Not critical (the owner's own framing) since the
-donation itself still saves fine and the outer item round trip still
-works once you navigate back manually — but the fix is a small,
-well-precedented extension of the same mechanism this branch just built:
-`inventory/donations.html`'s "+ New donor" link needs the same
-JS-populated `return_to` treatment `inventory/form.html`'s own "+ New
-donation" link just got (carry the in-progress donation fields, i.e.
-`date_received`/`notes`, plus this page's *own* incoming `return_to` so a
-three-level round trip — donor → donation → item — chains all the way
-back), and `donors.rs::create`'s existing `return_to`/`donor_id` handling
-needs no changes at all, since it's already generic.
+~~**New backlog item, found by the owner after this branch shipped:** the
+round trip above only covers one level of nesting...~~ **Fixed** (commit
+`f90accc`): `inventory/donations.html`'s own "+ New donor" link now gets
+the same JS-populated `return_to` treatment `inventory/form.html`'s "+ New
+donation" link already had — it carries `date_received`/`notes` plus its
+own incoming `return_to` forward via a `data-outer-return-to` attribute
+(HTML-attribute-context interpolation, same pattern as the page's existing
+hidden `return_to` input), read back through `.dataset` (which the browser
+HTML-entity-decodes automatically). `donations()`'s `DonationsQuery` gained
+`date_received`/`notes`/`donor_id` fields to read the round trip back on
+the way in, and a `donor_options()` helper (mirroring `eur_ledger.rs`'s)
+validates and preselects the donor. `donors.rs::create` needed no changes,
+confirmed generic as predicted. Verified end-to-end against a live running
+server (full item → donation → donor → back chain, encoding traced hop by
+hop) in addition to two new route tests. Reviewed by `rust-code-reviewer`:
+no findings.
+
+## Web: on-screen amounts ignoring `ui_locale` (implemented)
+
+Found while adding test coverage to `brl_ledger.rs` (below): most of
+`web`'s on-screen money/rate formatting was locale-independent despite the
+app's T1/T3 i18n design. `core::format::amount()`/`number()` read the
+*ambient* `rust_i18n::locale()`, but `crates/web/src/main.rs` deliberately
+never calls `rust_i18n::set_locale` (it's a single process-wide global,
+unsafe to set per-request across concurrent users on different locales) —
+so every amount/rate rendered in the process's fallback locale ("en")
+regardless of the resolved `ui_locale`, while translated *text* was
+unaffected (that already went through an explicit-locale `t()` filter).
+`reports.rs` was the sole exception, already using the explicit-locale
+`format::amount_in(value, locale)` throughout — that became the pattern to
+generalize. Verified live: with `ui_locale=de`, a BRL purchase rendered
+`-R$ 9,876.54` (English) before the fix, `-R$ 9.876,54` (German) after.
+
+- Added `format::number_in(value, decimals, locale)` alongside the existing
+  `amount_in()`; expanded `amount()`'s doc comment to explain the
+  ambient-vs-explicit hazard specifically for `web` (safe for `desktop`,
+  which does call `set_locale` on locale change — this is a `web`-only
+  bug).
+- Switched every ambient `format::amount()`/`format::number()` call site in
+  `crates/web` to the explicit-locale variant, threading the
+  already-resolved `locale` through: `brl_ledger.rs`, `eur_ledger.rs`
+  (balance + row amount), `outbound.rs` (`event_summary`'s cash suffix),
+  `transfers.rs` (`brl_preview` and `list`'s eur/brl/rate columns),
+  `inventory.rs` (`purchase_label`, gained a `locale` parameter),
+  `purchases.rs` (`list`'s `cost_display`) — 11 call sites across 6 files.
+  `desktop` is untouched, correctly — it's supposed to keep using the
+  ambient form.
+- One regression test per fixed file (6 total), each setting `ui_locale`
+  to German via the real `settings` query and asserting the rendered HTML
+  contains the German-formatted string and not the English one.
+- Commit `0a635b6`. Reviewed by `rust-code-reviewer`: one 🟡 (a
+  `cargo fmt` nit) fixed before commit; a note about `cargo clippy
+  --all-targets` surfacing `await_holding_lock` in test code (pre-existing,
+  not introduced by this change, and invisible to the project's own
+  documented `cargo clippy --workspace -- -D warnings` command since that
+  never compiles `#[cfg(test)]` modules) left as a documented, non-blocking
+  observation, not fixed.
 
 ## Web date picker format (backlog — not started)
 
@@ -877,14 +914,19 @@ exists instead of the usual inline strikethrough for each one.
   `core` against `docs_qry::labels(conn)` for all three `attach_document`
   call sites (purchases, transfers, inventory), including a path-traversal
   test.
-- **Still open, partially addressed.** `crates/web` had zero automated
-  tests at the time this was written; `backlog-web-test-coverage` (PR #14)
-  added the first suite (`auth::password_matches`/`require_auth`, login,
-  and `purchases.rs`'s `attach_document` edge cases — the highest-value
-  targets this item called out), and `backlog-donated-item-field-locking`
-  (PR #16) added `inventory.rs` route tests on top. Still no tests for
-  `eur_ledger.rs`, `brl_ledger.rs`, `transfers.rs`, `outbound.rs`,
-  `reports.rs`, `settings.rs`, or `donors.rs`'s routes.
+- ~~`crates/web` had zero automated tests at the time this was written~~
+  **Fixed.** `backlog-web-test-coverage` (PR #14) added the first suite
+  (`auth::password_matches`/`require_auth`, login, `purchases.rs`'s
+  `attach_document` edge cases); `backlog-donated-item-field-locking` (PR
+  #16) added `inventory.rs`; subsequent branches (not individually listed
+  here — see git log) added `eur_ledger.rs`, `transfers.rs`, `outbound.rs`,
+  `donors.rs`; and a final pass added the last three thin/untested files —
+  `brl_ledger.rs` (+2, covering its two previously-uncovered `BrlTxType`
+  variants), `reports.rs` (+6, including regression tests for the
+  `export_csv` path-traversal fix and the T3 export-locale-independence gap
+  flagged below), and `settings.rs` (+10, covering all 7 category/label CRUD
+  routes including the blank-name and delete-while-in-use guards) — commit
+  `97e1c43`. Every `crates/web` route file now has automated coverage.
 - **Still open.** The "re-fetch the full list and `.find(|x| x.id == id)`"
   pattern was the motivation for `get(conn, id)` per entity — **fixed** on
   `backlog-get-by-id-dedup` (PR #15), which added `get()` to every entity
@@ -911,31 +953,23 @@ exists instead of the usual inline strikethrough for each one.
   bugs, on-screen-vs-export locale independence, and the donated-item-lock
   regression check) — passed, with two things noted rather than fixed as
   part of this branch:
-  - **New backlog item, found during manual testing:** the Transfers
-    form's "BRL received: R$ ..." preview only appears after a save
-    (error re-render or the edit page after a successful create), not
-    live as the user types an amount/rate — confirmed as a **pre-existing
-    web/desktop parity gap, not an i18n regression**. Desktop's
-    `crates/desktop/src/ui/views/transfers.rs` recomputes the preview
-    every egui frame from the in-progress draft; `web`'s
-    `crates/web/src/routes/transfers.rs::brl_preview` only ever runs
-    server-side against whatever draft the current page render already
-    has, and `crates/web/templates/transfers/form.html` has no
-    client-side JS to recompute it on input. Present since the original
-    web Transfers port (`d70b5c0`); the i18n commit only swapped the
-    hardcoded English string for a translated one, it didn't add or
-    remove any live-preview mechanism. Needs a deliberate decision (add
-    a small `oninput` JS recompute, matching values/format the server
-    already computes on submit, vs. leave web without a live preview)
-    before treating it as done.
-  - **Not yet tested, flagged so it isn't silently assumed passing:**
-    step 6 of the test guide — confirming the Export CSV/PDF forms'
-    "Report language" dropdown produces a download in the *dropdown's*
-    chosen language even when it differs from the current on-screen
-    `ui_locale` chrome (T3: export locale is always an explicit
-    per-export argument, never read from the ambient UI locale). The
-    on-screen-vs-chrome-locale half of step 6 *was* tested and passed;
-    only the dropdown-vs-download-language half was skipped this pass.
+  - ~~The Transfers form's "BRL received: R$ ..." preview only appears
+    after a save, not live as the user types~~ **Fixed** on
+    `transfers-create-with-documents-and-live-preview` (commit `8a2c74e`,
+    PR #23) — landed *after* this note was written but before this
+    CLAUDE.md section was updated to say so, which is why the strikethrough
+    is here instead of at the time. `transfers/form.html` now has an
+    `oninput` handler that `fetch()`es `/transfers/preview` and updates the
+    preview line live, matching desktop's per-frame recompute.
+  - ~~Not yet tested: step 6's dropdown-vs-download-language half (T3 export
+    locale independence)~~ **Now covered by an automated test**, closing
+    the gap this note flagged as manually-skipped:
+    `export_csv_amount_follows_the_explicit_locale_param_not_the_chrome_locale`
+    in `crates/web/src/routes/reports.rs` (commit `97e1c43`) sets
+    `ui_locale=en` but requests the export with `locale=de` and asserts the
+    German column headers appear — since CSV *data* columns are themselves
+    locale-invariant by design (T6), the headers are what actually isolate
+    `q.locale` from the ambient chrome locale here.
 - Session mechanism restart-invalidates-all-sessions tradeoff (see phase 5
   summary above) — a deliberate design decision, not a defect. Revisit only
   if restarts turn out to be more frequent than expected once this is in
