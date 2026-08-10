@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
 use adm_sfa_core::db::queries::{
@@ -22,11 +23,12 @@ use adm_sfa_core::model::inventory::{
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
 use adm_sfa_core::service::{self, PendingDocument};
 
+use crate::flash::{self, FlashKind};
 use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{
-    AttachResult, CategoryOption, DonationOption, DonationRow, DonationsTemplate, HtmlTemplate,
-    InventoryFormTemplate, InventoryListTemplate, InventoryRow, PurchaseOption,
+    AttachResult, CategoryOption, DonationOption, DonationRow, DonationsTemplate, Flash,
+    HtmlTemplate, InventoryFormTemplate, InventoryListTemplate, InventoryRow, PurchaseOption,
 };
 
 /// Distinguishes concurrent uploads landing on the same temp path — same
@@ -192,6 +194,7 @@ fn form_template(
     // path except a create-with-documents submission where the item
     // saved but at least one staged document failed to attach.
     attach_results: Vec<AttachResult>,
+    flash: Option<Flash>,
 ) -> InventoryFormTemplate {
     let categories = cat_qry::list(conn).unwrap_or_default();
     let donations = donors_qry::list_donations(conn).unwrap_or_default();
@@ -230,6 +233,7 @@ fn form_template(
         labels,
         locked,
         attach_results,
+        flash,
         locale,
     }
 }
@@ -270,6 +274,7 @@ fn item_form_response(
         locale,
         None,
         attach_results,
+        None,
     ))
     .into_response()
 }
@@ -280,7 +285,7 @@ fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String)
     item_form_response(conn, id, Some(error), Vec::new())
 }
 
-async fn list(State(state): State<AppState>) -> impl IntoResponse {
+async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let items = qry::list(&conn).unwrap_or_default();
@@ -295,10 +300,16 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             source_desc: i.source_desc,
         })
         .collect();
-    HtmlTemplate(InventoryListTemplate {
-        items: rows,
-        locale,
-    })
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(InventoryListTemplate {
+            items: rows,
+            flash,
+            locale,
+        }),
+    )
 }
 
 /// Query params the "+ New donation" round trip comes back with — the New
@@ -369,10 +380,15 @@ async fn new_form(
         locale,
         source_type_override,
         Vec::new(),
+        None,
     ))
 }
 
-async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn edit_form(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> Response {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let Some(item) = qry::get(&conn, id).ok().flatten() else {
@@ -389,17 +405,23 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         status: item.status,
         notes: item.notes.unwrap_or_default(),
     };
-    HtmlTemplate(form_template(
-        &conn,
-        Some(id),
-        &draft,
-        None,
-        documents,
-        locale,
-        None,
-        Vec::new(),
-    ))
-    .into_response()
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(form_template(
+            &conn,
+            Some(id),
+            &draft,
+            None,
+            documents,
+            locale,
+            None,
+            Vec::new(),
+            flash,
+        )),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -465,7 +487,11 @@ fn draft_from_form(form: InventoryForm, source_type: SourceType) -> InventoryIte
 /// travel in a multipart body. Mirrors `purchases.rs::create` and
 /// `transfers.rs::create` field-for-field (repeated `doc_label`/`doc_file`
 /// pairs paired positionally, not by index).
-async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+async fn create(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    mut multipart: Multipart,
+) -> Response {
     let mut name = String::new();
     let mut category_id = String::new();
     let mut location = String::new();
@@ -568,6 +594,7 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Resp
             locale,
             Some(""),
             Vec::new(),
+            None,
         ))
         .into_response();
     };
@@ -608,11 +635,13 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Resp
                 locale,
                 None,
                 Vec::new(),
+                None,
             ))
             .into_response()
         }
         Ok(created) if created.attachments.iter().all(|a| a.result.is_ok()) => {
-            Redirect::to("/inventory").into_response()
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/inventory")).into_response()
         }
         Ok(created) => {
             // Zipped by index rather than using `a.source_name` — `pending`
@@ -655,6 +684,7 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Resp
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<InventoryForm>,
 ) -> Response {
     let conn = state.conn();
@@ -675,12 +705,16 @@ async fn update(
             locale,
             Some(""),
             Vec::new(),
+            None,
         ))
         .into_response();
     };
     let draft = draft_from_form(form, source_type);
     match qry::update(&conn, id, &draft) {
-        Ok(()) => Redirect::to(&format!("/inventory/{id}/edit")).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to(&format!("/inventory/{id}/edit"))).into_response()
+        }
         Err(e) => {
             let documents = documents_qry::list_for_record(&conn, "item", id).unwrap_or_default();
             // A donated item only ever allows `notes` to change — if that's
@@ -722,6 +756,7 @@ async fn update(
                 locale,
                 None,
                 Vec::new(),
+                None,
             ))
             .into_response()
         }

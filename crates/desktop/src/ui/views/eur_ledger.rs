@@ -40,6 +40,7 @@ pub struct EurLedgerView {
     donors_loaded: bool,
     new_donor: Option<DonorDraft>,
     nav_request: Option<LedgerNavTarget>,
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for EurLedgerView {
@@ -55,6 +56,7 @@ impl Default for EurLedgerView {
             donors_loaded: false,
             new_donor: None,
             nav_request: None,
+            save_status: None,
         }
     }
 }
@@ -63,6 +65,7 @@ impl EurLedgerView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
         self.donors_loaded = false;
+        self.save_status = None;
     }
 
     /// Drains a pending cross-section navigation request — see
@@ -94,6 +97,8 @@ impl EurLedgerView {
                 Err(e) => self.error = Some(e.to_string()),
             }
         }
+
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
 
         egui::Panel::left("eur_ledger_list_panel")
             .resizable(true)
@@ -139,6 +144,7 @@ impl EurLedgerView {
             self.draft = EurTxDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
+            self.save_status = None;
             self.donors_loaded = false;
             self.new_donor = None;
         }
@@ -211,6 +217,7 @@ impl EurLedgerView {
                             };
                             self.mode = Mode::Editing(id);
                             self.error = None;
+                            self.save_status = None;
                             self.new_donor = None;
                         } else {
                             self.mode = Mode::ViewingLinked(id);
@@ -432,6 +439,8 @@ impl EurLedgerView {
                             self.mode = Mode::List;
                             self.needs_reload = true;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -440,6 +449,8 @@ impl EurLedgerView {
                         Ok(()) => {
                             self.needs_reload = true;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -449,6 +460,7 @@ impl EurLedgerView {
             if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
+                self.save_status = None;
                 self.new_donor = None;
             }
         });

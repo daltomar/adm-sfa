@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
 use adm_sfa_core::db::queries::{documents as documents_qry, purchases as purchases_qry};
@@ -14,6 +15,7 @@ use adm_sfa_core::format;
 use adm_sfa_core::model::purchase::{Currency, Purchase, PurchaseDraft, PurchaseStatus};
 use adm_sfa_core::service::{self, PendingDocument};
 
+use crate::flash::{self, FlashKind};
 use crate::state::AppState;
 use crate::templates::{
     AttachResult, HtmlTemplate, PurchaseFormTemplate, PurchaseRow, PurchasesListTemplate,
@@ -61,6 +63,7 @@ fn purchase_form_response(
         documents,
         labels,
         attach_results,
+        flash: None,
         locale,
     })
     .into_response()
@@ -95,7 +98,7 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn list(State(state): State<AppState>) -> impl IntoResponse {
+async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let purchases = purchases_qry::list(&conn).unwrap_or_default();
@@ -115,10 +118,16 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             multiple_items: p.multiple_items,
         })
         .collect();
-    HtmlTemplate(PurchasesListTemplate {
-        purchases: rows,
-        locale,
-    })
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(PurchasesListTemplate {
+            purchases: rows,
+            flash,
+            locale,
+        }),
+    )
 }
 
 async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
@@ -136,11 +145,16 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
         is_negotiating: false,
         labels,
         attach_results: Vec::new(),
+        flash: None,
         locale,
     })
 }
 
-async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn edit_form(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let Some(purchase) = purchases_qry::get(&conn, id).ok().flatten() else {
@@ -149,17 +163,23 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
     let documents = documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
     let labels = documents_qry::labels(&conn).unwrap_or_default();
     let draft = draft_from_purchase(&purchase);
-    HtmlTemplate(PurchaseFormTemplate {
-        id: Some(id),
-        is_negotiating: draft.status == PurchaseStatus::Negotiating,
-        draft,
-        error: None,
-        documents,
-        labels,
-        attach_results: Vec::new(),
-        locale,
-    })
-    .into_response()
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(PurchaseFormTemplate {
+            id: Some(id),
+            is_negotiating: draft.status == PurchaseStatus::Negotiating,
+            draft,
+            error: None,
+            documents,
+            labels,
+            attach_results: Vec::new(),
+            flash,
+            locale,
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -203,7 +223,11 @@ fn draft_from_form(form: PurchaseForm, status: PurchaseStatus) -> PurchaseDraft 
 /// repeated form keys, `Multipart` streams fields one at a time regardless
 /// of name repetition, so repeated `doc_label`/`doc_file` pairs need no
 /// special handling here.
-async fn create(State(state): State<AppState>, mut multipart: Multipart) -> impl IntoResponse {
+async fn create(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
     let mut date = String::new();
     let mut currency = String::new();
     let mut cost_str = String::new();
@@ -325,12 +349,14 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> impl
                 is_negotiating: false,
                 labels,
                 attach_results: Vec::new(),
+                flash: None,
                 locale,
             })
             .into_response()
         }
         Ok(created) if created.attachments.iter().all(|a| a.result.is_ok()) => {
-            Redirect::to("/purchases").into_response()
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/purchases")).into_response()
         }
         Ok(created) => {
             // Zipped by index rather than using `a.source_name` — `pending`
@@ -373,6 +399,7 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> impl
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<PurchaseForm>,
 ) -> impl IntoResponse {
     let conn = state.conn();
@@ -407,6 +434,7 @@ async fn update(
                 documents,
                 labels,
                 attach_results: Vec::new(),
+                flash: None,
                 locale,
             })
             .into_response();
@@ -414,7 +442,10 @@ async fn update(
     }
 
     match purchases_qry::update(&conn, id, &draft) {
-        Ok(()) => Redirect::to(&format!("/purchases/{id}/edit")).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to(&format!("/purchases/{id}/edit"))).into_response()
+        }
         Err(e) => {
             let documents =
                 documents_qry::list_for_record(&conn, "purchase", id).unwrap_or_default();
@@ -427,6 +458,7 @@ async fn update(
                 documents,
                 labels,
                 attach_results: Vec::new(),
+                flash: None,
                 locale,
             })
             .into_response()
@@ -455,6 +487,7 @@ async fn mark_bought(State(state): State<AppState>, Path(id): Path<i64>) -> impl
                 documents,
                 labels,
                 attach_results: Vec::new(),
+                flash: None,
                 locale,
             })
             .into_response()
@@ -1032,6 +1065,69 @@ mod tests {
             !body.contains("1,234.56"),
             "cost rendered in English format despite ui_locale=de: {body}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `update`'s success redirect lands on this purchase's own edit page
+    /// (`/purchases/{id}/edit`), not the list — unlike `create`, whose flash
+    /// is read back on `/purchases`. Confirms the flash cookie set on update
+    /// survives to the *correct* divergent redirect target.
+    #[tokio::test]
+    async fn update_redirects_and_the_edit_page_shows_the_flash() {
+        let (state, dir) = test_support::test_app("purchases-update-flash-on-edit-page");
+        let purchase_id = purchases_qry::insert(&state.conn(), &a_purchase_draft()).unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "date=2026-02-02&currency=EUR&cost_str=75.00&channel=Kleinanzeigen&seller_info=";
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/purchases/{purchase_id}"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            res.headers().get("location").unwrap(),
+            &format!("/purchases/{purchase_id}/edit")
+        );
+        let flash_cookie = res
+            .headers()
+            .get("set-cookie")
+            .expect("update should have set a flash cookie")
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        let combined_cookie = format!("{cookie}; {flash_cookie}");
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/purchases/{purchase_id}/edit"))
+            .header("cookie", &combined_cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Saved successfully."));
+
+        // The list page never received the flash cookie, so it must not
+        // show the banner either.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/purchases")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        let body_text = test_support::body_text(res).await;
+        assert!(!body_text.contains("Saved successfully."));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

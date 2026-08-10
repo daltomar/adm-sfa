@@ -577,6 +577,110 @@ generalize. Verified live: with `ui_locale=de`, a BRL purchase rendered
   never compiles `#[cfg(test)]` modules) left as a documented, non-blocking
   observation, not fixed.
 
+## Post-save success/error banner (implemented)
+
+Branch `save-status-banner`. Neither front-end confirmed a successful save
+before this — desktop silently flipped back to list/stayed on the form; web
+did a bare `Redirect::to(...)` with nothing attached. A banner now appears
+after the main record create/update Save action in both front-ends: 8
+sections — purchases, donors, eur_ledger, transfers, inventory, outbound,
+and settings' category/document_label CRUD (6 actions) — persists until the
+user navigates away (no auto-dismiss timer). `brl_ledger` is out of scope
+on both front-ends (no create/update anywhere), and so are secondary
+actions — mark-bought, drop-negotiating-purchase, attach/remove document,
+locale change, manual backup, and every inline "+ New X" create reached via
+a `return_to` round trip (e.g. "+ New donor" from another section's form) —
+these keep their existing behavior unchanged. Pure presentation, no `core`
+involvement: `core`'s `Result<_, _>` returns already are the domain-level
+success/error signal: both front-ends just carry that signal one render
+further than before (web: across a redirect; desktop: across the frame
+where `mode` changes or stays).
+
+- **Web**: new `crates/web/src/flash.rs` — a short-lived (30s), read-once,
+  signed cookie (`adm_sfa_flash`, mirroring `auth.rs`'s session-cookie
+  security attributes) set via `set_flash` right before a save handler's
+  redirect, and read-and-cleared via `take_flash` by the GET handler at
+  the redirect target (the PRG pattern — no session store beyond the one
+  auth cookie existed to carry this otherwise). `FlashKind` is two-armed
+  (`Success`/`Error`) for symmetry with desktop's equivalent, but no
+  in-scope call site ever constructs `Error` — every failing create/update
+  already re-renders its own form inline with the pre-existing `.error`
+  div (no redirect on failure, so no cross-request problem there). New
+  `templates::Flash` struct threaded into the 12 template structs that are
+  genuine redirect targets (list *and* form templates where `update`
+  redirects to the edit page rather than the list, e.g.
+  `PurchaseFormTemplate`/`TransferFormTemplate`/`InventoryFormTemplate`/
+  `OutboundFormTemplate`); `eur_ledger/form.html` deliberately has no flash
+  field since both its create and update redirect to the *list*, never
+  back to itself. New `{% block flash %}{% endblock %}` in `layout.html`
+  ahead of `{% block content %}`, overridden identically by all 12
+  templates. New `common.status.save_success`/`save_failed` i18n keys
+  (`locales/{en,de,pt-BR}.yml`).
+- **Desktop**: reintroduces `crates/desktop/src/ui/widgets/` (CLAUDE.md's
+  note on the deleted `document_panel.rs` stub said to add it back only if
+  a second shared widget materialized — this is that widget):
+  `status_banner::show(ui, &Option<Result<String,String>>)`, a one-line
+  no-op-if-`None` render generalizing the ad hoc pattern `settings.rs`
+  already used locally for `screenshot_status`/`backup_status`. A new
+  `save_status` field on the 7 in-scope views (donors, purchases,
+  eur_ledger, transfers, inventory, outbound, settings — `brl_ledger` has
+  no insert/update anywhere) is set on each Save button's `Ok` arm and
+  cleared at every existing `error = None` transition site (Cancel,
+  +Add/New, row-select-to-edit, `select_for_edit`) plus in each view's
+  `invalidate()` — the latter is what makes "gone on navigate-away-and-
+  back" correct, since switching `Section` calls `invalidate()` on
+  re-entry. Rendered once, at the top of each view's `show()`, before the
+  list/form split — necessary because which `Mode` a view lands in after a
+  successful Save differs by section (donors/eur_ledger's create returns
+  to `Mode::List`; purchases/transfers/inventory/outbound's create stays in
+  `Mode::Editing(new_id)` to allow immediate document attachment; every
+  section's update never changes mode at all).
+- A real bug was found only by manual live-server testing, not by the
+  first automated-test pass: `take_flash`'s original removal cookie
+  (`jar.remove(Cookie::from(FLASH_COOKIE))`) had no explicit `path("/")`.
+  A `Set-Cookie` with no path defaults to the *request URI's directory*
+  (RFC 6265), not `/` — so consuming the flash on a nested route like
+  `/purchases/1/edit` emitted a deletion scoped to `/purchases/1`, which a
+  real browser (correctly) leaves the original `Path=/` cookie alone for,
+  so it survived and reappeared on the next unrelated `/purchases` list
+  load a moment later. Fixed by building the removal cookie as
+  `Cookie::build(FLASH_COOKIE).path("/")`. The first version of the
+  regression test (`flash::tests::take_flash_clears_the_cookie_with_a_path_
+  matching_set_flash`) passed against both the buggy and fixed code —
+  a single in-memory `SignedCookieJar` object never round-trips through
+  `from_headers`, so `cookie` crate's `CookieJar::remove` takes its
+  no-op-cancel-a-pending-add branch instead of ever emitting a removal
+  header at all (verified against the vendored `cookie-0.18.1` source).
+  The corrected test renders `set_flash`'s response for real, feeds its
+  `Set-Cookie` value back in as a fresh request's `Cookie:` header via
+  `SignedCookieJar::from_headers`, then asserts the *emitted* removal
+  header contains `Path=/` — confirmed to fail against the bug and pass
+  against the fix before being kept.
+- Desktop could **not** be interactively verified in this session — no
+  display server was available (matches the precedent already noted in
+  the "Purchase creation with documents in one step" section above).
+  Compiles cleanly, passes `cargo clippy --workspace -- -D warnings`, and
+  every view's `save_status` wiring was traced by hand against the exact
+  Save-button control flow (all ~13 create/update success arms across the
+  7 views, plus every existing `error = None` clearing site) rather than
+  clicked through. Web was verified end-to-end against a live running
+  server with `curl` (login, save, banner-appears, refresh-clears-it, and
+  the update-lands-on-edit-page-not-list case for every section that has
+  that divergence) in addition to the automated route tests.
+- 7 new tests in `crates/web/src/flash.rs` (round-trip, tampered/absent
+  cookie, the path-scoping regression above) and one dedicated flash-cookie
+  round-trip route test per representative section (`donors.rs`,
+  `purchases.rs`'s update-lands-on-edit-page case, `settings.rs`).
+  Desktop's `save_status` wiring has no automated test — the Save-button
+  logic lives inside each view's `show_form`'s egui closures, not a
+  standalone function callable without a live `egui::Ui`/`Context`, and
+  this codebase has no existing precedent for headless-egui-context
+  testing to build on; flagged here rather than silently skipped.
+- Reviewed by `rust-code-reviewer`: no 🔴 findings. One 🟡 (settings.rs's
+  6 CRUD actions had no flash-specific test, unlike every other touched
+  section) fixed before commit by adding
+  `create_category_redirects_and_the_index_page_shows_the_flash`.
+
 ## Web date picker format (backlog — not started)
 
 Owner request, not yet implemented: the web front-end's date fields (all

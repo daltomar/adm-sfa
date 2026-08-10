@@ -3,11 +3,13 @@ use axum::response::{IntoResponse, Redirect};
 use axum::routing::get;
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
 use adm_sfa_core::db::queries::donors as donors_qry;
 use adm_sfa_core::model::donor::DonorDraft;
 
+use crate::flash::{self, FlashKind};
 use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{DonorFormTemplate, DonorRow, DonorsListTemplate, HtmlTemplate};
@@ -19,7 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/donors/{id}/edit", get(edit_form).post(update))
 }
 
-async fn list(State(state): State<AppState>) -> impl IntoResponse {
+async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let donors = donors_qry::list(&conn).unwrap_or_default();
@@ -31,10 +33,16 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             contact_info: d.contact_info.unwrap_or_default(),
         })
         .collect();
-    HtmlTemplate(DonorsListTemplate {
-        donors: rows,
-        locale,
-    })
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(DonorsListTemplate {
+            donors: rows,
+            flash,
+            locale,
+        }),
+    )
 }
 
 #[derive(Deserialize)]
@@ -54,11 +62,16 @@ async fn new_form(
         draft: DonorDraft::default(),
         error: None,
         return_to: query.return_to.filter(|s| safe_return_to(s)),
+        flash: None,
         locale,
     })
 }
 
-async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn edit_form(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let Some(donor) = donors_qry::get(&conn, id).ok().flatten() else {
@@ -69,14 +82,20 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> impl I
         contact_info: donor.contact_info.unwrap_or_default(),
         notes: donor.notes.unwrap_or_default(),
     };
-    HtmlTemplate(DonorFormTemplate {
-        id: Some(id),
-        draft,
-        error: None,
-        return_to: None,
-        locale,
-    })
-    .into_response()
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(DonorFormTemplate {
+            id: Some(id),
+            draft,
+            error: None,
+            return_to: None,
+            flash,
+            locale,
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -90,7 +109,11 @@ struct DonorForm {
     return_to: String,
 }
 
-async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> impl IntoResponse {
+async fn create(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Form(form): Form<DonorForm>,
+) -> impl IntoResponse {
     let return_to = form.return_to;
     let draft = DonorDraft {
         name: form.name,
@@ -102,6 +125,16 @@ async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> i
     match donors_qry::insert(&conn, &draft) {
         Ok(id) => {
             if safe_return_to(&return_to) {
+                // Lands back on the linking page's own in-progress form
+                // (e.g. `/eur-ledger/new`), not a page this feature wired a
+                // `flash` field into — no flash is set here, since an
+                // unconsumed flash cookie would otherwise linger and
+                // incorrectly surface on whatever flash-aware page the user
+                // navigates to next. This inline "+ New donor" round trip is
+                // an explicitly out-of-scope secondary action (see
+                // CLAUDE.md); only the plain "Donors page → + Add donor"
+                // flow below counts as this feature's donor "save event".
+                //
                 // Assumes return_to carries no #fragment (none of today's
                 // callers emit one) — appending a query after a fragment
                 // would produce a syntactically-wrong-order URL.
@@ -114,7 +147,8 @@ async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> i
                 // list, matching desktop's own Save-while-adding behavior
                 // (`ui/views/donors.rs`'s Save handler sets `Mode::List`,
                 // never a per-donor edit view).
-                Redirect::to("/donors").into_response()
+                let jar = flash::set_flash(jar, FlashKind::Success);
+                (jar, Redirect::to("/donors")).into_response()
             }
         }
         Err(e) => HtmlTemplate(DonorFormTemplate {
@@ -122,6 +156,7 @@ async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> i
             draft,
             error: Some(e.to_string()),
             return_to: Some(return_to).filter(|s| safe_return_to(s)),
+            flash: None,
             locale,
         })
         .into_response(),
@@ -131,6 +166,7 @@ async fn create(State(state): State<AppState>, Form(form): Form<DonorForm>) -> i
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<DonorForm>,
 ) -> impl IntoResponse {
     let draft = DonorDraft {
@@ -141,12 +177,16 @@ async fn update(
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     match donors_qry::update(&conn, id, &draft) {
-        Ok(()) => Redirect::to(&format!("/donors/{id}/edit")).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to(&format!("/donors/{id}/edit"))).into_response()
+        }
         Err(e) => HtmlTemplate(DonorFormTemplate {
             id: Some(id),
             draft,
             error: Some(e.to_string()),
             return_to: None,
+            flash: None,
             locale,
         })
         .into_response(),
@@ -305,6 +345,94 @@ mod tests {
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str().unwrap();
         assert_eq!(location, "/donors");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The normal "Donors page → + Add donor" flow's redirect to `/donors`
+    /// sets a flash cookie, and the list page shows the translated
+    /// "Saved successfully." banner when it reads that cookie back — a
+    /// second load of the same page (simulating a manual refresh) doesn't
+    /// re-show it, since `take_flash` clears the cookie on read.
+    #[tokio::test]
+    async fn create_redirects_and_sets_a_success_flash() {
+        let (state, dir) = test_support::test_app("donors-create-flash");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "name=Alex&contact_info=&notes=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/donors")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let flash_cookie = res
+            .headers()
+            .get("set-cookie")
+            .expect("create should have set a flash cookie")
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        let combined_cookie = format!("{cookie}; {flash_cookie}");
+        let req = Request::builder()
+            .method("GET")
+            .uri("/donors")
+            .header("cookie", &combined_cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(body_text.contains("Saved successfully."));
+
+        // A second load without resending the (now-cleared) flash cookie —
+        // simulating a manual refresh — must not show the banner again.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/donors")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(!body_text.contains("Saved successfully."));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A validation failure never redirects (the form re-renders inline
+    /// with the existing `.error` div), so it must never set a flash cookie
+    /// either — otherwise an unrelated later navigation could surface a
+    /// stray "Saved successfully." banner for a save that never happened.
+    #[tokio::test]
+    async fn create_with_invalid_data_shows_no_flash_cookie() {
+        let (state, dir) = test_support::test_app("donors-create-invalid-no-flash");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = "name=+++&contact_info=&notes=";
+        let req = Request::builder()
+            .method("POST")
+            .uri("/donors")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(
+            res.headers().get("set-cookie").is_none(),
+            "a validation failure must not set a flash cookie"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

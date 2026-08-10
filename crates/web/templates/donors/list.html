@@ -1,4 +1,9 @@
 {% extends "layout.html" %}
+{% block flash %}
+{% if let Some(f) = flash %}
+<div class="{{ f.css_class }}">{{ f.message }}</div>
+{% endif %}
+{% endblock %}
 {% block content %}
 <h1>{{ "sidebar.donors"|t(locale) }}</h1>
 <p><a class="button" href="/donors/new">{{ "donors.button.add"|t(locale) }}</a></p>

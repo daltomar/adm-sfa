@@ -34,6 +34,7 @@ pub struct OutboundView {
 
     selected_item_ids: HashSet<i64>,
     items_needs_reload: bool,
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for OutboundView {
@@ -51,6 +52,7 @@ impl Default for OutboundView {
             inventory_loaded: false,
             selected_item_ids: HashSet::new(),
             items_needs_reload: false,
+            save_status: None,
         }
     }
 }
@@ -60,6 +62,7 @@ impl OutboundView {
         self.needs_reload = true;
         self.inventory_loaded = false;
         self.recipient_projects_loaded = false;
+        self.save_status = None;
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
@@ -105,6 +108,8 @@ impl OutboundView {
             }
         }
 
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
+
         egui::Panel::left("outbound_list_panel")
             .resizable(true)
             .default_size(320.0)
@@ -129,6 +134,7 @@ impl OutboundView {
             self.draft = OutboundEventDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
+            self.save_status = None;
             self.selected_item_ids = HashSet::new();
             self.new_recipient_project = None;
             // inventory_loaded is NOT reset here — the inventory hasn't changed.
@@ -191,6 +197,7 @@ impl OutboundView {
                         };
                         self.mode = Mode::Editing(id);
                         self.error = None;
+                        self.save_status = None;
                         self.new_recipient_project = None;
                         self.inventory_loaded = false;
                         self.items_needs_reload = true;
@@ -323,6 +330,8 @@ impl OutboundView {
                             self.needs_reload = true;
                             self.inventory_loaded = false;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -332,6 +341,8 @@ impl OutboundView {
                             self.needs_reload = true;
                             self.inventory_loaded = false;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -341,6 +352,7 @@ impl OutboundView {
             if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
+                self.save_status = None;
                 self.new_recipient_project = None;
             }
         });

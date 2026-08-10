@@ -68,6 +68,7 @@ pub struct InventoryView {
     pending_doc: Option<PendingAttachment>,
     path_input: Option<String>,
     capture_note: Option<String>,
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for InventoryView {
@@ -95,6 +96,7 @@ impl Default for InventoryView {
             pending_doc: None,
             path_input: None,
             capture_note: None,
+            save_status: None,
         }
     }
 }
@@ -118,6 +120,7 @@ impl InventoryView {
         self.donations_loaded = false;
         self.donors_loaded = false;
         self.labels.clear();
+        self.save_status = None;
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
@@ -190,6 +193,8 @@ impl InventoryView {
             }
         }
 
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
+
         egui::Panel::left("inventory_list_panel")
             .resizable(true)
             .default_size(320.0)
@@ -222,6 +227,7 @@ impl InventoryView {
             self.persisted_status = None;
             self.mode = Mode::Adding;
             self.error = None;
+            self.save_status = None;
             self.docs = Vec::new();
             self.discard_pending_doc();
             self.path_input = None;
@@ -275,6 +281,7 @@ impl InventoryView {
                         self.persisted_status = Some(item.status);
                         self.mode = Mode::Editing(id);
                         self.error = None;
+                        self.save_status = None;
                         self.docs_needs_reload = true;
                         self.discard_pending_doc();
                         self.path_input = None;
@@ -468,6 +475,8 @@ impl InventoryView {
                             self.docs_needs_reload = true;
                             self.needs_reload = true;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -477,6 +486,8 @@ impl InventoryView {
                             self.persisted_status = Some(self.draft.status);
                             self.needs_reload = true;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -487,6 +498,7 @@ impl InventoryView {
                 self.persisted_status = None;
                 self.mode = Mode::List;
                 self.error = None;
+                self.save_status = None;
                 self.discard_pending_doc();
                 self.path_input = None;
                 self.capture_note = None;

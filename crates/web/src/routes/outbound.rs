@@ -3,6 +3,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -12,10 +13,11 @@ use adm_sfa_core::model::inventory::{InventoryItemRow, ItemStatus};
 use adm_sfa_core::model::outbound::{OutboundEventDraft, RecipientProject, RecipientProjectDraft};
 use adm_sfa_core::service;
 
+use crate::flash::{self, FlashKind};
 use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{
-    HtmlTemplate, ItemOption, OutboundFormTemplate, OutboundListTemplate, OutboundRow,
+    Flash, HtmlTemplate, ItemOption, OutboundFormTemplate, OutboundListTemplate, OutboundRow,
     RecipientOption, RecipientRow, RecipientsTemplate,
 };
 
@@ -64,12 +66,14 @@ fn item_options(items: &[InventoryItemRow], selected_ids: &[i64]) -> Vec<ItemOpt
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn form_template(
     conn: &rusqlite::Connection,
     id: Option<i64>,
     draft: &OutboundEventDraft,
     selected_item_ids: &[i64],
     error: Option<String>,
+    flash: Option<Flash>,
     locale: String,
 ) -> OutboundFormTemplate {
     let recipients = qry::list_recipient_projects(conn).unwrap_or_default();
@@ -82,6 +86,7 @@ fn form_template(
         notes: draft.notes.clone(),
         items: item_options(&items, selected_item_ids),
         error,
+        flash,
         locale,
     }
 }
@@ -113,7 +118,7 @@ fn event_summary(item_count: i64, cash: Option<Decimal>, locale: &str) -> String
     s
 }
 
-async fn list(State(state): State<AppState>) -> impl IntoResponse {
+async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let events = qry::list(&conn).unwrap_or_default();
@@ -130,10 +135,16 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             summary: event_summary(e.item_count, e.cash_amount_brl, &locale),
         })
         .collect();
-    HtmlTemplate(OutboundListTemplate {
-        events: rows,
-        locale,
-    })
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(OutboundListTemplate {
+            events: rows,
+            flash,
+            locale,
+        }),
+    )
 }
 
 /// Query params the "+ New recipient" round trip comes back with —
@@ -176,10 +187,14 @@ async fn new_form(
         cash_amount_brl_str: query.cash_amount_brl_str.unwrap_or_default(),
         notes: query.notes.unwrap_or_default(),
     };
-    HtmlTemplate(form_template(&conn, None, &draft, &[], None, locale))
+    HtmlTemplate(form_template(&conn, None, &draft, &[], None, None, locale))
 }
 
-async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn edit_form(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> Response {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let Some(event) = qry::get(&conn, id).ok().flatten() else {
@@ -195,15 +210,21 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
             .unwrap_or_default(),
         notes: event.notes.unwrap_or_default(),
     };
-    HtmlTemplate(form_template(
-        &conn,
-        Some(id),
-        &draft,
-        &selected_item_ids,
-        None,
-        locale,
-    ))
-    .into_response()
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(form_template(
+            &conn,
+            Some(id),
+            &draft,
+            &selected_item_ids,
+            None,
+            flash,
+            locale,
+        )),
+    )
+        .into_response()
 }
 
 /// Outbound's form needs a repeated `item_ids` field (one checkbox per
@@ -256,7 +277,11 @@ fn parse_outbound_form(bytes: &[u8]) -> OutboundForm {
     }
 }
 
-async fn create(State(state): State<AppState>, RawForm(bytes): RawForm) -> Response {
+async fn create(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    RawForm(bytes): RawForm,
+) -> Response {
     let form = parse_outbound_form(&bytes);
     let draft = OutboundEventDraft {
         date: form.date,
@@ -271,7 +296,10 @@ async fn create(State(state): State<AppState>, RawForm(bytes): RawForm) -> Respo
         // inventory.rs's create_donation(): the normal "section page → + New
         // X" flow should return to the list, not detour through an edit view
         // the user didn't ask to open.
-        Ok(_id) => Redirect::to("/outbound").into_response(),
+        Ok(_id) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/outbound")).into_response()
+        }
         Err(e) => {
             let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
@@ -280,6 +308,7 @@ async fn create(State(state): State<AppState>, RawForm(bytes): RawForm) -> Respo
                 &draft,
                 &form.item_ids,
                 Some(e.to_string()),
+                None,
                 locale,
             ))
             .into_response()
@@ -290,6 +319,7 @@ async fn create(State(state): State<AppState>, RawForm(bytes): RawForm) -> Respo
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     RawForm(bytes): RawForm,
 ) -> Response {
     let form = parse_outbound_form(&bytes);
@@ -301,7 +331,10 @@ async fn update(
     };
     let conn = state.conn();
     match qry::update(&conn, id, &draft, &form.item_ids) {
-        Ok(()) => Redirect::to(&format!("/outbound/{id}/edit")).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to(&format!("/outbound/{id}/edit"))).into_response()
+        }
         Err(e) => {
             let locale = crate::i18n::resolve_locale(&conn);
             HtmlTemplate(form_template(
@@ -310,6 +343,7 @@ async fn update(
                 &draft,
                 &form.item_ids,
                 Some(e.to_string()),
+                None,
                 locale,
             ))
             .into_response()
@@ -390,8 +424,7 @@ async fn create_recipient(
                 // would produce a syntactically-wrong-order URL. Mirrors
                 // `donors.rs::create` / `inventory.rs::create_donation`.
                 let sep = if return_to.contains('?') { '&' } else { '?' };
-                Redirect::to(&format!("{return_to}{sep}recipient_project_id={id}"))
-                    .into_response()
+                Redirect::to(&format!("{return_to}{sep}recipient_project_id={id}")).into_response()
             } else {
                 // No caller-supplied return path (a direct visit to this
                 // page's own nav entry) or an unsafe one (rejected above,
@@ -548,7 +581,10 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str().unwrap();
-        assert_eq!(location, "/outbound/new?date=2026-01-01&recipient_project_id=1");
+        assert_eq!(
+            location,
+            "/outbound/new?date=2026-01-01&recipient_project_id=1"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -611,9 +647,8 @@ mod tests {
     async fn new_form_with_a_recipient_project_id_query_param_preselects_it() {
         let (state, dir) = test_support::test_app("outbound-new-form-preselect");
         let conn = state.conn();
-        let rp_id =
-            super::qry::insert_recipient_project(&conn, &recipient_draft("PreselectedOrg"))
-                .unwrap();
+        let rp_id = super::qry::insert_recipient_project(&conn, &recipient_draft("PreselectedOrg"))
+            .unwrap();
         drop(conn);
 
         let app = crate::build_app(state.clone());

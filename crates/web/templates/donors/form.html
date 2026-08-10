@@ -1,4 +1,9 @@
 {% extends "layout.html" %}
+{% block flash %}
+{% if let Some(f) = flash %}
+<div class="{{ f.css_class }}">{{ f.message }}</div>
+{% endif %}
+{% endblock %}
 {% block content %}
 {% if let Some(id) = id %}
 <h1>{{ "donors.heading.edit"|t(locale) }}</h1>

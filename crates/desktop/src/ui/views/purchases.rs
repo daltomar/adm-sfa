@@ -61,6 +61,7 @@ pub struct PurchasesView {
     path_input: Option<String>,
     confirm_drop: bool,
     capture_note: Option<String>,
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for PurchasesView {
@@ -79,6 +80,7 @@ impl Default for PurchasesView {
             path_input: None,
             confirm_drop: false,
             capture_note: None,
+            save_status: None,
         }
     }
 }
@@ -110,6 +112,7 @@ impl PurchasesView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
         self.labels.clear();
+        self.save_status = None;
     }
 
     /// Jumps straight into editing purchase `id` — the entry point for EUR
@@ -142,6 +145,7 @@ impl PurchasesView {
         };
         self.mode = Mode::Editing(id);
         self.error = None;
+        self.save_status = None;
         self.docs_needs_reload = true;
         self.discard_pending_doc();
         self.discard_staged_docs();
@@ -180,6 +184,8 @@ impl PurchasesView {
             }
         }
 
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
+
         egui::Panel::left("purchases_list_panel")
             .resizable(true)
             .default_size(280.0)
@@ -215,6 +221,7 @@ impl PurchasesView {
             self.draft = PurchaseDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
+            self.save_status = None;
             self.docs = Vec::new();
             self.discard_pending_doc();
             self.discard_staged_docs();
@@ -272,6 +279,7 @@ impl PurchasesView {
                         };
                         self.mode = Mode::Editing(id);
                         self.error = None;
+                        self.save_status = None;
                         self.docs_needs_reload = true;
                         self.discard_pending_doc();
                         self.discard_staged_docs();
@@ -468,11 +476,16 @@ impl PurchasesView {
                                     }
                                 }
                             }
-                            self.error = if failed > 0 {
-                                Some(t!("common.doc.status.failed_count", n = failed).into_owned())
+                            if failed > 0 {
+                                self.error = Some(
+                                    t!("common.doc.status.failed_count", n = failed).into_owned(),
+                                );
+                                self.save_status = None;
                             } else {
-                                None
-                            };
+                                self.error = None;
+                                self.save_status =
+                                    Some(Ok(t!("common.status.save_success").into_owned()));
+                            }
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -503,6 +516,8 @@ impl PurchasesView {
                             Ok(()) => {
                                 self.needs_reload = true;
                                 self.error = None;
+                                self.save_status =
+                                    Some(Ok(t!("common.status.save_success").into_owned()));
                             }
                             Err(e) => self.error = Some(e.to_string()),
                         }
@@ -513,6 +528,7 @@ impl PurchasesView {
             if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
+                self.save_status = None;
                 self.discard_pending_doc();
                 self.discard_staged_docs();
                 self.path_input = None;
