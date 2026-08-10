@@ -1083,9 +1083,33 @@ exists instead of the usual inline strikethrough for each one.
   in `core` and switched `web`'s single-row lookups to it. (Note: this only
   replaced the *lookup* pattern; it didn't touch call sites that
   legitimately need the full list, e.g. pickers.)
-- **Still open.** `crates/web/src/main.rs::parse_data_dir` still duplicates
+- ~~**Still open.** `crates/web/src/main.rs::parse_data_dir` still duplicates
   `crates/desktop/src/main.rs`'s hand-rolled `--data-dir` parsing verbatim —
-  not yet moved into `adm_sfa_core::config`.
+  not yet moved into `adm_sfa_core::config`.~~ **Fixed**: the two copies had
+  actually already drifted, not stayed verbatim — `desktop`'s only checked
+  `--data-dir`, `web`'s also checked `ADM_SFA_DATA_DIR` as a fallback,
+  despite this very doc's own "Useful commands" section already describing
+  `ADM_SFA_DATA_DIR` as following "the same convention as desktop." Moved
+  the more complete (web's) version into `adm_sfa_core::config::
+  parse_data_dir(args: impl Iterator<Item = String>) -> PathBuf`, switched
+  both binaries to call it — giving `desktop` `ADM_SFA_DATA_DIR` support it
+  never actually had, closing the doc/code mismatch as a side effect, not
+  just deduplicating. Two new tests: CLI-flag priority (doesn't touch the
+  env var, safe under parallel test execution) and the env-var/default
+  fallback pair kept in one `#[test]` function deliberately, since
+  `ADM_SFA_DATA_DIR` is process-global and nothing else in the workspace
+  reads or writes it. Verified live against the built `web` binary (not
+  just unit tests): `ADM_SFA_DATA_DIR` alone creates the DB there; a
+  `--data-dir` flag alongside a different `ADM_SFA_DATA_DIR` wins, and the
+  env-var path is never created. Desktop's call site is a one-line
+  pass-through to the same tested function — not interactively verified
+  (no display server), but nothing in `desktop`'s own code touches
+  `ADM_SFA_DATA_DIR` or assumed `--data-dir` was the only override
+  mechanism. Reviewed by `rust-code-reviewer`: no 🔴 findings; one 🟡 noted,
+  not fixed — a malformed trailing `--data-dir` with no value silently
+  falls through to the env var/default instead of erroring, unchanged
+  behavior inherited from both original copies, just now visible in one
+  shared place.
 - ~~`/logout` ... is a plain `GET`~~ / ~~session cookie has no explicit
   `Max-Age`~~ **Both fixed** on `backlog-logout-post-and-cookie-expiry` (PR
   #13): `/logout` is now a `POST` (styled as a small form in the header),

@@ -7,7 +7,6 @@ mod templates;
 #[cfg(test)]
 mod test_support;
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 // Compile-time locale catalogue (mirrors crates/desktop/src/main.rs and
@@ -37,7 +36,7 @@ const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024; // 25 MiB — photos/screensho
 
 #[tokio::main]
 async fn main() {
-    let data_dir = parse_data_dir();
+    let data_dir = adm_sfa_core::config::parse_data_dir(std::env::args());
     adm_sfa_core::config::ensure_dirs(&data_dir);
     let documents_dir = data_dir.join("documents");
 
@@ -95,19 +94,4 @@ fn build_app(state: AppState) -> Router {
         .merge(protected)
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .with_state(state)
-}
-
-fn parse_data_dir() -> PathBuf {
-    let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        if args[i] == "--data-dir" && i + 1 < args.len() {
-            return PathBuf::from(&args[i + 1]);
-        }
-        i += 1;
-    }
-    if let Ok(dir) = std::env::var("ADM_SFA_DATA_DIR") {
-        return PathBuf::from(dir);
-    }
-    adm_sfa_core::config::default_data_dir()
 }
