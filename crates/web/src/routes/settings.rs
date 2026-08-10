@@ -3,12 +3,14 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
 use adm_sfa_core::db::queries::{categories as cat_qry, documents as documents_qry};
 
+use crate::flash::{self, FlashKind};
 use crate::state::AppState;
-use crate::templates::{HtmlTemplate, SettingsTemplate};
+use crate::templates::{Flash, HtmlTemplate, SettingsTemplate};
 
 /// Category and document-label CRUD only — desktop's Settings also has a
 /// locale picker, a screenshot-command field, and a manual "backup now"
@@ -36,7 +38,11 @@ pub fn router() -> Router<AppState> {
         .route("/settings/labels/{id}/delete", post(delete_label))
 }
 
-fn settings_template(conn: &rusqlite::Connection, error: Option<String>) -> SettingsTemplate {
+fn settings_template(
+    conn: &rusqlite::Connection,
+    error: Option<String>,
+    flash: Option<Flash>,
+) -> SettingsTemplate {
     let categories = cat_qry::list(conn)
         .unwrap_or_default()
         .into_iter()
@@ -48,13 +54,17 @@ fn settings_template(conn: &rusqlite::Connection, error: Option<String>) -> Sett
         categories,
         labels,
         error,
+        flash,
         locale,
     }
 }
 
-async fn index(State(state): State<AppState>) -> impl IntoResponse {
+async fn index(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
-    HtmlTemplate(settings_template(&conn, None))
+    let locale = crate::i18n::resolve_locale(&conn);
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (jar, HtmlTemplate(settings_template(&conn, None, flash)))
 }
 
 #[derive(Deserialize)]
@@ -62,68 +72,106 @@ struct NameForm {
     name: String,
 }
 
-async fn create_category(State(state): State<AppState>, Form(form): Form<NameForm>) -> Response {
+async fn create_category(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Form(form): Form<NameForm>,
+) -> Response {
     let conn = state.conn();
     match cat_qry::insert(&conn, &form.name) {
-        Ok(_) => Redirect::to("/settings").into_response(),
-        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+        Ok(_) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
     }
 }
 
 async fn rename_category(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<NameForm>,
 ) -> Response {
     let conn = state.conn();
     match cat_qry::update(&conn, id, &form.name) {
-        Ok(()) => Redirect::to("/settings").into_response(),
-        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
     }
 }
 
-async fn delete_category(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn delete_category(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> Response {
     let conn = state.conn();
     match cat_qry::in_use(&conn, id) {
-        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
         Ok(true) => {
             let locale = crate::i18n::resolve_locale(&conn);
             let error =
                 rust_i18n::t!("settings.category.error.in_use", locale = &locale).to_string();
-            HtmlTemplate(settings_template(&conn, Some(error))).into_response()
+            HtmlTemplate(settings_template(&conn, Some(error), None)).into_response()
         }
         Ok(false) => match cat_qry::delete(&conn, id) {
-            Ok(()) => Redirect::to("/settings").into_response(),
-            Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+            Ok(()) => {
+                let jar = flash::set_flash(jar, FlashKind::Success);
+                (jar, Redirect::to("/settings")).into_response()
+            }
+            Err(e) => {
+                HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response()
+            }
         },
     }
 }
 
-async fn create_label(State(state): State<AppState>, Form(form): Form<NameForm>) -> Response {
+async fn create_label(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Form(form): Form<NameForm>,
+) -> Response {
     let conn = state.conn();
     match documents_qry::insert_label(&conn, &form.name) {
-        Ok(_) => Redirect::to("/settings").into_response(),
-        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+        Ok(_) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
     }
 }
 
 async fn rename_label(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<NameForm>,
 ) -> Response {
     let conn = state.conn();
     match documents_qry::update_label(&conn, id, &form.name) {
-        Ok(()) => Redirect::to("/settings").into_response(),
-        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
     }
 }
 
-async fn delete_label(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn delete_label(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> Response {
     let conn = state.conn();
     match documents_qry::delete_label(&conn, id) {
-        Ok(()) => Redirect::to("/settings").into_response(),
-        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()))).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
     }
 }
 
@@ -184,6 +232,66 @@ mod tests {
         let categories = cat_qry::list(&state.conn()).unwrap();
         assert_eq!(categories.len(), before + 1);
         assert!(categories.iter().any(|c| c.name == "Skateboard Wheels"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Flash-cookie round trip for the Settings section — mirrors
+    /// `donors.rs`'s `create_redirects_and_sets_a_success_flash`. Only one
+    /// of Settings' 6 CRUD actions needs this dedicated coverage: all 6
+    /// share the same `settings_template`/`index` plumbing
+    /// (`flash::set_flash` on success, `index()` as the single GET call
+    /// site that reads it back), so this exercises that shared path once
+    /// rather than duplicating it per action.
+    #[tokio::test]
+    async fn create_category_redirects_and_the_index_page_shows_the_flash() {
+        let (state, dir) = test_support::test_app("settings-create-category-flash");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/settings/categories")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("name=Skateboard+Trucks"))
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let flash_cookie = res
+            .headers()
+            .get("set-cookie")
+            .expect("create_category should have set a flash cookie")
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        let combined_cookie = format!("{cookie}; {flash_cookie}");
+        let req = Request::builder()
+            .method("GET")
+            .uri("/settings")
+            .header("cookie", &combined_cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("Saved successfully."));
+
+        // A second load without resending the (now-cleared) flash cookie
+        // must not show the banner again.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/settings")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        let body = test_support::body_text(res).await;
+        assert!(!body.contains("Saved successfully."));
         std::fs::remove_dir_all(&dir).ok();
     }
 

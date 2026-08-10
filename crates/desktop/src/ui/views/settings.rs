@@ -30,6 +30,12 @@ pub struct SettingsView {
     screenshot_status: Option<Result<String, String>>,
 
     locale_error: Option<String>,
+
+    /// Shared success banner for category and document-label CRUD — the
+    /// only two sections in this view with no pre-existing status concept
+    /// of their own (unlike `screenshot_status`/`backup_status`, which stay
+    /// untouched and out of scope for this feature).
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for SettingsView {
@@ -50,6 +56,7 @@ impl Default for SettingsView {
             screenshot_error: None,
             screenshot_status: None,
             locale_error: None,
+            save_status: None,
         }
     }
 }
@@ -57,6 +64,7 @@ impl Default for SettingsView {
 impl SettingsView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
+        self.save_status = None;
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
@@ -82,6 +90,7 @@ impl SettingsView {
 
         ui.heading(t!("settings.heading").as_ref());
         ui.add_space(8.0);
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
 
         egui::ScrollArea::vertical()
             .id_salt("settings_scroll")
@@ -245,29 +254,41 @@ impl SettingsView {
             CatAction::StartEdit(id, name) => {
                 self.cat_editing = Some((id, name));
                 self.cat_error = None;
+                self.save_status = None;
             }
             CatAction::CancelEdit => {
                 self.cat_editing = None;
                 self.cat_error = None;
+                self.save_status = None;
             }
             CatAction::SaveEdit(id) => {
                 if edit_draft.trim().is_empty() {
                     self.cat_error = Some(t!("settings.error.name_required").into_owned());
+                    self.save_status = None;
                 } else {
                     match cat_qry::update(db, id, &edit_draft) {
                         Ok(()) => {
                             self.cat_editing = None;
                             self.needs_reload = true;
                             self.cat_error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
-                        Err(e) => self.cat_error = Some(e.to_string()),
+                        Err(e) => {
+                            self.cat_error = Some(e.to_string());
+                            self.save_status = None;
+                        }
                     }
                 }
             }
             CatAction::Delete(id) => match cat_qry::in_use(db, id) {
-                Err(e) => self.cat_error = Some(e.to_string()),
+                Err(e) => {
+                    self.cat_error = Some(e.to_string());
+                    self.save_status = None;
+                }
                 Ok(true) => {
                     self.cat_error = Some(t!("settings.category.error.in_use").into_owned());
+                    self.save_status = None;
                 }
                 Ok(false) => match cat_qry::delete(db, id) {
                     Ok(()) => {
@@ -276,8 +297,12 @@ impl SettingsView {
                         }
                         self.needs_reload = true;
                         self.cat_error = None;
+                        self.save_status = Some(Ok(t!("common.status.save_success").into_owned()));
                     }
-                    Err(e) => self.cat_error = Some(e.to_string()),
+                    Err(e) => {
+                        self.cat_error = Some(e.to_string());
+                        self.save_status = None;
+                    }
                 },
             },
             CatAction::Add => {
@@ -287,8 +312,12 @@ impl SettingsView {
                         self.cat_new_name.clear();
                         self.needs_reload = true;
                         self.cat_error = None;
+                        self.save_status = Some(Ok(t!("common.status.save_success").into_owned()));
                     }
-                    Err(e) => self.cat_error = Some(e.to_string()),
+                    Err(e) => {
+                        self.cat_error = Some(e.to_string());
+                        self.save_status = None;
+                    }
                 }
             }
         }
@@ -385,22 +414,30 @@ impl SettingsView {
             LblAction::StartEdit(id, name) => {
                 self.lbl_editing = Some((id, name));
                 self.lbl_error = None;
+                self.save_status = None;
             }
             LblAction::CancelEdit => {
                 self.lbl_editing = None;
                 self.lbl_error = None;
+                self.save_status = None;
             }
             LblAction::SaveEdit(id) => {
                 if edit_draft.trim().is_empty() {
                     self.lbl_error = Some(t!("settings.error.name_required").into_owned());
+                    self.save_status = None;
                 } else {
                     match docs_qry::update_label(db, id, &edit_draft) {
                         Ok(()) => {
                             self.lbl_editing = None;
                             self.needs_reload = true;
                             self.lbl_error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
-                        Err(e) => self.lbl_error = Some(e.to_string()),
+                        Err(e) => {
+                            self.lbl_error = Some(e.to_string());
+                            self.save_status = None;
+                        }
                     }
                 }
             }
@@ -411,8 +448,12 @@ impl SettingsView {
                     }
                     self.needs_reload = true;
                     self.lbl_error = None;
+                    self.save_status = Some(Ok(t!("common.status.save_success").into_owned()));
                 }
-                Err(e) => self.lbl_error = Some(e.to_string()),
+                Err(e) => {
+                    self.lbl_error = Some(e.to_string());
+                    self.save_status = None;
+                }
             },
             LblAction::Add => {
                 let name = self.lbl_new_name.trim().to_string();
@@ -421,8 +462,12 @@ impl SettingsView {
                         self.lbl_new_name.clear();
                         self.needs_reload = true;
                         self.lbl_error = None;
+                        self.save_status = Some(Ok(t!("common.status.save_success").into_owned()));
                     }
-                    Err(e) => self.lbl_error = Some(e.to_string()),
+                    Err(e) => {
+                        self.lbl_error = Some(e.to_string());
+                        self.save_status = None;
+                    }
                 }
             }
         }

@@ -1,4 +1,9 @@
 {% extends "layout.html" %}
+{% block flash %}
+{% if let Some(f) = flash %}
+<div class="{{ f.css_class }}">{{ f.message }}</div>
+{% endif %}
+{% endblock %}
 {% block content %}
 <h1>{{ "sidebar.eur_ledger"|t(locale) }}</h1>
 <p class="balance {% if balance_positive %}balance-pos{% else %}balance-neg{% endif %}">

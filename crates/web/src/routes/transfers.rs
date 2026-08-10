@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
 use adm_sfa_core::db::queries::{documents as documents_qry, transfers as qry};
@@ -14,9 +15,10 @@ use adm_sfa_core::format;
 use adm_sfa_core::model::transfer::{AnnualTransfer, TransferDraft};
 use adm_sfa_core::service::{self, PendingDocument};
 
+use crate::flash::{self, FlashKind};
 use crate::state::AppState;
 use crate::templates::{
-    AttachResult, HtmlTemplate, TransferFormTemplate, TransferRow, TransfersListTemplate,
+    AttachResult, Flash, HtmlTemplate, TransferFormTemplate, TransferRow, TransfersListTemplate,
 };
 
 /// Distinguishes concurrent uploads landing on the same temp path — same
@@ -81,6 +83,7 @@ fn form_template(
     documents: Vec<adm_sfa_core::model::document::Document>,
     labels: Vec<String>,
     attach_results: Vec<AttachResult>,
+    flash: Option<Flash>,
     locale: String,
 ) -> TransferFormTemplate {
     let brl_preview = brl_preview(&draft, &locale);
@@ -95,6 +98,7 @@ fn form_template(
         documents,
         labels,
         attach_results,
+        flash,
         locale,
     }
 }
@@ -124,6 +128,7 @@ fn transfer_form_response(
         documents,
         labels,
         attach_results,
+        None,
         locale,
     ))
     .into_response()
@@ -135,7 +140,7 @@ fn transfer_form_error_response(conn: &rusqlite::Connection, id: i64, error: Str
     transfer_form_response(conn, id, Some(error), Vec::new())
 }
 
-async fn list(State(state): State<AppState>) -> impl IntoResponse {
+async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let transfers = qry::list(&conn).unwrap_or_default();
@@ -153,10 +158,16 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
             rate_display: format::number_in(t.exchange_rate, 4, &locale),
         })
         .collect();
-    HtmlTemplate(TransfersListTemplate {
-        transfers: rows,
-        locale,
-    })
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(TransfersListTemplate {
+            transfers: rows,
+            flash,
+            locale,
+        }),
+    )
 }
 
 async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
@@ -177,11 +188,16 @@ async fn new_form(State(state): State<AppState>) -> impl IntoResponse {
         Vec::new(),
         labels,
         Vec::new(),
+        None,
         locale,
     ))
 }
 
-async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn edit_form(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    jar: SignedCookieJar,
+) -> Response {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let Some(transfer) = qry::get(&conn, id).ok().flatten() else {
@@ -190,16 +206,22 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
     let documents = documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
     let labels = documents_qry::labels(&conn).unwrap_or_default();
     let draft = draft_from_transfer(&transfer);
-    HtmlTemplate(form_template(
-        Some(id),
-        draft,
-        None,
-        documents,
-        labels,
-        Vec::new(),
-        locale,
-    ))
-    .into_response()
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(form_template(
+            Some(id),
+            draft,
+            None,
+            documents,
+            labels,
+            Vec::new(),
+            flash,
+            locale,
+        )),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -262,7 +284,11 @@ async fn preview(
 /// `update` still uses, since a file can only travel in a multipart body.
 /// Mirrors `purchases.rs::create` field-for-field (repeated `doc_label`/
 /// `doc_file` pairs paired positionally, not by index).
-async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+async fn create(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    mut multipart: Multipart,
+) -> Response {
     let mut date = String::new();
     let mut eur_amount_sent_str = String::new();
     let mut exchange_rate_str = String::new();
@@ -360,12 +386,14 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Resp
                 Vec::new(),
                 labels,
                 Vec::new(),
+                None,
                 locale,
             ))
             .into_response()
         }
         Ok(created) if created.attachments.iter().all(|a| a.result.is_ok()) => {
-            Redirect::to("/transfers").into_response()
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/transfers")).into_response()
         }
         Ok(created) => {
             // Zipped by index rather than using `a.source_name` — `pending`
@@ -408,12 +436,16 @@ async fn create(State(state): State<AppState>, mut multipart: Multipart) -> Resp
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<TransferForm>,
 ) -> Response {
     let draft = draft_from_form(form);
     let conn = state.conn();
     match qry::update(&conn, id, &draft) {
-        Ok(()) => Redirect::to(&format!("/transfers/{id}/edit")).into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to(&format!("/transfers/{id}/edit"))).into_response()
+        }
         Err(e) => {
             let documents =
                 documents_qry::list_for_record(&conn, "transfer", id).unwrap_or_default();
@@ -426,6 +458,7 @@ async fn update(
                 documents,
                 labels,
                 Vec::new(),
+                None,
                 locale,
             ))
             .into_response()

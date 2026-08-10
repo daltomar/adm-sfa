@@ -64,6 +64,17 @@ pub struct LoginTemplate {
     pub locale: String,
 }
 
+/// A post-save confirmation banner, carried across a redirect via
+/// `flash::set_flash`/`take_flash` (there is no session store beyond the
+/// one auth cookie, so a short-lived signed cookie is what survives the
+/// redirect hop). `message` is already translated for the resolved locale
+/// by `flash::flash_for_template` — templates just render it, same
+/// pre-formatted-string convention as `PurchaseRow`/`AttachResult` above.
+pub struct Flash {
+    pub css_class: &'static str,
+    pub message: String,
+}
+
 /// Pre-formatted for display (locale-aware via `adm_sfa_core::format`,
 /// computed in the route handler, not the template) — templates just
 /// interpolate strings, they don't call into formatting logic themselves.
@@ -81,6 +92,7 @@ pub struct PurchaseRow {
 #[template(path = "purchases/list.html")]
 pub struct PurchasesListTemplate {
     pub purchases: Vec<PurchaseRow>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -115,6 +127,7 @@ pub struct PurchaseFormTemplate {
     /// Empty on every other render path (a fresh new-purchase form, a plain
     /// edit-page load, a fully-successful create that redirected away).
     pub attach_results: Vec<AttachResult>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -128,6 +141,7 @@ pub struct DonorRow {
 #[template(path = "donors/list.html")]
 pub struct DonorsListTemplate {
     pub donors: Vec<DonorRow>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -143,6 +157,7 @@ pub struct DonorFormTemplate {
     /// this donor's own edit page. `None` on the edit form and on the
     /// normal Donors-page "+ New donor" flow (no caller to return to).
     pub return_to: Option<String>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -174,6 +189,7 @@ pub struct EurLedgerListTemplate {
     /// language, so this isn't built by concatenating static template text
     /// with `balance_display`.
     pub balance_label: String,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -237,6 +253,7 @@ pub struct TransferRow {
 #[template(path = "transfers/list.html")]
 pub struct TransfersListTemplate {
     pub transfers: Vec<TransferRow>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -259,6 +276,7 @@ pub struct TransferFormTemplate {
     pub labels: Vec<String>,
     /// See `PurchaseFormTemplate::attach_results`.
     pub attach_results: Vec<AttachResult>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -275,6 +293,7 @@ pub struct InventoryRow {
 #[template(path = "inventory/list.html")]
 pub struct InventoryListTemplate {
     pub items: Vec<InventoryRow>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -336,6 +355,7 @@ pub struct InventoryFormTemplate {
     pub locked: bool,
     /// See `PurchaseFormTemplate::attach_results`.
     pub attach_results: Vec<AttachResult>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -379,6 +399,7 @@ pub struct OutboundRow {
 #[template(path = "outbound/list.html")]
 pub struct OutboundListTemplate {
     pub events: Vec<OutboundRow>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -404,6 +425,7 @@ pub struct OutboundFormTemplate {
     pub notes: String,
     pub items: Vec<ItemOption>,
     pub error: Option<String>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }
 
@@ -461,5 +483,6 @@ pub struct SettingsTemplate {
     pub categories: Vec<(i64, String)>,
     pub labels: Vec<(i64, String)>,
     pub error: Option<String>,
+    pub flash: Option<Flash>,
     pub locale: String,
 }

@@ -57,6 +57,7 @@ pub struct TransfersView {
     staged_docs: Vec<PendingAttachment>,
     path_input: Option<String>,
     capture_note: Option<String>,
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for TransfersView {
@@ -74,6 +75,7 @@ impl Default for TransfersView {
             staged_docs: Vec::new(),
             path_input: None,
             capture_note: None,
+            save_status: None,
         }
     }
 }
@@ -105,6 +107,7 @@ impl TransfersView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
         self.labels.clear();
+        self.save_status = None;
     }
 
     /// Jumps straight into editing transfer `id` — the entry point for EUR
@@ -131,6 +134,7 @@ impl TransfersView {
         };
         self.mode = Mode::Editing(id);
         self.error = None;
+        self.save_status = None;
         self.docs_needs_reload = true;
         self.discard_pending_doc();
         self.discard_staged_docs();
@@ -168,6 +172,8 @@ impl TransfersView {
             }
         }
 
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
+
         egui::Panel::left("transfers_list_panel")
             .resizable(true)
             .default_size(300.0)
@@ -203,6 +209,7 @@ impl TransfersView {
             self.draft = TransferDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
+            self.save_status = None;
             self.docs = Vec::new();
             self.discard_pending_doc();
             self.discard_staged_docs();
@@ -245,6 +252,7 @@ impl TransfersView {
                         };
                         self.mode = Mode::Editing(id);
                         self.error = None;
+                        self.save_status = None;
                         self.docs_needs_reload = true;
                         self.discard_pending_doc();
                         self.discard_staged_docs();
@@ -423,11 +431,16 @@ impl TransfersView {
                                     }
                                 }
                             }
-                            self.error = if failed > 0 {
-                                Some(t!("common.doc.status.failed_count", n = failed).into_owned())
+                            if failed > 0 {
+                                self.error = Some(
+                                    t!("common.doc.status.failed_count", n = failed).into_owned(),
+                                );
+                                self.save_status = None;
                             } else {
-                                None
-                            };
+                                self.error = None;
+                                self.save_status =
+                                    Some(Ok(t!("common.status.save_success").into_owned()));
+                            }
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -436,6 +449,8 @@ impl TransfersView {
                         Ok(()) => {
                             self.needs_reload = true;
                             self.error = None;
+                            self.save_status =
+                                Some(Ok(t!("common.status.save_success").into_owned()));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -445,6 +460,7 @@ impl TransfersView {
             if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
+                self.save_status = None;
                 self.discard_pending_doc();
                 self.discard_staged_docs();
                 self.path_input = None;

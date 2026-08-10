@@ -3,6 +3,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::SignedCookieJar;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -11,6 +12,7 @@ use adm_sfa_core::format;
 use adm_sfa_core::model::transaction::{EurTxDraft, EurTxRow, EurTxType, ManualEurTxType};
 use adm_sfa_core::reporting::compute_balance;
 
+use crate::flash::{self, FlashKind};
 use crate::state::AppState;
 use crate::templates::{EurLedgerListTemplate, EurLedgerRow, EurTxFormTemplate, HtmlTemplate};
 
@@ -79,7 +81,7 @@ fn donor_options(conn: &rusqlite::Connection, selected: Option<i64>) -> Vec<(i64
         .collect()
 }
 
-async fn list(State(state): State<AppState>) -> impl IntoResponse {
+async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
     let rows = qry::list(&conn).unwrap_or_default();
@@ -110,12 +112,18 @@ async fn list(State(state): State<AppState>) -> impl IntoResponse {
     )
     .to_string();
 
-    HtmlTemplate(EurLedgerListTemplate {
-        rows: view_rows,
-        balance_positive: balance >= Decimal::ZERO,
-        balance_label,
-        locale,
-    })
+    let (jar, kind) = flash::take_flash(jar);
+    let flash = flash::flash_for_template(kind, &locale);
+    (
+        jar,
+        HtmlTemplate(EurLedgerListTemplate {
+            rows: view_rows,
+            balance_positive: balance >= Decimal::ZERO,
+            balance_label,
+            flash,
+            locale,
+        }),
+    )
 }
 
 /// Prefills the create form after a round trip through "Create new donor"
@@ -223,7 +231,11 @@ fn parsed_donor_id(s: &str) -> Option<i64> {
     }
 }
 
-async fn create(State(state): State<AppState>, Form(form): Form<EurTxForm>) -> Response {
+async fn create(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Form(form): Form<EurTxForm>,
+) -> Response {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
 
@@ -264,7 +276,10 @@ async fn create(State(state): State<AppState>, Form(form): Form<EurTxForm>) -> R
         note: form.note,
     };
     match qry::insert(&conn, &draft) {
-        Ok(_) => Redirect::to("/eur-ledger").into_response(),
+        Ok(_) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/eur-ledger")).into_response()
+        }
         Err(e) => {
             let donors = donor_options(&conn, draft.donor_id);
             HtmlTemplate(EurTxFormTemplate {
@@ -288,6 +303,7 @@ async fn create(State(state): State<AppState>, Form(form): Form<EurTxForm>) -> R
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    jar: SignedCookieJar,
     Form(form): Form<EurTxForm>,
 ) -> Response {
     let conn = state.conn();
@@ -319,7 +335,10 @@ async fn update(
         note: form.note,
     };
     match qry::update(&conn, id, &draft) {
-        Ok(()) => Redirect::to("/eur-ledger").into_response(),
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/eur-ledger")).into_response()
+        }
         Err(e) => {
             let locale = crate::i18n::resolve_locale(&conn);
             let donors = donor_options(&conn, draft.donor_id);

@@ -17,6 +17,7 @@ pub struct DonorsView {
     draft: DonorDraft,
     error: Option<String>,
     needs_reload: bool,
+    save_status: Option<Result<String, String>>,
 }
 
 impl Default for DonorsView {
@@ -27,6 +28,7 @@ impl Default for DonorsView {
             draft: DonorDraft::default(),
             error: None,
             needs_reload: true,
+            save_status: None,
         }
     }
 }
@@ -34,6 +36,7 @@ impl Default for DonorsView {
 impl DonorsView {
     pub fn invalidate(&mut self) {
         self.needs_reload = true;
+        self.save_status = None;
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
@@ -46,6 +49,8 @@ impl DonorsView {
                 Err(e) => self.error = Some(e.to_string()),
             }
         }
+
+        crate::ui::widgets::status_banner::show(ui, &self.save_status);
 
         egui::Panel::left("donors_list_panel")
             .resizable(true)
@@ -71,6 +76,7 @@ impl DonorsView {
             self.draft = DonorDraft::default();
             self.mode = Mode::Adding;
             self.error = None;
+            self.save_status = None;
         }
 
         ui.separator();
@@ -104,6 +110,7 @@ impl DonorsView {
                     self.draft = draft;
                     self.mode = Mode::Editing(id);
                     self.error = None;
+                    self.save_status = None;
                 }
             });
     }
@@ -174,6 +181,7 @@ impl DonorsView {
                         self.mode = Mode::List;
                         self.needs_reload = true;
                         self.error = None;
+                        self.save_status = Some(Ok(t!("common.status.save_success").into_owned()));
                     }
                     Err(e) => self.error = Some(e.to_string()),
                 }
@@ -182,6 +190,7 @@ impl DonorsView {
             if ui.button(t!("common.cancel").as_ref()).clicked() {
                 self.mode = Mode::List;
                 self.error = None;
+                self.save_status = None;
             }
         });
     }

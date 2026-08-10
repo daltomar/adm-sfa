@@ -1,4 +1,5 @@
 mod auth;
+mod flash;
 mod i18n;
 mod routes;
 mod state;
