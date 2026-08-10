@@ -943,7 +943,7 @@ authoritative version is in `db/queries/transfers.rs` and stays there —
 this one was never a duplication problem, just a UI preview, so it's out
 of scope for both phases.
 
-**New backlog items found during phase 3's review** (not fixed — test
+~~**New backlog items found during phase 3's review** (not fixed — test
 coverage gaps in the highest-risk part of that phase, the aggregation
 arithmetic, per `rust-code-reviewer`):
 - `crates/core/src/reporting.rs`'s `eur_summary` has a dedicated test for
@@ -954,15 +954,39 @@ arithmetic, per `rust-code-reviewer`):
   equivalent.
 - `build_audit_entries`'s doc-count lookup is only tested via the
   `linked_purchase_id` branch; the `linked_transfer_id` branch
-  (`EurTxType::TransferToBrlOut` / `BrlTxType::TransferIn`) has no test.
+  (`EurTxType::TransferToBrlOut` / `BrlTxType::TransferIn`) has no test.~~
+  **Both fixed**: `brl_summary_starting_balance_is_the_pre_range_running_total`
+  mirrors the EUR test's shape over BRL types; `build_audit_entries_looks_up_
+  docs_via_linked_transfer_id` constructs one EUR row and one BRL row both
+  tagged with the same `linked_transfer_id` (mirroring what the annual
+  EUR→BRL transfer flow, `transfers_qry::insert`, actually produces) and
+  asserts both resolve their doc count via a `("transfer", id)` key. Both
+  verified by temporarily reverting the code path each test exercises and
+  confirming the test fails, then restoring it. Reviewed by
+  `rust-code-reviewer`: no findings.
 
 **New backlog items found during phase 4's review** (not fixed — per
 `rust-code-reviewer`):
-- `service::drop_negotiating_purchase`'s test only covers the happy path,
+~~`service::drop_negotiating_purchase`'s test only covers the happy path,
   not the partial-failure/stop-on-first-error behavior that's the entire
   reason it was extracted (confirmed correct by reading the code — the `?`
   in its per-document loop short-circuits before the purchase row gets
-  deleted — just not exercised by a test that induces a mid-loop failure).
+  deleted — just not exercised by a test that induces a mid-loop failure).~~
+  **Fixed**: `drop_negotiating_purchase_stops_at_the_first_failure_without_
+  deleting_the_row` attaches two documents, then deletes the *second* one's
+  file straight off disk (bypassing `remove_document`, leaving its DB row
+  active) so `docs_fs::soft_delete`'s `std::fs::rename` fails when the loop
+  reaches it — a deterministic way to force that call to return `Err`
+  (not literally the same cause as `remove_document`'s own "self-healing on
+  retry" case, just a convenient way to make the same `rename` fail).
+  Asserts the call returns `Err`, the first document really got
+  soft-deleted (a real, un-rolled-back side effect — this function has no
+  transaction wrapping the loop), the second document's row is untouched,
+  and — the actual point of the test — the purchase row is NOT deleted.
+  Relies on `list_for_record`'s explicit `ORDER BY id` (not an incidental
+  detail) for the first-filed document to be processed first,
+  deterministically. Reviewed by `rust-code-reviewer`: no 🔴/🟡 findings, one
+  🟢 (a doc-comment accuracy nit) fixed before commit.
 - `outbound.rs`'s edit path still calls `db::queries::outbound::update`
   directly rather than through a `service::*` wrapper — only the create
   path got `donate_items`. Both run the identical `require_gift` guard, so

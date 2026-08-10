@@ -390,6 +390,98 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    /// Regression coverage for the partial-failure/stop-on-first-error
+    /// behavior that's the entire reason this function loops document-by-
+    /// document instead of doing everything in one step (CLAUDE.md backlog
+    /// item): the `?` in the per-document loop must short-circuit before
+    /// the purchase row gets deleted, leaving whatever succeeded up to that
+    /// point (a soft-deleted first document) as a real, un-rolled-back side
+    /// effect — this function has no transaction wrapping the whole loop.
+    ///
+    /// `list_for_record` orders by `id`, so the first-filed document is
+    /// processed first, deterministically. Deleting the *second*
+    /// document's file straight off disk (leaving its DB row active) makes
+    /// `docs_fs::soft_delete`'s `std::fs::rename` fail on a missing source
+    /// path when the loop reaches it — a different cause than the
+    /// rename-succeeded-but-DB-update-failed case `remove_document`'s own
+    /// doc comment calls "self-healing on retry", just a convenient,
+    /// deterministic way to make that same `rename` call return `Err`.
+    #[test]
+    fn drop_negotiating_purchase_stops_at_the_first_failure_without_deleting_the_row() {
+        let conn = test_db();
+        let id = create_purchase(&conn, &purchase_draft()).unwrap();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "adm-sfa-drop-negotiating-partial-failure-test-{}",
+            std::process::id()
+        ));
+        let documents_dir = tmp.join("documents");
+        std::fs::create_dir_all(documents_dir.join("_deleted")).unwrap();
+
+        let first_src = tmp.join("chat.png");
+        std::fs::write(&first_src, b"fake chat").unwrap();
+        let first_filename = docs_fs::file_document(
+            &conn,
+            &documents_dir,
+            &first_src,
+            "2026-01-01",
+            ("purchase", id),
+            "chat",
+            &[],
+        )
+        .unwrap();
+
+        let second_src = tmp.join("receipt.png");
+        std::fs::write(&second_src, b"fake receipt").unwrap();
+        let second_filename = docs_fs::file_document(
+            &conn,
+            &documents_dir,
+            &second_src,
+            "2026-01-01",
+            ("purchase", id),
+            "receipt",
+            &[first_filename.clone()],
+        )
+        .unwrap();
+
+        // Removes the second document's file without going through
+        // `remove_document` — its DB row stays active (`deleted = 0`), but
+        // the file `soft_delete` would need to rename is simply gone.
+        std::fs::remove_file(documents_dir.join(&second_filename)).unwrap();
+
+        let result = drop_negotiating_purchase(&conn, &documents_dir, id);
+        assert!(
+            result.is_err(),
+            "the missing second file must surface as an error, not succeed"
+        );
+
+        // First document: genuinely soft-deleted — a real side effect that
+        // must survive the later failure, since there's no transaction to
+        // roll it back.
+        assert!(!documents_dir.join(&first_filename).is_file());
+        assert!(documents_dir
+            .join("_deleted")
+            .join(&first_filename)
+            .is_file());
+
+        // Second document: untouched in the DB — the loop never reached
+        // its `docs_qry::soft_delete` call.
+        let active_docs = documents_qry::list_for_record(&conn, "purchase", id).unwrap();
+        assert_eq!(active_docs.len(), 1);
+        assert_eq!(active_docs[0].filename, second_filename);
+
+        // The purchase row must NOT be deleted — the loop's `?` short-
+        // circuited before `purchases_qry::delete` was ever called.
+        let purchase_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM purchase WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(purchase_count, 1);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
     #[test]
     fn resolve_filing_date_prefers_the_parsed_draft_date() {
         assert_eq!(

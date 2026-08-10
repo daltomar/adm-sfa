@@ -603,6 +603,24 @@ mod tests {
     }
 
     #[test]
+    fn brl_summary_starting_balance_is_the_pre_range_running_total() {
+        let rows = vec![
+            brl_row(1, "2026-01-01", BrlTxType::TransferIn, dec!(1000)),
+            brl_row(2, "2026-06-01", BrlTxType::BrazilPurchaseOut, dec!(200)),
+        ];
+        let s = brl_summary(&rows, "2026-06-01", "2026-12-31");
+        assert_eq!(
+            s.starting_balance,
+            dec!(1000),
+            "only the Jan row precedes the range"
+        );
+        assert_eq!(s.purchase_count, 1);
+        assert_eq!(s.purchase_total, dec!(200));
+        assert_eq!(s.net, dec!(-200));
+        assert_eq!(s.ending_balance, dec!(800));
+    }
+
+    #[test]
     fn brl_summary_computes_net_across_all_three_types() {
         let rows = vec![
             brl_row(1, "2026-01-01", BrlTxType::TransferIn, dec!(1000)),
@@ -632,6 +650,37 @@ mod tests {
             entries[1].docs, 3,
             "doc count looked up via linked_purchase_id"
         );
+    }
+
+    /// Sibling of `build_audit_entries_sorts_newest_first_and_looks_up_docs`,
+    /// covering the `linked_transfer_id` branch of the doc-count lookup
+    /// (`EurTxType::TransferToBrlOut` / `BrlTxType::TransferIn`) instead of
+    /// `linked_purchase_id` — the annual EUR→BRL transfer flow
+    /// (`transfers_qry::insert`) produces exactly this pair of rows, one
+    /// per ledger, both keyed off the same `annual_transfer.id`.
+    #[test]
+    fn build_audit_entries_looks_up_docs_via_linked_transfer_id() {
+        let eur_rows = vec![eur_row(
+            1,
+            "2026-01-01",
+            EurTxType::TransferToBrlOut,
+            dec!(500),
+            None,
+        )
+        .tap(|r| r.linked_transfer_id = Some(7))];
+        let brl_rows = vec![brl_row(1, "2026-01-01", BrlTxType::TransferIn, dec!(2500))
+            .tap(|r| r.linked_transfer_id = Some(7))];
+        let doc_counts = HashMap::from([(("transfer".to_string(), 7i64), 2i64)]);
+
+        let entries = build_audit_entries(&eur_rows, &brl_rows, &[], &doc_counts, "", "", None);
+
+        assert_eq!(entries.len(), 2);
+        for entry in &entries {
+            assert_eq!(
+                entry.docs, 2,
+                "doc count looked up via linked_transfer_id on both ledgers' rows"
+            );
+        }
     }
 
     #[test]
