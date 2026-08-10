@@ -970,7 +970,7 @@ arithmetic, per `rust-code-reviewer`):
   instead of `db::queries` directly" goal. Decide whether a
   `service::update_donation` should exist before `web` needs the same
   operation, or whether `update` staying un-wrapped is fine.
-- `docs_fs::generate_filename`'s collision check only consults currently
+~~`docs_fs::generate_filename`'s collision check only consults currently
   *active* filenames for a record, not anything already in `_deleted/` — so
   re-attaching a same-day, same-default-label document after removing the
   original can regenerate the same filename, which then hits
@@ -981,7 +981,29 @@ arithmetic, per `rust-code-reviewer`):
   by phase 4 — `remove_document`'s idempotency check just happened to be
   the thing that surfaced it during review. Fix direction: either have
   `generate_filename` also consult `_deleted/` filenames, or namespace
-  `_deleted/` by document id so collisions can't occur at all.
+  `_deleted/` by document id so collisions can't occur at all.~~ **Fixed**:
+  went with the first direction — `_deleted/`'s layout is flat everywhere
+  in the codebase already, and per-id namespacing would have broken the
+  SPEC-documented promise that a deleted file's name stays unchanged. New
+  private `docs_fs::merge_deleted_filenames` reads `documents_dir/_deleted`'s
+  directory listing and merges it into the caller-supplied `existing` list
+  before `file_document` calls `generate_filename` — a localized change
+  inside `file_document` (the only caller of `generate_filename`), so no
+  call site anywhere (`service.rs`, or the desktop/web routes reaching it
+  through `service::attach_document`) needed to change. A missing
+  `_deleted/` directory (e.g. a test fixture that never created one) is
+  treated as "nothing deleted yet"; any other read failure (permissions, a
+  transient I/O error) is surfaced as a real error instead of silently
+  swallowed, since going quiet there would quietly reopen the exact
+  collision risk this fix exists to close — caught by `rust-code-reviewer`
+  as the one 🟡 on this change, fixed before commit. New regression test
+  `file_document_avoids_a_filename_still_parked_in_deleted` in
+  `docs_fs.rs`'s existing test module — creates a file directly at
+  `_deleted/2026-06-30_purchase-42_ad.png` (no DB row needed, since the gap
+  is filesystem-level, not DB-level) and confirms a fresh `file_document`
+  call for the same record/date/label returns the `-2` variant instead of
+  colliding; confirmed by hand that it fails against the pre-fix code and
+  passes against the fix.
 - **Open, undiagnosed — surfaced during phase 4's manual test pass, not a
   code review finding.** Drag-and-drop document attach may not work.
   Reported against `phase4.md`'s manual checklist; this code is untouched

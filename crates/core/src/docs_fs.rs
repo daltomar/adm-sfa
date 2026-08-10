@@ -37,6 +37,44 @@ pub fn copy_to_documents(src: &Path, documents_dir: &Path, filename: &str) -> st
     Ok(())
 }
 
+/// Filenames already used by *any* document tied to this record — the
+/// caller-supplied `existing` (active documents, from `list_for_record`'s
+/// `deleted = 0` filter) plus whatever's currently sitting in
+/// `documents/_deleted/`. `document.filename` is `UNIQUE` schema-wide and
+/// isn't scoped by `deleted` (see `remove_document`'s doc comment), so a
+/// soft-deleted document's filename is still a real collision risk: without
+/// this, re-attaching a same-day, same-default-label document after
+/// removing the original could regenerate the exact filename still parked
+/// in `_deleted/` and hit the `UNIQUE` constraint with a raw SQLite error
+/// instead of `generate_filename`'s own `-2`/`-3` counter kicking in first.
+///
+/// Missing `_deleted/` (e.g. a test fixture that never created it) is
+/// treated as "nothing deleted yet", not an error — `config::ensure_dirs`
+/// always creates it on a real data directory. Any *other* read failure
+/// (permissions, a transient I/O error) is surfaced instead of silently
+/// swallowed — going quiet there would recreate exactly the collision risk
+/// this function exists to close, just less predictably.
+fn merge_deleted_filenames(
+    documents_dir: &Path,
+    existing: &[String],
+) -> Result<Vec<String>, String> {
+    let mut all = existing.to_vec();
+    match std::fs::read_dir(documents_dir.join("_deleted")) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if !all.iter().any(|n| n == name) {
+                        all.push(name.to_string());
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Failed to check for filename collisions: {e}")),
+    }
+    Ok(all)
+}
+
 /// Generates the filename, copies `src` into `documents_dir`, and inserts
 /// the document row — the "file an already-on-disk path as a document"
 /// sequence shared by drag-and-drop, browse-for-file, and screenshot
@@ -57,7 +95,8 @@ pub fn file_document(
         .and_then(|e| e.to_str())
         .unwrap_or("bin")
         .to_lowercase();
-    let filename = generate_filename(date, record_type, record_id, label, existing, &ext);
+    let existing = merge_deleted_filenames(documents_dir, existing)?;
+    let filename = generate_filename(date, record_type, record_id, label, &existing, &ext);
     copy_to_documents(src, documents_dir, &filename).map_err(|e| format!("Copy failed: {e}"))?;
     if let Err(e) = docs_qry::insert(conn, record_type, record_id, &filename, label) {
         // Don't leave an untracked copy behind: with no document row, the UI
@@ -165,6 +204,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(db_filename, filename);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Regression test for the `_deleted/`-collision gap documented in
+    /// CLAUDE.md: a filename still parked in `_deleted/` (no longer
+    /// "existing" per `list_for_record`'s `deleted = 0` filter, but still
+    /// occupying the `UNIQUE` `document.filename` namespace) must not be
+    /// regenerated — `generate_filename`'s own `-2` counter must kick in
+    /// instead of `copy_to_documents`/`docs_qry::insert` hitting the
+    /// constraint with a raw SQLite error.
+    #[test]
+    fn file_document_avoids_a_filename_still_parked_in_deleted() {
+        let conn = test_db();
+        let tmp = std::env::temp_dir().join(format!(
+            "adm-sfa-file-document-deleted-collision-test-{}",
+            std::process::id()
+        ));
+        let documents_dir = tmp.join("documents");
+        let deleted_dir = documents_dir.join("_deleted");
+        std::fs::create_dir_all(&deleted_dir).unwrap();
+        // A soft-deleted document occupying the exact name a fresh attach
+        // would otherwise regenerate — no corresponding `document` row is
+        // needed, since the gap being tested is filesystem-level, not
+        // DB-level (an active-only DB query would never surface this name).
+        std::fs::write(deleted_dir.join("2026-06-30_purchase-42_ad.png"), b"old").unwrap();
+        let src = tmp.join("source.png");
+        std::fs::write(&src, b"fake png bytes").unwrap();
+
+        let filename = file_document(
+            &conn,
+            &documents_dir,
+            &src,
+            "2026-06-30",
+            ("purchase", 42),
+            "ad",
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(filename, "2026-06-30_purchase-42_ad-2.png");
+        assert!(documents_dir.join(&filename).is_file());
+        assert!(
+            deleted_dir.join("2026-06-30_purchase-42_ad.png").is_file(),
+            "the deleted file must be left untouched"
+        );
 
         std::fs::remove_dir_all(&tmp).ok();
     }
