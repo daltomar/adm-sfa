@@ -66,6 +66,7 @@
 </script>
 
 <h2>{{ "web.donations.existing_heading"|t(locale) }}</h2>
+<div class="table-scroll">
 <table>
 <thead>
 <tr><th>{{ "web.col.date_received"|t(locale) }}</th><th>{{ "common.field.donor"|t(locale) }}</th></tr>
@@ -81,4 +82,5 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endblock %}

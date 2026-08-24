@@ -30,6 +30,7 @@
 </form>
 
 <h2>{{ "web.outbound.recipients.existing_heading"|t(locale) }}</h2>
+<div class="table-scroll">
 <table>
 <thead>
 <tr><th>{{ "common.col.name"|t(locale) }}</th><th>{{ "common.field.contact_info"|t(locale) }}</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "web.col.active"|t(locale) }}</th></tr>
@@ -47,4 +48,5 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endblock %}

@@ -359,6 +359,7 @@ login.button: "Anmelden"
 login.error.incorrect_password: "Falsches Passwort."
 
 web.nav.logout: "Abmelden"
+web.nav.toggle: "Navigation umschalten"
 web.common.yes: "ja"
 common.yes: "Ja"
 common.no: "Nein"

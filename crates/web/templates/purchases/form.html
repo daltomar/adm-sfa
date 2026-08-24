@@ -172,6 +172,7 @@
   {% endif %}
 
   <h2>{{ "common.doc.heading"|t(locale) }}</h2>
+  <div class="table-scroll">
   <table>
     <thead><tr><th>{{ "web.doc.col.label"|t(locale) }}</th><th>{{ "web.doc.col.file"|t(locale) }}</th><th></th></tr></thead>
     <tbody>
@@ -191,6 +192,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
 
   <h3>{{ "web.doc.heading.attach"|t(locale) }}</h3>
   <form method="post" action="/purchases/{{ id }}/documents" enctype="multipart/form-data">

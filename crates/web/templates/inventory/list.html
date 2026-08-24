@@ -7,6 +7,7 @@
 {% block content %}
 <h1>{{ "sidebar.inventory"|t(locale) }}</h1>
 <p><a class="button" href="/inventory/new">{{ "inventory.button.add"|t(locale) }}</a></p>
+<div class="table-scroll">
 <table>
 <thead>
 <tr><th>{{ "common.col.name"|t(locale) }}</th><th>{{ "common.col.category"|t(locale) }}</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "common.field.source"|t(locale) }}</th></tr>
@@ -25,4 +26,5 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endblock %}
