@@ -380,6 +380,7 @@ login.button: "Log in"
 login.error.incorrect_password: "Incorrect password."
 
 web.nav.logout: "Log out"
+web.nav.toggle: "Toggle navigation"
 web.common.yes: "yes"
 common.yes: "Yes"
 common.no: "No"

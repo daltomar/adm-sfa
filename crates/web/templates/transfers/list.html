@@ -7,6 +7,7 @@
 {% block content %}
 <h1>{{ "sidebar.transfers"|t(locale) }}</h1>
 <p><a class="button" href="/transfers/new">{{ "transfers.button.add"|t(locale) }}</a></p>
+<div class="table-scroll">
 <table>
 <thead>
 <tr><th>{{ "common.col.date"|t(locale) }}</th><th>{{ "web.col.eur_sent"|t(locale) }}</th><th>{{ "web.col.rate"|t(locale) }}</th><th>{{ "web.col.brl_received"|t(locale) }}</th></tr>
@@ -24,4 +25,5 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endblock %}

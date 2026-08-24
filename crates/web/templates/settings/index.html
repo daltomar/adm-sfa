@@ -13,6 +13,7 @@
 {% endif %}
 
 <h2>{{ "settings.category.heading"|t(locale) }}</h2>
+<div class="table-scroll">
 <table>
 <thead><tr><th>{{ "common.col.name"|t(locale) }}</th><th></th><th></th></tr></thead>
 <tbody>
@@ -20,7 +21,7 @@
 <tr>
   <td>
     <form class="inline" method="post" action="/settings/categories/{{ c.0 }}">
-      <input type="text" name="name" value="{{ c.1 }}" style="width: 220px;">
+      <input type="text" name="name" value="{{ c.1 }}" style="width: 220px; max-width: 100%;">
       <button type="submit">{{ "common.save"|t(locale) }}</button>
     </form>
   </td>
@@ -36,12 +37,14 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 <form method="post" action="/settings/categories" style="margin-top: 0.6rem;">
-  <input type="text" name="name" placeholder="{{ "settings.category.hint.new"|t(locale) }}" style="width: 220px;" required>
+  <input type="text" name="name" placeholder="{{ "settings.category.hint.new"|t(locale) }}" style="width: 220px; max-width: 100%;" required>
   <button type="submit">{{ "web.settings.category.add_button"|t(locale) }}</button>
 </form>
 
 <h2 style="margin-top: 2rem;">{{ "settings.label.heading"|t(locale) }}</h2>
+<div class="table-scroll">
 <table>
 <thead><tr><th>{{ "common.col.name"|t(locale) }}</th><th></th><th></th></tr></thead>
 <tbody>
@@ -49,7 +52,7 @@
 <tr>
   <td>
     <form class="inline" method="post" action="/settings/labels/{{ l.0 }}">
-      <input type="text" name="name" value="{{ l.1 }}" style="width: 220px;">
+      <input type="text" name="name" value="{{ l.1 }}" style="width: 220px; max-width: 100%;">
       <button type="submit">{{ "common.save"|t(locale) }}</button>
     </form>
   </td>
@@ -65,8 +68,9 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 <form method="post" action="/settings/labels" style="margin-top: 0.6rem;">
-  <input type="text" name="name" placeholder="{{ "settings.label.hint.new"|t(locale) }}" style="width: 220px;" required>
+  <input type="text" name="name" placeholder="{{ "settings.label.hint.new"|t(locale) }}" style="width: 220px; max-width: 100%;" required>
   <button type="submit">{{ "web.settings.label.add_button"|t(locale) }}</button>
 </form>
 {% endblock %}

@@ -7,6 +7,7 @@
 {% block content %}
 <h1>{{ "sidebar.outbound"|t(locale) }}</h1>
 <p><a class="button" href="/outbound/new">{{ "outbound.button.add"|t(locale) }}</a></p>
+<div class="table-scroll">
 <table>
 <thead>
 <tr><th>{{ "common.col.date"|t(locale) }}</th><th>{{ "reports.col.recipient"|t(locale) }}</th><th>{{ "web.col.summary"|t(locale) }}</th></tr>
@@ -23,4 +24,5 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endblock %}

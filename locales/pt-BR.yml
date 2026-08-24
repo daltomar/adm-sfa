@@ -358,6 +358,7 @@ login.button: "Entrar"
 login.error.incorrect_password: "Senha incorreta."
 
 web.nav.logout: "Sair"
+web.nav.toggle: "Alternar navegação"
 web.common.yes: "sim"
 common.yes: "Sim"
 common.no: "Não"

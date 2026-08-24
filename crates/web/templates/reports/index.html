@@ -40,6 +40,7 @@
 </nav>
 
 {% if !summary.is_empty() %}
+<div class="table-scroll">
 <table style="max-width: 420px;">
 <tbody>
 {% for line in summary %}
@@ -47,8 +48,10 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endif %}
 
+<div class="table-scroll">
 <table>
 <thead>
 <tr>{% for h in headers %}<th>{{ h }}</th>{% endfor %}</tr>
@@ -61,6 +64,7 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 
 <h2>{{ "web.reports.export.heading"|t(locale) }}</h2>
 <div style="display: flex; flex-wrap: wrap; gap: 2rem;">
