@@ -12,7 +12,20 @@
 <div class="error">{{ msg }}</div>
 {% endif %}
 
-<h2>{{ "settings.category.heading"|t(locale) }}</h2>
+<h2>{{ "settings.locale.heading"|t(locale) }}</h2>
+<p class="hint">{{ "settings.locale.hint"|t(locale) }}</p>
+<form method="post" action="/settings/locale">
+  <label>{{ "settings.locale.field.language"|t(locale) }}
+    <select name="code">
+      {% for (code, label) in locales %}
+      <option value="{{ code }}"{% if code.as_str() == locale.as_str() %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">{{ "common.save"|t(locale) }}</button>
+</form>
+
+<h2 style="margin-top: 2rem;">{{ "settings.category.heading"|t(locale) }}</h2>
 <div class="table-scroll">
 <table>
 <thead><tr><th>{{ "common.col.name"|t(locale) }}</th><th></th><th></th></tr></thead>

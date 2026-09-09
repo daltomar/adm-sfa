@@ -57,7 +57,7 @@ there.
   backlog items its reviews surfaced. `web` now has full section parity
   with `desktop`: Purchases, Donors, EUR Ledger, BRL Ledger, Transfers,
   Inventory, Outbound, Reports (on-screen + CSV/PDF export), and Settings
-  (category/label CRUD; locale picker, screenshot command, and manual
+  (category/label CRUD + locale picker; screenshot command and manual
   backup stay desktop-only, each for a documented reason). One thing
   remains deliberately open, not an oversight: phase 6 shipped deployment
   *templates* (`deploy/`) — nothing has actually been installed on a real
@@ -680,6 +680,15 @@ where `mode` changes or stays).
   6 CRUD actions had no flash-specific test, unlike every other touched
   section) fixed before commit by adding
   `create_category_redirects_and_the_index_page_shows_the_flash`.
+
+## Web locale picker (implemented)
+
+Branch `web-locale-picker`. The web Settings page now has a locale picker — `POST /settings/locale` validates the submitted code against `core::format::LOCALES` and writes the shared `ui_locale` `app_setting` key, the same key desktop's picker writes. The web already read this key per-request via `i18n::resolve_locale()` and passed it explicitly to every `t!()` call (safe for concurrent requests), so the write path was the only missing piece. No new i18n keys for the picker itself — `settings.locale.heading`, `settings.locale.hint`, and `settings.locale.field.language` already existed in all three locale files from when desktop's picker was added. One new key added: `settings.locale.error.unknown` (rejected locale code — should never appear via the normal form's `<select>`, which only offers the three valid codes).
+
+- `SettingsTemplate` gained a `locales: Vec<(String, String)>` field (code + endonym pairs from `LOCALES`), populated by `settings_template()`. The `<select>` pre-selects whichever code matches the current `locale` field (`code.as_str() == locale.as_str()` — Askama comparison that avoids the `&String == String` type mismatch a plain `==` would produce in generated code).
+- `web.settings.hint` updated in all three locale files: the locale picker is no longer desktop-only, so the old "locale picker … desktop-only" wording was a falsehood; now names only the screenshot command and manual backup as desktop-only.
+- 3 new tests: `set_locale_redirects_and_the_setting_is_saved`, `set_locale_with_an_unknown_code_rerenders_with_an_error`, `set_locale_without_a_session_cookie_redirects_to_login`. Reviewed by `rust-code-reviewer`: no 🔴 findings; one 🟡 (stale `web.settings.hint`) fixed before commit; one 🟡 (unauthenticated-access test for the new route) fixed before commit; two 🟢 style notes (missing flash round-trip test, `as_str()` verbosity) left as-is.
+- Desktop behaviour note: desktop reads `rust_i18n::locale()` (its in-memory process-wide global set at startup, not the DB) — a locale change made via the web is not reflected in a running desktop session until the user opens desktop's own Settings picker or restarts the app. Accepted; matches how a desktop change wasn't visible in web until the next web request before this change.
 
 ## Web date picker format (backlog — not started)
 

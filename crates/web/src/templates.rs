@@ -482,6 +482,7 @@ pub struct ReportsTemplate {
 pub struct SettingsTemplate {
     pub categories: Vec<(i64, String)>,
     pub labels: Vec<(i64, String)>,
+    pub locales: Vec<(String, String)>,
     pub error: Option<String>,
     pub flash: Option<Flash>,
     pub locale: String,

@@ -6,21 +6,20 @@ use axum::Router;
 use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
-use adm_sfa_core::db::queries::{categories as cat_qry, documents as documents_qry};
+use adm_sfa_core::db::queries::{
+    categories as cat_qry, documents as documents_qry, settings as settings_qry,
+};
+use adm_sfa_core::format::LOCALES;
 
 use crate::flash::{self, FlashKind};
 use crate::state::AppState;
 use crate::templates::{Flash, HtmlTemplate, SettingsTemplate};
 
-/// Category and document-label CRUD only — desktop's Settings also has a
-/// locale picker, a screenshot-command field, and a manual "backup now"
-/// button, none of which are ported here. The locale picker specifically
-/// has no web counterpart: `web`'s own UI chrome is translated (see
-/// `crate::i18n`), but it follows the single shared `ui_locale` setting
-/// desktop's picker writes to — there's nothing per-user to pick here,
-/// consistent with "two users, one machine" having one installation-wide
-/// language, not per-session preferences. The screenshot command is
-/// permanently desktop-only per CLAUDE.md ("a
+/// Category and document-label CRUD, plus a locale picker — `POST
+/// /settings/locale` writes the shared `ui_locale` `app_setting` key that
+/// both front-ends read. Desktop's Settings also has a screenshot-command
+/// field and a manual "backup now" button, neither of which are ported here.
+/// The screenshot command is permanently desktop-only per CLAUDE.md ("a
 /// browser cannot invoke the OS screenshot tool on the client machine").
 /// Manual backup is skipped deliberately, not overlooked: phase 6 already
 /// gives the web deployment its own unattended nightly backup
@@ -36,6 +35,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/labels", post(create_label))
         .route("/settings/labels/{id}", post(rename_label))
         .route("/settings/labels/{id}/delete", post(delete_label))
+        .route("/settings/locale", post(set_locale))
 }
 
 fn settings_template(
@@ -50,9 +50,14 @@ fn settings_template(
         .collect();
     let labels = documents_qry::list_labels(conn).unwrap_or_default();
     let locale = crate::i18n::resolve_locale(conn);
+    let locales = LOCALES
+        .iter()
+        .map(|(code, label)| (code.to_string(), label.to_string()))
+        .collect();
     SettingsTemplate {
         categories,
         labels,
+        locales,
         error,
         flash,
         locale,
@@ -70,6 +75,31 @@ async fn index(State(state): State<AppState>, jar: SignedCookieJar) -> impl Into
 #[derive(Deserialize)]
 struct NameForm {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct LocaleForm {
+    code: String,
+}
+
+async fn set_locale(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Form(form): Form<LocaleForm>,
+) -> Response {
+    let conn = state.conn();
+    if !LOCALES.iter().any(|(code, _)| *code == form.code) {
+        let locale = crate::i18n::resolve_locale(&conn);
+        let error = rust_i18n::t!("settings.locale.error.unknown", locale = &locale).to_string();
+        return HtmlTemplate(settings_template(&conn, Some(error), None)).into_response();
+    }
+    match settings_qry::set(&conn, "ui_locale", &form.code) {
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
+    }
 }
 
 async fn create_category(
@@ -518,6 +548,69 @@ mod tests {
             .method("GET")
             .uri("/settings")
             .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/login");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn set_locale_redirects_and_the_setting_is_saved() {
+        use adm_sfa_core::db::queries::settings as settings_qry;
+
+        let (state, dir) = test_support::test_app("settings-set-locale");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/settings/locale")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("code=de"))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/settings");
+        let saved = settings_qry::get(&state.conn(), "ui_locale").unwrap();
+        assert_eq!(saved.as_deref(), Some("de"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn set_locale_with_an_unknown_code_rerenders_with_an_error() {
+        let (state, dir) = test_support::test_app("settings-set-locale-unknown");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/settings/locale")
+            .header("cookie", &cookie)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("code=xx"))
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains(r#"<div class="error">"#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn set_locale_without_a_session_cookie_redirects_to_login() {
+        let (state, dir) = test_support::test_app("settings-set-locale-unauthenticated");
+        let app = crate::build_app(state.clone());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/settings/locale")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("code=de"))
             .unwrap();
         let res = test_support::send(app, req).await;
 
