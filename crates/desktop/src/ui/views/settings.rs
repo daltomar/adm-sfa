@@ -111,7 +111,7 @@ impl SettingsView {
                 ui.add_space(16.0);
                 ui.separator();
                 ui.add_space(8.0);
-                self.show_backup_panel(ui, data_dir);
+                self.show_backup_panel(ui, db, data_dir);
             });
     }
 
@@ -541,7 +541,7 @@ impl SettingsView {
         }
     }
 
-    fn show_backup_panel(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
+    fn show_backup_panel(&mut self, ui: &mut egui::Ui, db: &Connection, data_dir: &Path) {
         ui.label(egui::RichText::new(t!("settings.backup.heading").as_ref()).strong());
         ui.add_space(4.0);
         ui.weak(t!("settings.backup.hint").as_ref());
@@ -592,7 +592,7 @@ impl SettingsView {
             } else {
                 self.backup_path_input = None;
                 self.backup_status = Some(
-                    adm_sfa_core::backup::backup_to_zip(data_dir, &path)
+                    adm_sfa_core::backup::backup_to_zip(db, data_dir, &path)
                         .map(|()| t!("common.status.saved_to", path = path.display()).into_owned())
                         .map_err(|e| e.to_string()),
                 );
