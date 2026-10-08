@@ -7,6 +7,7 @@ use crate::ui::views::dashboard::DashboardView;
 use crate::ui::views::donors::DonorsView;
 use crate::ui::views::eur_ledger::EurLedgerView;
 use crate::ui::views::inventory::InventoryView;
+use crate::ui::views::jahresbericht::JahresberichtView;
 use crate::ui::views::outbound::OutboundView;
 use crate::ui::views::purchases::PurchasesView;
 use crate::ui::views::reports::ReportsView;
@@ -17,6 +18,7 @@ use crate::ui::views::transfers::TransfersView;
 pub enum Section {
     Dashboard,
     Donors,
+    Jahresbericht,
     EurLedger,
     BrlLedger,
     Purchases,
@@ -34,6 +36,7 @@ pub struct App {
     pub data_dir: PathBuf,
     dashboard_view: DashboardView,
     donors_view: DonorsView,
+    jahresbericht_view: JahresberichtView,
     purchases_view: PurchasesView,
     eur_ledger_view: EurLedgerView,
     brl_ledger_view: BrlLedgerView,
@@ -66,6 +69,7 @@ impl App {
             data_dir,
             dashboard_view: DashboardView::default(),
             donors_view: DonorsView::default(),
+            jahresbericht_view: JahresberichtView::default(),
             purchases_view: PurchasesView::default(),
             eur_ledger_view: EurLedgerView::default(),
             brl_ledger_view: BrlLedgerView::default(),
@@ -96,12 +100,14 @@ impl eframe::App for App {
                 Section::Reports => self.reports_view.invalidate(),
                 Section::Settings => self.settings_view.invalidate(),
                 Section::Dashboard => self.dashboard_view.invalidate(),
+                Section::Jahresbericht => self.jahresbericht_view.invalidate(),
             }
             self.prev_section = self.section;
         }
 
         egui::CentralPanel::default().show(ui, |ui| match self.section {
             Section::Dashboard => self.dashboard_view.show(ui, &self.db),
+            Section::Jahresbericht => self.jahresbericht_view.show(ui, &self.db),
             Section::Donors => self.donors_view.show(ui, &self.db),
             Section::EurLedger => self.eur_ledger_view.show(ui, &self.db),
             Section::BrlLedger => self.brl_ledger_view.show(ui, &self.db),

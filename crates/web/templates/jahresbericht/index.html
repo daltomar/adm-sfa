@@ -1,0 +1,111 @@
+{% extends "layout.html" %}
+{% block flash %}
+{% if let Some(f) = flash %}
+<div class="{{ f.css_class }}">{{ f.message }}</div>
+{% endif %}
+{% endblock %}
+{% block content %}
+<h1>{{ "jahresbericht.heading"|t(locale) }}</h1>
+
+{% if let Some(err) = error %}
+<div class="error">{{ err }}</div>
+{% endif %}
+
+{% if org_name.is_empty() %}
+<div class="error">{{ "jahresbericht.warning.org_missing"|t(locale) }}</div>
+{% endif %}
+
+<form method="post" action="/jahresbericht">
+<input type="hidden" name="year" value="{{ year }}">
+
+<p>
+  <label><strong>{{ "jahresbericht.year.label"|t(locale) }}</strong>
+    <input type="number" name="_year_display" value="{{ year }}" min="2020" max="2100"
+      onchange="window.location='/jahresbericht?year='+this.value" style="width:90px">
+  </label>
+</p>
+
+{% if !org_name.is_empty() %}
+<p class="hint">{{ org_name }} · {{ org_address }}{% if !org_tax_number.is_empty() %} · Steuernr. {{ org_tax_number }}{% endif %}</p>
+{% endif %}
+
+<h2>{{ "jahresbericht.section.financial"|t(locale) }}</h2>
+<table class="dashboard-stats" style="max-width:360px">
+  <tr><td>Einnahmen</td><td style="text-align:right">€ {{ income_total }}</td></tr>
+  <tr><td>Ausgaben</td><td style="text-align:right">€ {{ expense_total }}</td></tr>
+  <tr><td><strong>Überschuss</strong></td><td style="text-align:right"><strong>€ {{ surplus }}</strong></td></tr>
+  <tr><td>Kontostand 31.12.</td><td style="text-align:right">€ {{ bank_balance }}</td></tr>
+  <tr><td>Inventarwert</td><td style="text-align:right">€ {{ inventory_value }}</td></tr>
+</table>
+
+<h2>{{ "jahresbericht.section.events"|t(locale) }}</h2>
+{% if events.is_empty() %}
+<p class="hint">{{ "jahresbericht.events.none"|t(locale) }}</p>
+{% else %}
+<div class="table-scroll">
+<table>
+<thead><tr><th>Datum</th><th>Projekt</th><th>Artikel</th></tr></thead>
+<tbody>
+{% for e in events %}
+<tr><td>{{ e.date }}</td><td>{{ e.recipient }}</td><td>{{ e.item_count }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>{{ "jahresbericht.section.narrative"|t(locale) }}</h2>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;max-width:900px">
+
+<p><label><strong>{{ "jahresbericht.field.member_count"|t(locale) }}</strong><br>
+  <input type="number" name="member_count" value="{{ draft.member_count }}" min="0" style="width:80px">
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.meeting_date"|t(locale) }}</strong><br>
+  <input type="text" name="meeting_date" value="{{ draft.meeting_date }}" placeholder="14.02.2026" style="width:160px">
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.meeting_time_from"|t(locale) }}</strong><br>
+  <input type="text" name="meeting_time_from" value="{{ draft.meeting_time_from }}" placeholder="16:00" style="width:90px">
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.meeting_time_to"|t(locale) }}</strong><br>
+  <input type="text" name="meeting_time_to" value="{{ draft.meeting_time_to }}" placeholder="19:00" style="width:90px">
+</label></p>
+
+</div>
+
+<p><label><strong>{{ "jahresbericht.field.tb_activities"|t(locale) }}</strong><br>
+  <textarea name="tb_activities" rows="5" style="width:100%;max-width:800px">{{ draft.tb_activities }}</textarea>
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.tb_continuous"|t(locale) }}</strong><br>
+  <textarea name="tb_continuous" rows="4" style="width:100%;max-width:800px">{{ draft.tb_continuous }}</textarea>
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.tb_outlook"|t(locale) }}</strong><br>
+  <textarea name="tb_outlook" rows="4" style="width:100%;max-width:800px">{{ draft.tb_outlook }}</textarea>
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.pk_activities_next_year"|t(locale) }}</strong><br>
+  <textarea name="pk_activities_next_year" rows="4" style="width:100%;max-width:800px">{{ draft.pk_activities_next_year }}</textarea>
+</label></p>
+
+<p><label><strong>{{ "jahresbericht.field.pk_decisions"|t(locale) }}</strong><br>
+  <textarea name="pk_decisions" rows="3" style="width:100%;max-width:800px">{{ draft.pk_decisions }}</textarea>
+</label></p>
+
+<p><button type="submit">{{ "common.save"|t(locale) }}</button></p>
+
+</form>
+
+<h2>PDF exportieren</h2>
+<p style="display:flex;gap:0.75rem;flex-wrap:wrap">
+  <a class="button" href="/jahresbericht/export.pdf?year={{ year }}&report=all">{{ "jahresbericht.export.all"|t(locale) }}</a>
+  <a class="button" href="/jahresbericht/export.pdf?year={{ year }}&report=ea">{{ "jahresbericht.export.einnahmen_ausgaben"|t(locale) }}</a>
+  <a class="button" href="/jahresbericht/export.pdf?year={{ year }}&report=vermoegen">{{ "jahresbericht.export.vermoegen"|t(locale) }}</a>
+  <a class="button" href="/jahresbericht/export.pdf?year={{ year }}&report=tb">{{ "jahresbericht.export.taetigkeitsbericht"|t(locale) }}</a>
+  <a class="button" href="/jahresbericht/export.pdf?year={{ year }}&report=protokoll">{{ "jahresbericht.export.protokoll"|t(locale) }}</a>
+</p>
+{% endblock %}

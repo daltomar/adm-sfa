@@ -85,6 +85,7 @@ fn build_app(state: AppState) -> Router {
         .merge(routes::transfers::router())
         .merge(routes::inventory::router())
         .merge(routes::outbound::router())
+        .merge(routes::jahresbericht::router())
         .merge(routes::reports::router())
         .merge(routes::settings::router())
         .nest_service("/documents", ServeDir::new(&state.documents_dir))

@@ -130,6 +130,20 @@ CREATE TABLE app_setting (
     value TEXT NOT NULL
 );
 
+CREATE TABLE annual_report_draft (
+    year               INTEGER PRIMARY KEY,
+    member_count       INTEGER NOT NULL DEFAULT 0,
+    meeting_date       TEXT    NOT NULL DEFAULT '',
+    meeting_time_from  TEXT    NOT NULL DEFAULT '',
+    meeting_time_to    TEXT    NOT NULL DEFAULT '',
+    tb_activities      TEXT    NOT NULL DEFAULT '',
+    tb_continuous      TEXT    NOT NULL DEFAULT '',
+    tb_outlook         TEXT    NOT NULL DEFAULT '',
+    pk_decisions       TEXT    NOT NULL DEFAULT '',
+    pk_activities_next_year TEXT NOT NULL DEFAULT '',
+    updated_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX idx_eur_tx_date    ON eur_transaction(date);
 CREATE INDEX idx_eur_tx_donor   ON eur_transaction(donor_id);
 CREATE INDEX idx_brl_tx_date    ON brl_transaction(date);

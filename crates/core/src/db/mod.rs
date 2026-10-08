@@ -23,6 +23,7 @@ fn migrations_list() -> Vec<M<'static>> {
             "../../migrations/003_purchase_negotiation_status.sql"
         )),
         M::up(include_str!("../../migrations/004_app_setting.sql")),
+        M::up(include_str!("../../migrations/005_annual_report_draft.sql")),
     ]
 }
 
@@ -85,6 +86,13 @@ fn seed_default_settings(conn: &Connection) -> rusqlite::Result<()> {
     if queries::settings::get(conn, "ui_locale")?.is_none() {
         queries::settings::set(conn, "ui_locale", "en")?;
     }
+    // Organization info for statutory reports — seeded blank so the app
+    // starts cleanly; the user fills these in via Settings.
+    for key in &["org_name", "org_address", "org_tax_number"] {
+        if queries::settings::get(conn, key)?.is_none() {
+            queries::settings::set(conn, key, "")?;
+        }
+    }
     Ok(())
 }
 
@@ -98,6 +106,22 @@ fn default_screenshot_command() -> &'static str {
         // seed — left blank; the Settings panel prompts the user to enter
         // their own {path}-templated command.
         ""
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod mod_tests {
+    use super::*;
+
+    /// Opens a fully-migrated in-memory DB for tests in other modules.
+    pub(crate) fn open_full_db() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        Migrations::new(migrations_list())
+            .to_latest(&mut conn)
+            .unwrap();
+        seed_default_settings(&conn).unwrap();
+        conn
     }
 }
 
