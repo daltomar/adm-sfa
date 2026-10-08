@@ -76,7 +76,8 @@ async fn main() {
 /// through `main`'s env-var/DB-opening/TCP-binding setup.
 fn build_app(state: AppState) -> Router {
     let protected = Router::new()
-        .route("/", get(|| async { Redirect::to("/purchases") }))
+        .route("/", get(|| async { Redirect::to("/dashboard") }))
+        .merge(routes::dashboard::router())
         .merge(routes::purchases::router())
         .merge(routes::donors::router())
         .merge(routes::eur_ledger::router())
