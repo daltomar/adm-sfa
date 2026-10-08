@@ -1,3 +1,7 @@
+> **SUPERSEDED** — implemented as described in CLAUDE.md §"Purchase
+> negotiation status". The data model here (status on item, lookup table)
+> differs from the final implementation (status on purchase, CHECK TEXT).
+
 §3.x — Item Negotiation Status
 Purpose. Allow an item to be documented at the moment negotiation begins (common on Kleinanzeigen) without committing it to inventory or the EUR ledger until pickup is confirmed.
 Data model.

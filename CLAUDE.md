@@ -25,6 +25,9 @@ there.
 
 - Functional specification: complete (`SPEC.md`).
 - Rust stack: **decided.** See `stack-plan.md` for the chosen storage layer
+  (`stack-plan.md` is not committed to the repo — it is `.gitignore`d by
+  design; the decisions it documents are already fully built and described
+  in this file and in `SPEC.md`)
   (`rusqlite` + `rusqlite_migration`), UI framework (`egui`/`eframe`), PDF
   library (`typst-as-lib` + `typst-bake`, with a fallback noted if the bake
   step proves too unstable), backup mechanism (`zip` + `walkdir`), and the
@@ -690,6 +693,26 @@ Branch `web-locale-picker`. The web Settings page now has a locale picker — `P
 - 3 new tests: `set_locale_redirects_and_the_setting_is_saved`, `set_locale_with_an_unknown_code_rerenders_with_an_error`, `set_locale_without_a_session_cookie_redirects_to_login`. Reviewed by `rust-code-reviewer`: no 🔴 findings; one 🟡 (stale `web.settings.hint`) fixed before commit; one 🟡 (unauthenticated-access test for the new route) fixed before commit; two 🟢 style notes (missing flash round-trip test, `as_str()` verbosity) left as-is.
 - Desktop behaviour note: desktop reads `rust_i18n::locale()` (its in-memory process-wide global set at startup, not the DB) — a locale change made via the web is not reflected in a running desktop session until the user opens desktop's own Settings picker or restarts the app. Accepted; matches how a desktop change wasn't visible in web until the next web request before this change.
 
+## Web front-end: mobile-responsive layout (implemented)
+
+Branch `web-mobile-responsive` (PR #31, 2026-08-24). The header nav (9 links
+in one flex row) and roughly a dozen data tables had no responsive handling,
+so they overflowed narrow phone viewports.
+
+- `layout.html`'s header now collapses into a CSS-only hamburger menu
+  (checkbox toggle, no JS) below 768 px.
+- All list and form tables wrapped in a `.table-scroll` container for
+  horizontal scroll on narrow screens.
+- A mobile media query drops the 400 px input cap, stacks action buttons
+  full-width, and tightens page padding.
+- Settings' hardcoded 220 px inputs gained `max-width: 100%` so they shrink
+  on narrow screens.
+- One 🔴 finding from `rust-code-reviewer` fixed before commit: a global
+  `box-sizing: border-box` reset was scoped to `.button` only to avoid
+  shrinking desktop's main content area by ~48 px.
+- No schema changes. One new i18n key per locale (hamburger accessible label).
+  Pure CSS/HTML, no JS.
+
 ## Web date picker format (backlog — not started)
 
 Owner request, not yet implemented: the web front-end's date fields (all
@@ -717,7 +740,7 @@ there are two genuinely different-scoped fixes, not yet decided between:
 Owner asked to shelve this for now and revisit later — no direction chosen
 yet between the two options above.
 
-## Workspace restructure and web front-end (in progress)
+## Workspace restructure and web front-end (done)
 
 Goal: extract the domain layer into a shared crate so a web front-end can
 be added alongside the existing desktop app, both running on the same
@@ -1362,9 +1385,9 @@ rsync-daemon target) — there's no prompt-for-credentials path in a
   In `crates/reports`: PDF/CSV rendering only — no aggregation.
   In `crates/desktop`: `ui/views/` for one file per section (including
   `settings.rs` for category/label/screenshot-command management) and
-  `screenshot.rs` for OS screenshot-tool invocation. No `ui/widgets/` —
-  the one stub it ever held (`document_panel.rs`) was deleted unused; add
-  it back only if a second shared widget actually materializes.
+  `screenshot.rs` for OS screenshot-tool invocation. `ui/widgets/` contains
+  `status_banner.rs` (the shared post-save banner widget introduced in the
+  save-status-banner branch).
 - **Migrations**: `rusqlite_migration`, tracked via `schema.sql` (canonical,
   hand-maintained) kept in sync with `migrations/NNN_name.sql` (applied,
   incremental). New tables/columns get a new migration file, not edits to
@@ -1409,7 +1432,7 @@ cargo run -p desktop                         # run the egui app
 cargo run -p desktop -- --data-dir /tmp/test # alternate data dir
 cargo run -p web                             # run the web server (phase 5+)
 cargo test --workspace                       # run all tests across crates
-cargo clippy --workspace -- -D warnings      # lint everything
+cargo clippy --workspace --all-targets -- -D warnings  # lint everything (includes tests)
 cargo fmt --all                              # format all crates
 ```
 
