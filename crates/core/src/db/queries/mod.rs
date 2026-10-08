@@ -1,3 +1,4 @@
+pub mod annual_report_draft;
 pub mod brl_ledger;
 pub mod categories;
 pub mod documents;

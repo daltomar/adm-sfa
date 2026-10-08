@@ -40,7 +40,10 @@ async fn main() {
     adm_sfa_core::config::ensure_dirs(&data_dir);
     let documents_dir = data_dir.join("documents");
 
-    let db = adm_sfa_core::db::open_db(&data_dir).expect("failed to open database");
+    let db = adm_sfa_core::db::open_db(&data_dir).unwrap_or_else(|e| {
+        eprintln!("fatal: failed to open database: {e}");
+        std::process::exit(1);
+    });
 
     let password = std::env::var("ADM_SFA_WEB_PASSWORD").unwrap_or_else(|_| {
         eprintln!(
@@ -73,7 +76,8 @@ async fn main() {
 /// through `main`'s env-var/DB-opening/TCP-binding setup.
 fn build_app(state: AppState) -> Router {
     let protected = Router::new()
-        .route("/", get(|| async { Redirect::to("/purchases") }))
+        .route("/", get(|| async { Redirect::to("/dashboard") }))
+        .merge(routes::dashboard::router())
         .merge(routes::purchases::router())
         .merge(routes::donors::router())
         .merge(routes::eur_ledger::router())
@@ -81,6 +85,7 @@ fn build_app(state: AppState) -> Router {
         .merge(routes::transfers::router())
         .merge(routes::inventory::router())
         .merge(routes::outbound::router())
+        .merge(routes::jahresbericht::router())
         .merge(routes::reports::router())
         .merge(routes::settings::router())
         .nest_service("/documents", ServeDir::new(&state.documents_dir))

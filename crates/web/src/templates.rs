@@ -478,11 +478,70 @@ pub struct ReportsTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "dashboard/index.html")]
+pub struct DashboardTemplate {
+    pub eur_balance: String,
+    pub brl_balance: String,
+    pub inventory_available: i64,
+    pub inventory_reserved: i64,
+    pub inventory_donated: i64,
+    pub outbound_items_this_year: i64,
+    pub outbound_cash_this_year: String,
+    /// Pre-formatted negotiation summary line (handles plural/zero in the handler).
+    pub negotiations_label: String,
+    pub flash: Option<Flash>,
+    pub locale: String,
+}
+
+/// One outbound event row for the Jahresbericht form.
+pub struct JahresberichtEventRow {
+    pub date: String,
+    pub recipient: String,
+    pub item_count: String,
+}
+
+/// Editable narrative fields, pre-populated from the DB draft.
+#[derive(Default)]
+pub struct JahresberichtDraft {
+    pub member_count: String,
+    pub meeting_date: String,
+    pub meeting_time_from: String,
+    pub meeting_time_to: String,
+    pub tb_activities: String,
+    pub tb_continuous: String,
+    pub tb_outlook: String,
+    pub pk_activities_next_year: String,
+    pub pk_decisions: String,
+}
+
+#[derive(Template)]
+#[template(path = "jahresbericht/index.html")]
+pub struct JahresberichtTemplate {
+    pub year: i32,
+    pub org_name: String,
+    pub org_address: String,
+    pub org_tax_number: String,
+    pub income_total: String,
+    pub expense_total: String,
+    pub surplus: String,
+    pub bank_balance: String,
+    pub inventory_value: String,
+    pub events: Vec<JahresberichtEventRow>,
+    pub draft: JahresberichtDraft,
+    pub error: Option<String>,
+    pub flash: Option<Flash>,
+    pub locale: String,
+}
+
+#[derive(Template)]
 #[template(path = "settings/index.html")]
 pub struct SettingsTemplate {
     pub categories: Vec<(i64, String)>,
     pub labels: Vec<(i64, String)>,
     pub locales: Vec<(String, String)>,
+    pub org_name: String,
+    pub org_address: String,
+    pub org_tax_number: String,
     pub error: Option<String>,
     pub flash: Option<Flash>,
     pub locale: String,

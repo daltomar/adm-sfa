@@ -1913,22 +1913,23 @@ mod tests {
     #[tokio::test]
     async fn purchase_picker_formats_cost_using_the_resolved_ui_locale() {
         let (state, dir) = test_support::test_app("inventory-purchase-picker-locale-format");
-        let conn = state.conn();
-        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
-        purchases_qry::insert(
-            &conn,
-            &PurchaseDraft {
-                date: "2026-01-01".to_string(),
-                currency: Currency::Eur,
-                cost_str: "1234.56".to_string(),
-                channel: "Kleinanzeigen".to_string(),
-                seller_info: String::new(),
-                multiple_items: false,
-                status: PurchaseStatus::Bought,
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+            purchases_qry::insert(
+                &conn,
+                &PurchaseDraft {
+                    date: "2026-01-01".to_string(),
+                    currency: Currency::Eur,
+                    cost_str: "1234.56".to_string(),
+                    channel: "Kleinanzeigen".to_string(),
+                    seller_info: String::new(),
+                    multiple_items: false,
+                    status: PurchaseStatus::Bought,
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

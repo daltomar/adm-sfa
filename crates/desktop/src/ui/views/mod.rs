@@ -3,6 +3,7 @@ pub mod dashboard;
 pub mod donors;
 pub mod eur_ledger;
 pub mod inventory;
+pub mod jahresbericht;
 pub mod outbound;
 pub mod purchases;
 pub mod reports;

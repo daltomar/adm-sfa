@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/labels/{id}", post(rename_label))
         .route("/settings/labels/{id}/delete", post(delete_label))
         .route("/settings/locale", post(set_locale))
+        .route("/settings/org", post(set_org))
 }
 
 fn settings_template(
@@ -54,10 +55,22 @@ fn settings_template(
         .iter()
         .map(|(code, label)| (code.to_string(), label.to_string()))
         .collect();
+    let org_name = settings_qry::get(conn, "org_name")
+        .unwrap_or_default()
+        .unwrap_or_default();
+    let org_address = settings_qry::get(conn, "org_address")
+        .unwrap_or_default()
+        .unwrap_or_default();
+    let org_tax_number = settings_qry::get(conn, "org_tax_number")
+        .unwrap_or_default()
+        .unwrap_or_default();
     SettingsTemplate {
         categories,
         labels,
         locales,
+        org_name,
+        org_address,
+        org_tax_number,
         error,
         flash,
         locale,
@@ -94,6 +107,34 @@ async fn set_locale(
         return HtmlTemplate(settings_template(&conn, Some(error), None)).into_response();
     }
     match settings_qry::set(&conn, "ui_locale", &form.code) {
+        Ok(()) => {
+            let jar = flash::set_flash(jar, FlashKind::Success);
+            (jar, Redirect::to("/settings")).into_response()
+        }
+        Err(e) => HtmlTemplate(settings_template(&conn, Some(e.to_string()), None)).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct OrgForm {
+    org_name: String,
+    org_address: String,
+    org_tax_number: String,
+}
+
+async fn set_org(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Form(form): Form<OrgForm>,
+) -> Response {
+    let conn = state.conn();
+    let result = (|| -> rusqlite::Result<()> {
+        settings_qry::set(&conn, "org_name", &form.org_name)?;
+        settings_qry::set(&conn, "org_address", &form.org_address)?;
+        settings_qry::set(&conn, "org_tax_number", &form.org_tax_number)?;
+        Ok(())
+    })();
+    match result {
         Ok(()) => {
             let jar = flash::set_flash(jar, FlashKind::Success);
             (jar, Redirect::to("/settings")).into_response()
@@ -215,10 +256,11 @@ mod tests {
     #[tokio::test]
     async fn index_lists_categories_and_labels() {
         let (state, dir) = test_support::test_app("settings-index-lists");
-        let conn = state.conn();
-        cat_qry::insert(&conn, "Decks").unwrap();
-        documents_qry::insert_label(&conn, "Invoice").unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            cat_qry::insert(&conn, "Decks").unwrap();
+            documents_qry::insert_label(&conn, "Invoice").unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -395,32 +437,34 @@ mod tests {
         };
 
         let (state, dir) = test_support::test_app("settings-delete-category-in-use");
-        let conn = state.conn();
-        let cat_id = cat_qry::insert(&conn, "Decks").unwrap();
-        let donation_id = donors_qry::insert_donation(
-            &conn,
-            &PhysicalDonationDraft {
-                donor_id: None,
-                date_received: "2026-01-01".to_string(),
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        inv_qry::insert(
-            &conn,
-            &InventoryItemDraft {
-                name: "Deck".to_string(),
-                category_id: Some(cat_id),
-                source_type: SourceType::Donation,
-                source_donation_id: Some(donation_id),
-                source_purchase_id: None,
-                location: Location::Germany,
-                status: ItemStatus::Available,
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        let cat_id = {
+            let conn = state.conn();
+            let cat_id = cat_qry::insert(&conn, "Decks").unwrap();
+            let donation_id = donors_qry::insert_donation(
+                &conn,
+                &PhysicalDonationDraft {
+                    donor_id: None,
+                    date_received: "2026-01-01".to_string(),
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+            inv_qry::insert(
+                &conn,
+                &InventoryItemDraft {
+                    name: "Deck".to_string(),
+                    category_id: Some(cat_id),
+                    source_type: SourceType::Donation,
+                    source_donation_id: Some(donation_id),
+                    source_purchase_id: None,
+                    location: Location::Germany,
+                    status: ItemStatus::Available,
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+            cat_id
+        };
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

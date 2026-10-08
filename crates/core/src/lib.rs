@@ -10,6 +10,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod backup;
 pub mod config;
+pub mod dashboard;
 pub mod date;
 pub mod db;
 pub mod docs_fs;
@@ -18,3 +19,4 @@ pub mod model;
 pub mod money;
 pub mod reporting;
 pub mod service;
+pub mod statutory;
