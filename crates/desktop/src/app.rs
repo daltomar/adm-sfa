@@ -121,6 +121,15 @@ impl eframe::App for App {
         // imperceptible at 60fps, and `select_for_edit` sets `mode` before
         // next frame's section-change `invalidate()` runs, which doesn't
         // touch `mode` anyway.
+        if let Some(target) = self.dashboard_view.take_nav_request() {
+            self.section = match target {
+                ui::views::dashboard::DashboardNavTarget::EurLedger => Section::EurLedger,
+                ui::views::dashboard::DashboardNavTarget::BrlLedger => Section::BrlLedger,
+                ui::views::dashboard::DashboardNavTarget::Inventory => Section::Inventory,
+                ui::views::dashboard::DashboardNavTarget::Outbound => Section::Outbound,
+                ui::views::dashboard::DashboardNavTarget::Purchases => Section::Purchases,
+            };
+        }
         if let Some(target) = self.eur_ledger_view.take_nav_request() {
             match target {
                 ui::views::eur_ledger::LedgerNavTarget::Purchase(id) => {

@@ -10,14 +10,14 @@
 <div class="dashboard-grid">
 
   <div class="dashboard-card">
-    <h2>{{ "dashboard.eur_balance"|t(locale) }}</h2>
+    <h2><a href="/eur-ledger">{{ "dashboard.eur_balance"|t(locale) }}</a></h2>
     <p class="dashboard-amount">€ {{ eur_balance }}</p>
-    <h2 style="margin-top:1rem">{{ "dashboard.brl_balance"|t(locale) }}</h2>
+    <h2 style="margin-top:1rem"><a href="/brl-ledger">{{ "dashboard.brl_balance"|t(locale) }}</a></h2>
     <p class="dashboard-amount">R$ {{ brl_balance }}</p>
   </div>
 
   <div class="dashboard-card">
-    <h2>{{ "dashboard.inventory.heading"|t(locale) }}</h2>
+    <h2><a href="/inventory">{{ "dashboard.inventory.heading"|t(locale) }}</a></h2>
     <table class="dashboard-stats">
       <tr>
         <td>{{ "dashboard.inventory.available"|t(locale) }}</td>
@@ -35,7 +35,7 @@
   </div>
 
   <div class="dashboard-card">
-    <h2>{{ "dashboard.outbound.heading"|t(locale) }}</h2>
+    <h2><a href="/outbound">{{ "dashboard.outbound.heading"|t(locale) }}</a></h2>
     <table class="dashboard-stats">
       <tr>
         <td>{{ "dashboard.outbound.items"|t(locale) }}</td>
@@ -49,7 +49,7 @@
   </div>
 
   <div class="dashboard-card">
-    <h2>{{ "dashboard.negotiations.heading"|t(locale) }}</h2>
+    <h2><a href="/purchases">{{ "dashboard.negotiations.heading"|t(locale) }}</a></h2>
     <p class="dashboard-amount">{{ negotiations_label }}</p>
   </div>
 
@@ -74,6 +74,13 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: #555;
+}
+.dashboard-card h2 a {
+  color: inherit;
+  text-decoration: none;
+}
+.dashboard-card h2 a:hover {
+  text-decoration: underline;
 }
 .dashboard-amount {
   font-size: 1.4rem;

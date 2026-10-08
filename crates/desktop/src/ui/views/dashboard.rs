@@ -5,14 +5,27 @@ use rust_i18n::t;
 use adm_sfa_core::dashboard::DashboardData;
 use adm_sfa_core::format;
 
+pub enum DashboardNavTarget {
+    EurLedger,
+    BrlLedger,
+    Inventory,
+    Outbound,
+    Purchases,
+}
+
 #[derive(Default)]
 pub struct DashboardView {
     data: Option<DashboardData>,
+    nav_request: Option<DashboardNavTarget>,
 }
 
 impl DashboardView {
     pub fn invalidate(&mut self) {
         self.data = None;
+    }
+
+    pub fn take_nav_request(&mut self) -> Option<DashboardNavTarget> {
+        self.nav_request.take()
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, db: &Connection) {
@@ -30,20 +43,29 @@ impl DashboardView {
             // ── Left column ────────────────────────────────────────────
             let left = &mut cols[0];
 
-            // Balances
+            // Balances — link heading navigates to EUR Ledger / BRL Ledger
             egui::Frame::group(left.style()).show(left, |ui| {
-                ui.strong(t!("dashboard.eur_balance").as_ref());
+                if ui.link(t!("dashboard.eur_balance").as_ref()).clicked() {
+                    self.nav_request = Some(DashboardNavTarget::EurLedger);
+                }
                 ui.label(format!("€ {}", format::amount(data.eur_balance)));
                 ui.add_space(4.0);
-                ui.strong(t!("dashboard.brl_balance").as_ref());
+                if ui.link(t!("dashboard.brl_balance").as_ref()).clicked() {
+                    self.nav_request = Some(DashboardNavTarget::BrlLedger);
+                }
                 ui.label(format!("R$ {}", format::amount(data.brl_balance)));
             });
 
             left.add_space(10.0);
 
-            // Inventory snapshot
+            // Inventory snapshot — link heading navigates to Inventory
             egui::Frame::group(left.style()).show(left, |ui| {
-                ui.strong(t!("dashboard.inventory.heading").as_ref());
+                if ui
+                    .link(t!("dashboard.inventory.heading").as_ref())
+                    .clicked()
+                {
+                    self.nav_request = Some(DashboardNavTarget::Inventory);
+                }
                 ui.add_space(4.0);
                 egui::Grid::new("dashboard_inventory_grid")
                     .num_columns(2)
@@ -64,9 +86,11 @@ impl DashboardView {
             // ── Right column ───────────────────────────────────────────
             let right = &mut cols[1];
 
-            // Outbound this year
+            // Outbound this year — link heading navigates to Outbound
             egui::Frame::group(right.style()).show(right, |ui| {
-                ui.strong(t!("dashboard.outbound.heading").as_ref());
+                if ui.link(t!("dashboard.outbound.heading").as_ref()).clicked() {
+                    self.nav_request = Some(DashboardNavTarget::Outbound);
+                }
                 ui.add_space(4.0);
                 egui::Grid::new("dashboard_outbound_grid")
                     .num_columns(2)
@@ -86,9 +110,14 @@ impl DashboardView {
 
             right.add_space(10.0);
 
-            // Open negotiations
+            // Open negotiations — link heading navigates to Purchases
             egui::Frame::group(right.style()).show(right, |ui| {
-                ui.strong(t!("dashboard.negotiations.heading").as_ref());
+                if ui
+                    .link(t!("dashboard.negotiations.heading").as_ref())
+                    .clicked()
+                {
+                    self.nav_request = Some(DashboardNavTarget::Purchases);
+                }
                 ui.add_space(4.0);
                 let label = if data.negotiating_count == 0 {
                     t!("dashboard.negotiations.none").into_owned()
