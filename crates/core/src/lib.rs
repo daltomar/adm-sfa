@@ -10,6 +10,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod backup;
 pub mod config;
+pub mod dashboard;
 pub mod date;
 pub mod db;
 pub mod docs_fs;

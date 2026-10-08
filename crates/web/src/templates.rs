@@ -478,6 +478,22 @@ pub struct ReportsTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "dashboard/index.html")]
+pub struct DashboardTemplate {
+    pub eur_balance: String,
+    pub brl_balance: String,
+    pub inventory_available: i64,
+    pub inventory_reserved: i64,
+    pub inventory_donated: i64,
+    pub outbound_items_this_year: i64,
+    pub outbound_cash_this_year: String,
+    /// Pre-formatted negotiation summary line (handles plural/zero in the handler).
+    pub negotiations_label: String,
+    pub flash: Option<Flash>,
+    pub locale: String,
+}
+
+#[derive(Template)]
 #[template(path = "settings/index.html")]
 pub struct SettingsTemplate {
     pub categories: Vec<(i64, String)>,

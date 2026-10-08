@@ -1,4 +1,5 @@
 pub mod brl_ledger;
+pub mod dashboard;
 pub mod donors;
 pub mod eur_ledger;
 pub mod inventory;

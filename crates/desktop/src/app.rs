@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::ui;
 use crate::ui::views::brl_ledger::BrlLedgerView;
+use crate::ui::views::dashboard::DashboardView;
 use crate::ui::views::donors::DonorsView;
 use crate::ui::views::eur_ledger::EurLedgerView;
 use crate::ui::views::inventory::InventoryView;
@@ -31,6 +32,7 @@ pub struct App {
     prev_section: Section,
     pub db: rusqlite::Connection,
     pub data_dir: PathBuf,
+    dashboard_view: DashboardView,
     donors_view: DonorsView,
     purchases_view: PurchasesView,
     eur_ledger_view: EurLedgerView,
@@ -62,6 +64,7 @@ impl App {
             prev_section: Section::Dashboard,
             db,
             data_dir,
+            dashboard_view: DashboardView::default(),
             donors_view: DonorsView::default(),
             purchases_view: PurchasesView::default(),
             eur_ledger_view: EurLedgerView::default(),
@@ -92,13 +95,13 @@ impl eframe::App for App {
                 Section::Outbound => self.outbound_view.invalidate(),
                 Section::Reports => self.reports_view.invalidate(),
                 Section::Settings => self.settings_view.invalidate(),
-                Section::Dashboard => {}
+                Section::Dashboard => self.dashboard_view.invalidate(),
             }
             self.prev_section = self.section;
         }
 
         egui::CentralPanel::default().show(ui, |ui| match self.section {
-            Section::Dashboard => ui::views::dashboard::show(ui),
+            Section::Dashboard => self.dashboard_view.show(ui, &self.db),
             Section::Donors => self.donors_view.show(ui, &self.db),
             Section::EurLedger => self.eur_ledger_view.show(ui, &self.db),
             Section::BrlLedger => self.brl_ledger_view.show(ui, &self.db),
@@ -118,6 +121,15 @@ impl eframe::App for App {
         // imperceptible at 60fps, and `select_for_edit` sets `mode` before
         // next frame's section-change `invalidate()` runs, which doesn't
         // touch `mode` anyway.
+        if let Some(target) = self.dashboard_view.take_nav_request() {
+            self.section = match target {
+                ui::views::dashboard::DashboardNavTarget::EurLedger => Section::EurLedger,
+                ui::views::dashboard::DashboardNavTarget::BrlLedger => Section::BrlLedger,
+                ui::views::dashboard::DashboardNavTarget::Inventory => Section::Inventory,
+                ui::views::dashboard::DashboardNavTarget::Outbound => Section::Outbound,
+                ui::views::dashboard::DashboardNavTarget::Purchases => Section::Purchases,
+            };
+        }
         if let Some(target) = self.eur_ledger_view.take_nav_request() {
             match target {
                 ui::views::eur_ledger::LedgerNavTarget::Purchase(id) => {
