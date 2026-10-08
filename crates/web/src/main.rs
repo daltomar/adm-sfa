@@ -40,7 +40,10 @@ async fn main() {
     adm_sfa_core::config::ensure_dirs(&data_dir);
     let documents_dir = data_dir.join("documents");
 
-    let db = adm_sfa_core::db::open_db(&data_dir).expect("failed to open database");
+    let db = adm_sfa_core::db::open_db(&data_dir).unwrap_or_else(|e| {
+        eprintln!("fatal: failed to open database: {e}");
+        std::process::exit(1);
+    });
 
     let password = std::env::var("ADM_SFA_WEB_PASSWORD").unwrap_or_else(|_| {
         eprintln!(
