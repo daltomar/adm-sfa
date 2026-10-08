@@ -995,17 +995,17 @@ mod tests {
     #[tokio::test]
     async fn list_shows_the_oldest_purchase_first() {
         let (state, dir) = test_support::test_app("purchases-list-oldest-first");
-        let conn = state.conn();
-        let mut older = a_purchase_draft();
-        older.date = "2026-01-01".to_string();
-        older.channel = "OlderChannel".to_string();
-        purchases_qry::insert(&conn, &older).unwrap();
-        let mut newer = a_purchase_draft();
-        newer.date = "2026-06-01".to_string();
-        newer.channel = "NewerChannel".to_string();
-        purchases_qry::insert(&conn, &newer).unwrap();
-        drop(conn);
-
+        {
+            let conn = state.conn();
+            let mut older = a_purchase_draft();
+            older.date = "2026-01-01".to_string();
+            older.channel = "OlderChannel".to_string();
+            purchases_qry::insert(&conn, &older).unwrap();
+            let mut newer = a_purchase_draft();
+            newer.date = "2026-06-01".to_string();
+            newer.channel = "NewerChannel".to_string();
+            purchases_qry::insert(&conn, &newer).unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -1037,13 +1037,13 @@ mod tests {
     #[tokio::test]
     async fn list_formats_cost_using_the_resolved_ui_locale() {
         let (state, dir) = test_support::test_app("purchases-list-locale-amount-format");
-        let conn = state.conn();
-        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
-        let mut draft = a_purchase_draft();
-        draft.cost_str = "1234.56".to_string();
-        purchases_qry::insert(&conn, &draft).unwrap();
-        drop(conn);
-
+        {
+            let conn = state.conn();
+            adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+            let mut draft = a_purchase_draft();
+            draft.cost_str = "1234.56".to_string();
+            purchases_qry::insert(&conn, &draft).unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

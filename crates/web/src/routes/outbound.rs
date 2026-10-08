@@ -469,16 +469,17 @@ mod tests {
     #[tokio::test]
     async fn list_shows_the_oldest_event_first() {
         let (state, dir) = test_support::test_app("outbound-list-oldest-first");
-        let conn = state.conn();
-        let rp_id = super::qry::insert_recipient_project(&conn, &recipient_draft("OlderRecipient"))
-            .unwrap();
-        let rp2_id =
-            super::qry::insert_recipient_project(&conn, &recipient_draft("NewerRecipient"))
-                .unwrap();
-        service_donate(&conn, rp_id, "2026-01-01");
-        service_donate(&conn, rp2_id, "2026-06-01");
-        drop(conn);
-
+        {
+            let conn = state.conn();
+            let rp_id =
+                super::qry::insert_recipient_project(&conn, &recipient_draft("OlderRecipient"))
+                    .unwrap();
+            let rp2_id =
+                super::qry::insert_recipient_project(&conn, &recipient_draft("NewerRecipient"))
+                    .unwrap();
+            service_donate(&conn, rp_id, "2026-01-01");
+            service_donate(&conn, rp2_id, "2026-06-01");
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -531,11 +532,10 @@ mod tests {
     #[tokio::test]
     async fn create_redirects_to_the_outbound_list_not_the_edit_page() {
         let (state, dir) = test_support::test_app("outbound-create-redirect");
-        let conn = state.conn();
-        let rp_id =
-            super::qry::insert_recipient_project(&conn, &recipient_draft("Recipient")).unwrap();
-        drop(conn);
-
+        let rp_id = {
+            let conn = state.conn();
+            super::qry::insert_recipient_project(&conn, &recipient_draft("Recipient")).unwrap()
+        };
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -646,11 +646,10 @@ mod tests {
     #[tokio::test]
     async fn new_form_with_a_recipient_project_id_query_param_preselects_it() {
         let (state, dir) = test_support::test_app("outbound-new-form-preselect");
-        let conn = state.conn();
-        let rp_id = super::qry::insert_recipient_project(&conn, &recipient_draft("PreselectedOrg"))
-            .unwrap();
-        drop(conn);
-
+        let rp_id = {
+            let conn = state.conn();
+            super::qry::insert_recipient_project(&conn, &recipient_draft("PreselectedOrg")).unwrap()
+        };
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -705,22 +704,23 @@ mod tests {
     #[tokio::test]
     async fn list_formats_the_cash_summary_using_the_resolved_ui_locale() {
         let (state, dir) = test_support::test_app("outbound-locale-amount-format");
-        let conn = state.conn();
-        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
-        let rp_id =
-            super::qry::insert_recipient_project(&conn, &recipient_draft("Recipient")).unwrap();
-        adm_sfa_core::service::donate_items(
-            &conn,
-            &OutboundEventDraft {
-                date: "2026-01-01".to_string(),
-                recipient_project_id: Some(rp_id),
-                cash_amount_brl_str: "1234.56".to_string(),
-                notes: String::new(),
-            },
-            &[],
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+            let rp_id =
+                super::qry::insert_recipient_project(&conn, &recipient_draft("Recipient")).unwrap();
+            adm_sfa_core::service::donate_items(
+                &conn,
+                &OutboundEventDraft {
+                    date: "2026-01-01".to_string(),
+                    recipient_project_id: Some(rp_id),
+                    cash_amount_brl_str: "1234.56".to_string(),
+                    notes: String::new(),
+                },
+                &[],
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

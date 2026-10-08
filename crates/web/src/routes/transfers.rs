@@ -893,28 +893,29 @@ mod tests {
     #[tokio::test]
     async fn list_shows_the_oldest_transfer_first() {
         let (state, dir) = test_support::test_app("transfer-list-oldest-first");
-        let conn = state.conn();
-        qry::insert(
-            &conn,
-            &adm_sfa_core::model::transfer::TransferDraft {
-                date: "2026-01-01".to_string(),
-                eur_amount_sent_str: "111.11".to_string(),
-                exchange_rate_str: "5.0".to_string(),
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        qry::insert(
-            &conn,
-            &adm_sfa_core::model::transfer::TransferDraft {
-                date: "2026-06-01".to_string(),
-                eur_amount_sent_str: "222.22".to_string(),
-                exchange_rate_str: "5.0".to_string(),
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            qry::insert(
+                &conn,
+                &adm_sfa_core::model::transfer::TransferDraft {
+                    date: "2026-01-01".to_string(),
+                    eur_amount_sent_str: "111.11".to_string(),
+                    exchange_rate_str: "5.0".to_string(),
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+            qry::insert(
+                &conn,
+                &adm_sfa_core::model::transfer::TransferDraft {
+                    date: "2026-06-01".to_string(),
+                    eur_amount_sent_str: "222.22".to_string(),
+                    exchange_rate_str: "5.0".to_string(),
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -948,19 +949,20 @@ mod tests {
     #[tokio::test]
     async fn list_formats_amounts_and_rate_using_the_resolved_ui_locale() {
         let (state, dir) = test_support::test_app("transfer-list-locale-amount-format");
-        let conn = state.conn();
-        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
-        qry::insert(
-            &conn,
-            &adm_sfa_core::model::transfer::TransferDraft {
-                date: "2026-01-01".to_string(),
-                eur_amount_sent_str: "1000.00".to_string(),
-                exchange_rate_str: "5.5".to_string(),
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "de").unwrap();
+            qry::insert(
+                &conn,
+                &adm_sfa_core::model::transfer::TransferDraft {
+                    date: "2026-01-01".to_string(),
+                    eur_amount_sent_str: "1000.00".to_string(),
+                    exchange_rate_str: "5.5".to_string(),
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

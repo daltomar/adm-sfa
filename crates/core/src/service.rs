@@ -440,7 +440,7 @@ mod tests {
             "2026-01-01",
             ("purchase", id),
             "receipt",
-            &[first_filename.clone()],
+            std::slice::from_ref(&first_filename),
         )
         .unwrap();
 

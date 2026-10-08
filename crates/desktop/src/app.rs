@@ -44,7 +44,10 @@ pub struct App {
 
 impl App {
     pub fn new(_cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
-        let db = adm_sfa_core::db::open_db(&data_dir).expect("failed to open database");
+        let db = adm_sfa_core::db::open_db(&data_dir).unwrap_or_else(|e| {
+            eprintln!("fatal: failed to open database: {e}");
+            std::process::exit(1);
+        });
 
         // Apply the saved UI language at startup (SPEC.md §6.1/§6.2) — seeded
         // to "en" by seed_default_settings if never set. Live switching
