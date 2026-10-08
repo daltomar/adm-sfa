@@ -564,30 +564,31 @@ mod tests {
         use adm_sfa_core::model::transaction::{EurTxDraft, ManualEurTxType};
 
         let (state, dir) = test_support::test_app("eur-ledger-list-oldest-first");
-        let conn = state.conn();
-        qry::insert(
-            &conn,
-            &EurTxDraft {
-                date: "2026-01-01".to_string(),
-                tx_type: ManualEurTxType::SelfFundingIn,
-                amount_str: "10.00".to_string(),
-                donor_id: None,
-                note: "older".to_string(),
-            },
-        )
-        .unwrap();
-        qry::insert(
-            &conn,
-            &EurTxDraft {
-                date: "2026-06-01".to_string(),
-                tx_type: ManualEurTxType::SelfFundingIn,
-                amount_str: "20.00".to_string(),
-                donor_id: None,
-                note: "newer".to_string(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            qry::insert(
+                &conn,
+                &EurTxDraft {
+                    date: "2026-01-01".to_string(),
+                    tx_type: ManualEurTxType::SelfFundingIn,
+                    amount_str: "10.00".to_string(),
+                    donor_id: None,
+                    note: "older".to_string(),
+                },
+            )
+            .unwrap();
+            qry::insert(
+                &conn,
+                &EurTxDraft {
+                    date: "2026-06-01".to_string(),
+                    tx_type: ManualEurTxType::SelfFundingIn,
+                    amount_str: "20.00".to_string(),
+                    donor_id: None,
+                    note: "newer".to_string(),
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -615,19 +616,20 @@ mod tests {
         use adm_sfa_core::model::transaction::{EurTxDraft, ManualEurTxType};
 
         let (state, dir) = test_support::test_app("eur-ledger-list-no-note-edit-link");
-        let conn = state.conn();
-        qry::insert(
-            &conn,
-            &EurTxDraft {
-                date: "2026-01-01".to_string(),
-                tx_type: ManualEurTxType::SelfFundingIn,
-                amount_str: "10.00".to_string(),
-                donor_id: None,
-                note: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            qry::insert(
+                &conn,
+                &EurTxDraft {
+                    date: "2026-01-01".to_string(),
+                    tx_type: ManualEurTxType::SelfFundingIn,
+                    amount_str: "10.00".to_string(),
+                    donor_id: None,
+                    note: String::new(),
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -653,21 +655,22 @@ mod tests {
         use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
 
         let (state, dir) = test_support::test_app("eur-ledger-list-purchase-link");
-        let conn = state.conn();
-        let purchase_id = purchases_qry::insert(
-            &conn,
-            &PurchaseDraft {
-                date: "2026-01-01".to_string(),
-                currency: Currency::Eur,
-                cost_str: "50.00".to_string(),
-                channel: "Kleinanzeigen".to_string(),
-                seller_info: String::new(),
-                multiple_items: false,
-                status: PurchaseStatus::Bought,
-            },
-        )
-        .unwrap();
-        drop(conn);
+        let purchase_id = {
+            let conn = state.conn();
+            purchases_qry::insert(
+                &conn,
+                &PurchaseDraft {
+                    date: "2026-01-01".to_string(),
+                    currency: Currency::Eur,
+                    cost_str: "50.00".to_string(),
+                    channel: "Kleinanzeigen".to_string(),
+                    seller_info: String::new(),
+                    multiple_items: false,
+                    status: PurchaseStatus::Bought,
+                },
+            )
+            .unwrap()
+        };
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -691,18 +694,19 @@ mod tests {
         use adm_sfa_core::model::transfer::TransferDraft;
 
         let (state, dir) = test_support::test_app("eur-ledger-list-transfer-link");
-        let conn = state.conn();
-        let transfer_id = transfers_qry::insert(
-            &conn,
-            &TransferDraft {
-                date: "2026-01-01".to_string(),
-                eur_amount_sent_str: "100.00".to_string(),
-                exchange_rate_str: "5.00".to_string(),
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        let transfer_id = {
+            let conn = state.conn();
+            transfers_qry::insert(
+                &conn,
+                &TransferDraft {
+                    date: "2026-01-01".to_string(),
+                    eur_amount_sent_str: "100.00".to_string(),
+                    exchange_rate_str: "5.00".to_string(),
+                    notes: String::new(),
+                },
+            )
+            .unwrap()
+        };
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

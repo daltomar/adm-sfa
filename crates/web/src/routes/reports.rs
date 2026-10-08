@@ -779,19 +779,20 @@ mod tests {
     #[tokio::test]
     async fn index_eur_tab_shows_the_summary_and_the_row() {
         let (state, dir) = test_support::test_app("reports-index-eur-tab");
-        let conn = state.conn();
-        eur_qry::insert(
-            &conn,
-            &EurTxDraft {
-                date: "2026-01-01".to_string(),
-                tx_type: ManualEurTxType::SelfFundingIn,
-                amount_str: "250.00".to_string(),
-                donor_id: None,
-                note: "Seed funding".to_string(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            eur_qry::insert(
+                &conn,
+                &EurTxDraft {
+                    date: "2026-01-01".to_string(),
+                    tx_type: ManualEurTxType::SelfFundingIn,
+                    amount_str: "250.00".to_string(),
+                    donor_id: None,
+                    note: "Seed funding".to_string(),
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -862,20 +863,21 @@ mod tests {
     #[tokio::test]
     async fn export_csv_amount_follows_the_explicit_locale_param_not_the_chrome_locale() {
         let (state, dir) = test_support::test_app("reports-csv-explicit-locale");
-        let conn = state.conn();
-        adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "en").unwrap();
-        eur_qry::insert(
-            &conn,
-            &EurTxDraft {
-                date: "2026-01-01".to_string(),
-                tx_type: ManualEurTxType::SelfFundingIn,
-                amount_str: "1234.56".to_string(),
-                donor_id: None,
-                note: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            adm_sfa_core::db::queries::settings::set(&conn, "ui_locale", "en").unwrap();
+            eur_qry::insert(
+                &conn,
+                &EurTxDraft {
+                    date: "2026-01-01".to_string(),
+                    tx_type: ManualEurTxType::SelfFundingIn,
+                    amount_str: "1234.56".to_string(),
+                    donor_id: None,
+                    note: String::new(),
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

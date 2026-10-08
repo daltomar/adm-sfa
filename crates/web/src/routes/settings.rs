@@ -215,10 +215,11 @@ mod tests {
     #[tokio::test]
     async fn index_lists_categories_and_labels() {
         let (state, dir) = test_support::test_app("settings-index-lists");
-        let conn = state.conn();
-        cat_qry::insert(&conn, "Decks").unwrap();
-        documents_qry::insert_label(&conn, "Invoice").unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            cat_qry::insert(&conn, "Decks").unwrap();
+            documents_qry::insert_label(&conn, "Invoice").unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -395,32 +396,34 @@ mod tests {
         };
 
         let (state, dir) = test_support::test_app("settings-delete-category-in-use");
-        let conn = state.conn();
-        let cat_id = cat_qry::insert(&conn, "Decks").unwrap();
-        let donation_id = donors_qry::insert_donation(
-            &conn,
-            &PhysicalDonationDraft {
-                donor_id: None,
-                date_received: "2026-01-01".to_string(),
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        inv_qry::insert(
-            &conn,
-            &InventoryItemDraft {
-                name: "Deck".to_string(),
-                category_id: Some(cat_id),
-                source_type: SourceType::Donation,
-                source_donation_id: Some(donation_id),
-                source_purchase_id: None,
-                location: Location::Germany,
-                status: ItemStatus::Available,
-                notes: String::new(),
-            },
-        )
-        .unwrap();
-        drop(conn);
+        let cat_id = {
+            let conn = state.conn();
+            let cat_id = cat_qry::insert(&conn, "Decks").unwrap();
+            let donation_id = donors_qry::insert_donation(
+                &conn,
+                &PhysicalDonationDraft {
+                    donor_id: None,
+                    date_received: "2026-01-01".to_string(),
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+            inv_qry::insert(
+                &conn,
+                &InventoryItemDraft {
+                    name: "Deck".to_string(),
+                    category_id: Some(cat_id),
+                    source_type: SourceType::Donation,
+                    source_donation_id: Some(donation_id),
+                    source_purchase_id: None,
+                    location: Location::Germany,
+                    status: ItemStatus::Available,
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+            cat_id
+        };
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 

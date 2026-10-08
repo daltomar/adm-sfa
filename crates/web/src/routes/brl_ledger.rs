@@ -88,34 +88,35 @@ mod tests {
     #[tokio::test]
     async fn list_shows_the_oldest_entry_first() {
         let (state, dir) = test_support::test_app("brl-ledger-list-oldest-first");
-        let conn = state.conn();
-        purchases_qry::insert(
-            &conn,
-            &PurchaseDraft {
-                date: "2026-01-01".to_string(),
-                currency: Currency::Brl,
-                cost_str: "111.11".to_string(),
-                channel: "older".to_string(),
-                seller_info: String::new(),
-                multiple_items: false,
-                status: PurchaseStatus::Bought,
-            },
-        )
-        .unwrap();
-        purchases_qry::insert(
-            &conn,
-            &PurchaseDraft {
-                date: "2026-06-01".to_string(),
-                currency: Currency::Brl,
-                cost_str: "222.22".to_string(),
-                channel: "newer".to_string(),
-                seller_info: String::new(),
-                multiple_items: false,
-                status: PurchaseStatus::Bought,
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            purchases_qry::insert(
+                &conn,
+                &PurchaseDraft {
+                    date: "2026-01-01".to_string(),
+                    currency: Currency::Brl,
+                    cost_str: "111.11".to_string(),
+                    channel: "older".to_string(),
+                    seller_info: String::new(),
+                    multiple_items: false,
+                    status: PurchaseStatus::Bought,
+                },
+            )
+            .unwrap();
+            purchases_qry::insert(
+                &conn,
+                &PurchaseDraft {
+                    date: "2026-06-01".to_string(),
+                    currency: Currency::Brl,
+                    cost_str: "222.22".to_string(),
+                    channel: "newer".to_string(),
+                    seller_info: String::new(),
+                    multiple_items: false,
+                    status: PurchaseStatus::Bought,
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -148,22 +149,23 @@ mod tests {
     #[tokio::test]
     async fn list_formats_amounts_using_the_resolved_ui_locale() {
         let (state, dir) = test_support::test_app("brl-ledger-locale-amount-format");
-        let conn = state.conn();
-        settings_qry::set(&conn, "ui_locale", "de").unwrap();
-        purchases_qry::insert(
-            &conn,
-            &PurchaseDraft {
-                date: "2026-01-01".to_string(),
-                currency: Currency::Brl,
-                cost_str: "1234.56".to_string(),
-                channel: "TestChannel".to_string(),
-                seller_info: String::new(),
-                multiple_items: false,
-                status: PurchaseStatus::Bought,
-            },
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            settings_qry::set(&conn, "ui_locale", "de").unwrap();
+            purchases_qry::insert(
+                &conn,
+                &PurchaseDraft {
+                    date: "2026-01-01".to_string(),
+                    currency: Currency::Brl,
+                    cost_str: "1234.56".to_string(),
+                    channel: "TestChannel".to_string(),
+                    seller_info: String::new(),
+                    multiple_items: false,
+                    status: PurchaseStatus::Bought,
+                },
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
@@ -247,29 +249,30 @@ mod tests {
         use adm_sfa_core::model::outbound::{OutboundEventDraft, RecipientProjectDraft};
 
         let (state, dir) = test_support::test_app("brl-ledger-cash-gift-row");
-        let conn = state.conn();
-        let rp_id = outbound_qry::insert_recipient_project(
-            &conn,
-            &RecipientProjectDraft {
-                name: "Skate Project Rio".to_string(),
-                contact_info: String::new(),
-                location: String::new(),
-                active: true,
-            },
-        )
-        .unwrap();
-        adm_sfa_core::service::donate_items(
-            &conn,
-            &OutboundEventDraft {
-                date: "2026-01-01".to_string(),
-                recipient_project_id: Some(rp_id),
-                cash_amount_brl_str: "75.00".to_string(),
-                notes: String::new(),
-            },
-            &[],
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.conn();
+            let rp_id = outbound_qry::insert_recipient_project(
+                &conn,
+                &RecipientProjectDraft {
+                    name: "Skate Project Rio".to_string(),
+                    contact_info: String::new(),
+                    location: String::new(),
+                    active: true,
+                },
+            )
+            .unwrap();
+            adm_sfa_core::service::donate_items(
+                &conn,
+                &OutboundEventDraft {
+                    date: "2026-01-01".to_string(),
+                    recipient_project_id: Some(rp_id),
+                    cash_amount_brl_str: "75.00".to_string(),
+                    notes: String::new(),
+                },
+                &[],
+            )
+            .unwrap();
+        }
         let app = crate::build_app(state.clone());
         let cookie = test_support::login(&app).await;
 
