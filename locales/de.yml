@@ -158,6 +158,12 @@ eur_ledger.detail.transfer.created_by: "Automatisch vom Bereich %{section} erste
 eur_ledger.detail.transfer.open_button: "In Überweisungen öffnen"
 
 settings.heading: "Einstellungen"
+settings.org.heading: "Vereinsdaten"
+settings.org.hint: "Werden in den Jahresberichten (Aufstellung, Vermögen, Tätigkeitsbericht, Protokoll) verwendet."
+settings.org.field.name: "Vereinsname:"
+settings.org.field.address: "Adresse:"
+settings.org.field.tax_number: "Steuernummer:"
+settings.org.status.saved: "Gespeichert."
 settings.locale.heading: "Sprache"
 settings.locale.hint: "Änderungen wirken sofort — kein Neustart nötig."
 settings.locale.field.language: "Sprache:"

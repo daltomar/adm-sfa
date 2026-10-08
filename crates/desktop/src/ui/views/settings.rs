@@ -29,6 +29,11 @@ pub struct SettingsView {
     screenshot_error: Option<String>,
     screenshot_status: Option<Result<String, String>>,
 
+    org_name: String,
+    org_address: String,
+    org_tax_number: String,
+    org_status: Option<Result<String, String>>,
+
     locale_error: Option<String>,
 
     /// Shared success banner for category and document-label CRUD — the
@@ -55,6 +60,10 @@ impl Default for SettingsView {
             screenshot_command: String::new(),
             screenshot_error: None,
             screenshot_status: None,
+            org_name: String::new(),
+            org_address: String::new(),
+            org_tax_number: String::new(),
+            org_status: None,
             locale_error: None,
             save_status: None,
         }
@@ -73,18 +82,25 @@ impl SettingsView {
                 cat_qry::list(db),
                 docs_qry::list_labels(db),
                 settings_qry::get(db, "screenshot_command"),
+                settings_qry::get(db, "org_name"),
+                settings_qry::get(db, "org_address"),
+                settings_qry::get(db, "org_tax_number"),
             ) {
-                (Ok(cats), Ok(lbls), Ok(cmd)) => {
+                (Ok(cats), Ok(lbls), Ok(cmd), Ok(name), Ok(addr), Ok(tax)) => {
                     self.categories = cats;
                     self.labels = lbls;
                     self.screenshot_command = cmd.unwrap_or_default();
+                    self.org_name = name.unwrap_or_default();
+                    self.org_address = addr.unwrap_or_default();
+                    self.org_tax_number = tax.unwrap_or_default();
                     self.needs_reload = false;
                     self.cat_editing = None;
                     self.lbl_editing = None;
                 }
-                (Err(e), _, _) => self.cat_error = Some(e.to_string()),
-                (_, Err(e), _) => self.lbl_error = Some(e.to_string()),
-                (_, _, Err(e)) => self.screenshot_error = Some(e.to_string()),
+                (Err(e), _, _, _, _, _) => self.cat_error = Some(e.to_string()),
+                (_, Err(e), _, _, _, _) => self.lbl_error = Some(e.to_string()),
+                (_, _, Err(e), _, _, _) => self.screenshot_error = Some(e.to_string()),
+                _ => {} // org settings errors are non-fatal; fields stay empty
             }
         }
 
@@ -95,6 +111,10 @@ impl SettingsView {
         egui::ScrollArea::vertical()
             .id_salt("settings_scroll")
             .show(ui, |ui| {
+                self.show_org_panel(ui, db);
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
                 self.show_locale_panel(ui, db);
                 ui.add_space(16.0);
                 ui.separator();
@@ -122,6 +142,48 @@ impl SettingsView {
     /// "German") — the universal convention for language pickers, and not
     /// routed through `t!()` for the same reason donor/recipient names
     /// aren't: they're proper nouns, not UI chrome.
+    fn show_org_panel(&mut self, ui: &mut egui::Ui, db: &Connection) {
+        ui.label(egui::RichText::new(t!("settings.org.heading").as_ref()).strong());
+        ui.add_space(4.0);
+        ui.weak(t!("settings.org.hint").as_ref());
+        ui.add_space(6.0);
+
+        egui::Grid::new("org_fields")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(t!("settings.org.field.name").as_ref());
+                ui.add(egui::TextEdit::singleline(&mut self.org_name).desired_width(320.0));
+                ui.end_row();
+                ui.label(t!("settings.org.field.address").as_ref());
+                ui.add(egui::TextEdit::singleline(&mut self.org_address).desired_width(320.0));
+                ui.end_row();
+                ui.label(t!("settings.org.field.tax_number").as_ref());
+                ui.add(egui::TextEdit::singleline(&mut self.org_tax_number).desired_width(200.0));
+                ui.end_row();
+            });
+
+        ui.add_space(4.0);
+        if ui.button(t!("common.save").as_ref()).clicked() {
+            let result = (|| -> rusqlite::Result<()> {
+                settings_qry::set(db, "org_name", &self.org_name)?;
+                settings_qry::set(db, "org_address", &self.org_address)?;
+                settings_qry::set(db, "org_tax_number", &self.org_tax_number)?;
+                Ok(())
+            })();
+            self.org_status = Some(
+                result
+                    .map(|()| t!("settings.org.status.saved").into_owned())
+                    .map_err(|e| e.to_string()),
+            );
+        }
+
+        if let Some(status) = &self.org_status {
+            ui.add_space(4.0);
+            crate::ui::widgets::status_banner::show(ui, &Some(status.clone()));
+        }
+    }
+
     fn show_locale_panel(&mut self, ui: &mut egui::Ui, db: &Connection) {
         use adm_sfa_core::format::LOCALES;
 

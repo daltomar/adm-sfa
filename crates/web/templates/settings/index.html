@@ -12,7 +12,28 @@
 <div class="error">{{ msg }}</div>
 {% endif %}
 
-<h2>{{ "settings.locale.heading"|t(locale) }}</h2>
+<h2>{{ "settings.org.heading"|t(locale) }}</h2>
+<p class="hint">{{ "settings.org.hint"|t(locale) }}</p>
+<form method="post" action="/settings/org">
+  <p>
+    <label>{{ "settings.org.field.name"|t(locale) }}<br>
+      <input type="text" name="org_name" value="{{ org_name }}" style="width:400px">
+    </label>
+  </p>
+  <p>
+    <label>{{ "settings.org.field.address"|t(locale) }}<br>
+      <input type="text" name="org_address" value="{{ org_address }}" style="width:400px">
+    </label>
+  </p>
+  <p>
+    <label>{{ "settings.org.field.tax_number"|t(locale) }}<br>
+      <input type="text" name="org_tax_number" value="{{ org_tax_number }}" style="width:220px">
+    </label>
+  </p>
+  <button type="submit">{{ "common.save"|t(locale) }}</button>
+</form>
+
+<h2 style="margin-top: 2rem;">{{ "settings.locale.heading"|t(locale) }}</h2>
 <p class="hint">{{ "settings.locale.hint"|t(locale) }}</p>
 <form method="post" action="/settings/locale">
   <label>{{ "settings.locale.field.language"|t(locale) }}

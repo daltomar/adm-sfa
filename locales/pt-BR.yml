@@ -157,6 +157,12 @@ eur_ledger.detail.transfer.created_by: "Criado automaticamente pela seção %{se
 eur_ledger.detail.transfer.open_button: "Abrir em Transferências"
 
 settings.heading: "Configurações"
+settings.org.heading: "Dados da Associação"
+settings.org.hint: "Usado nos relatórios anuais (Jahresbericht)."
+settings.org.field.name: "Nome da associação:"
+settings.org.field.address: "Endereço:"
+settings.org.field.tax_number: "Número fiscal (Steuernummer):"
+settings.org.status.saved: "Salvo."
 settings.locale.heading: "Idioma"
 settings.locale.hint: "As alterações têm efeito imediato — não é necessário reiniciar."
 settings.locale.field.language: "Idioma:"

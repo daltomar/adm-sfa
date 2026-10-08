@@ -171,6 +171,12 @@ eur_ledger.detail.transfer.created_by: "Created automatically by the %{section} 
 eur_ledger.detail.transfer.open_button: "Open in Transfers"
 
 settings.heading: "Settings"
+settings.org.heading: "Organization"
+settings.org.hint: "Used in the annual statutory reports (Jahresbericht). Leave blank if not applicable."
+settings.org.field.name: "Organization name:"
+settings.org.field.address: "Address:"
+settings.org.field.tax_number: "Tax number (Steuernummer):"
+settings.org.status.saved: "Saved."
 settings.locale.heading: "Language"
 settings.locale.hint: "Changes take effect immediately — no restart needed."
 settings.locale.field.language: "Language:"
