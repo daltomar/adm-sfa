@@ -13,6 +13,7 @@ const SECTIONS: &[(Section, &str)] = &[
     (Section::Transfers, "sidebar.transfers"),
     (Section::Inventory, "sidebar.inventory"),
     (Section::Outbound, "sidebar.outbound"),
+    (Section::Jahresbericht, "sidebar.jahresbericht"),
     (Section::Reports, "sidebar.reports"),
     (Section::Settings, "sidebar.settings"),
 ];

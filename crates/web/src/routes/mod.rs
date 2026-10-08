@@ -3,6 +3,8 @@ pub mod dashboard;
 pub mod donors;
 pub mod eur_ledger;
 pub mod inventory;
+pub mod jahresbericht;
+pub(crate) mod jahresbericht_input;
 pub mod login;
 pub mod outbound;
 pub mod purchases;
