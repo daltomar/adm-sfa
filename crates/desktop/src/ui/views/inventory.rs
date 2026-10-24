@@ -69,6 +69,10 @@ pub struct InventoryView {
     path_input: Option<String>,
     capture_note: Option<String>,
     save_status: Option<Result<String, String>>,
+    /// How many identical items to create on Save (Adding mode only). Always
+    /// reset to 1 when leaving the Adding form so the next "Add item" starts
+    /// fresh.
+    quantity: u32,
 }
 
 impl Default for InventoryView {
@@ -97,6 +101,7 @@ impl Default for InventoryView {
             path_input: None,
             capture_note: None,
             save_status: None,
+            quantity: 1,
         }
     }
 }
@@ -228,6 +233,7 @@ impl InventoryView {
             self.mode = Mode::Adding;
             self.error = None;
             self.save_status = None;
+            self.quantity = 1;
             self.docs = Vec::new();
             self.discard_pending_doc();
             self.path_input = None;
@@ -409,6 +415,12 @@ impl InventoryView {
                         .desired_rows(3),
                 );
                 ui.end_row();
+
+                if is_adding {
+                    ui.label(t!("inventory.field.quantity").as_ref());
+                    ui.add(egui::DragValue::new(&mut self.quantity).range(1u32..=99u32));
+                    ui.end_row();
+                }
             });
 
         ui.add_space(8.0);
@@ -468,15 +480,24 @@ impl InventoryView {
                 if let Some(msg) = self.purchase_source_conflict(edit_id) {
                     self.error = Some(msg);
                 } else if is_adding {
-                    match qry::insert(db, &self.draft) {
-                        Ok(new_id) => {
+                    match service::create_items_batch(db, &self.draft, self.quantity) {
+                        Ok(ids) => {
                             self.persisted_status = Some(self.draft.status);
-                            self.mode = Mode::Editing(new_id);
+                            // `ids` is non-empty: `create_items_batch` returns
+                            // `Ok` only when quantity ≥ 1, so at least one id
+                            // was inserted. Land on the last created item for
+                            // immediate document attachment; when batch (qty > 1)
+                            // the user can navigate to the others from the list.
+                            self.mode = Mode::Editing(*ids.last().unwrap());
                             self.docs_needs_reload = true;
                             self.needs_reload = true;
                             self.error = None;
-                            self.save_status =
-                                Some(Ok(t!("common.status.save_success").into_owned()));
+                            self.quantity = 1;
+                            self.save_status = Some(Ok(if ids.len() == 1 {
+                                t!("common.status.save_success").into_owned()
+                            } else {
+                                t!("inventory.status.batch_created", count = ids.len()).into_owned()
+                            }));
                         }
                         Err(e) => self.error = Some(e.to_string()),
                     }
@@ -499,6 +520,7 @@ impl InventoryView {
                 self.mode = Mode::List;
                 self.error = None;
                 self.save_status = None;
+                self.quantity = 1;
                 self.discard_pending_doc();
                 self.path_input = None;
                 self.capture_note = None;
