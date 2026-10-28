@@ -8,13 +8,14 @@
 use std::path::Path;
 
 use rusqlite::{Connection, Result};
+use rust_i18n::t;
 
 use crate::db::queries::{
     documents as documents_qry, inventory as inventory_qry, outbound as outbound_qry,
     purchases as purchases_qry, transfers as transfers_qry,
 };
 use crate::docs_fs;
-use crate::model::inventory::InventoryItemDraft;
+use crate::model::inventory::{InventoryItemDraft, SourceType};
 use crate::model::outbound::OutboundEventDraft;
 use crate::model::purchase::{PurchaseDraft, PurchaseStatus};
 use crate::model::transfer::TransferDraft;
@@ -307,6 +308,49 @@ pub fn create_item_with_documents(
     let id = create_item(conn, draft)?;
     let attachments = attach_documents(conn, documents_dir, "", None, ("item", id), pending);
     Ok(CreatedItem { id, attachments })
+}
+
+/// Creates `quantity` identical inventory items from `draft` in a single
+/// atomic batch. Quantity must be ≥ 1; quantity = 1 delegates to
+/// `create_item` — the common path, with no transaction overhead. For
+/// quantity > 1, all inserts run inside a single `unchecked_transaction` so
+/// none survive if any fails.
+///
+/// Rejects quantity > 1 sourced from a purchase with `multiple_items = false`
+/// — only one inventory item may link to that purchase, so the batch would
+/// always fail on the second insert anyway; this pre-check surfaces a
+/// clearer error before any row is written.
+pub fn create_items_batch(
+    conn: &Connection,
+    draft: &InventoryItemDraft,
+    quantity: u32,
+) -> Result<Vec<i64>> {
+    if quantity == 1 {
+        return Ok(vec![create_item(conn, draft)?]);
+    }
+    if draft.source_type == SourceType::Purchase {
+        if let Some(pid) = draft.source_purchase_id {
+            let multiple: bool = conn.query_row(
+                "SELECT multiple_items FROM purchase WHERE id = ?1",
+                [pid],
+                |r| r.get(0),
+            )?;
+            if !multiple {
+                return Err(rusqlite::Error::ToSqlConversionFailure(
+                    t!("inventory.error.purchase_single_item_batch")
+                        .into_owned()
+                        .into(),
+                ));
+            }
+        }
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut ids = Vec::with_capacity(quantity as usize);
+    for _ in 0..quantity {
+        ids.push(inventory_qry::insert(&tx, draft)?);
+    }
+    tx.commit()?;
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -1140,5 +1184,109 @@ mod tests {
         assert_eq!(count, 0);
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn single_item_purchase(conn: &Connection) -> i64 {
+        purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "30.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap()
+    }
+
+    fn donation_item_draft(cat_id: i64, donation_id: i64) -> InventoryItemDraft {
+        use crate::model::inventory::{ItemStatus, Location, SourceType};
+        InventoryItemDraft {
+            name: "Deck".to_string(),
+            category_id: Some(cat_id),
+            source_type: SourceType::Donation,
+            source_donation_id: Some(donation_id),
+            source_purchase_id: None,
+            location: Location::Germany,
+            status: ItemStatus::Available,
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn create_items_batch_with_quantity_1_creates_one_item() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = item_purchase(&conn);
+        let ids = create_items_batch(&conn, &item_draft(cat_id, purchase_id), 1).unwrap();
+        assert_eq!(ids.len(), 1);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_item", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn create_items_batch_creates_n_rows_from_donation_source() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let donor_id = crate::db::queries::donors::insert(
+            &conn,
+            &crate::model::donor::DonorDraft {
+                name: "Tester".to_string(),
+                contact_info: String::new(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let donation_id = crate::db::queries::donors::insert_donation(
+            &conn,
+            &crate::model::donor::PhysicalDonationDraft {
+                donor_id: Some(donor_id),
+                date_received: "01.01.2026".to_string(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+        let ids = create_items_batch(&conn, &donation_item_draft(cat_id, donation_id), 3).unwrap();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            3
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_item", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn create_items_batch_creates_n_rows_from_multi_item_purchase() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = item_purchase(&conn); // multiple_items = true
+        let ids = create_items_batch(&conn, &item_draft(cat_id, purchase_id), 4).unwrap();
+        assert_eq!(ids.len(), 4);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_item", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn create_items_batch_rejects_quantity_gt_1_for_single_item_purchase() {
+        let conn = test_db();
+        let cat_id = crate::db::queries::categories::insert(&conn, "Decks").unwrap();
+        let purchase_id = single_item_purchase(&conn); // multiple_items = false
+        let result = create_items_batch(&conn, &item_draft(cat_id, purchase_id), 2);
+        assert!(result.is_err());
+        // No rows should have been written.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_item", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

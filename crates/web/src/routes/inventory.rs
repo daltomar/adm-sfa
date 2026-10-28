@@ -500,6 +500,7 @@ async fn create(
     let mut source_donation_id = String::new();
     let mut source_purchase_id = String::new();
     let mut notes = String::new();
+    let mut quantity: u32 = 1;
 
     let mut last_label: Option<String> = None;
     let mut pending: Vec<(PathBuf, String, String)> = Vec::new();
@@ -514,6 +515,15 @@ async fn create(
             "source_donation_id" => source_donation_id = field.text().await.unwrap_or_default(),
             "source_purchase_id" => source_purchase_id = field.text().await.unwrap_or_default(),
             "notes" => notes = field.text().await.unwrap_or_default(),
+            "quantity" => {
+                quantity = field
+                    .text()
+                    .await
+                    .ok()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(1)
+                    .clamp(1, 99);
+            }
             "doc_label" => {
                 last_label = field.text().await.ok();
             }
@@ -599,6 +609,32 @@ async fn create(
         .into_response();
     };
     let draft = draft_from_form(form, source_type);
+
+    // When quantity > 1, ignore any staged documents — they're attached
+    // per-item individually from the edit page after batch creation.
+    if quantity > 1 {
+        for (path, _, _) in &pending {
+            let _ = std::fs::remove_file(path);
+        }
+        return match service::create_items_batch(&conn, &draft, quantity) {
+            Err(e) => HtmlTemplate(form_template(
+                &conn,
+                None,
+                &draft,
+                Some(e.to_string()),
+                Vec::new(),
+                locale,
+                None,
+                Vec::new(),
+                None,
+            ))
+            .into_response(),
+            Ok(_ids) => {
+                let jar = flash::set_flash(jar, FlashKind::Success);
+                (jar, Redirect::to("/inventory")).into_response()
+            }
+        };
+    }
 
     let pending_docs: Vec<PendingDocument> = pending
         .iter()
@@ -1951,6 +1987,162 @@ mod tests {
             !body_text.contains("1,234.56"),
             "cost rendered in English format despite ui_locale=de: {body_text}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn multi_item_purchase(conn: &rusqlite::Connection) -> i64 {
+        purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "50.00".to_string(),
+                channel: "Kleinanzeigen".to_string(),
+                seller_info: String::new(),
+                multiple_items: true,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap()
+    }
+
+    fn single_item_purchase(conn: &rusqlite::Connection) -> i64 {
+        purchases_qry::insert(
+            conn,
+            &PurchaseDraft {
+                date: "2026-01-01".to_string(),
+                currency: Currency::Eur,
+                cost_str: "30.00".to_string(),
+                channel: "eBay".to_string(),
+                seller_info: String::new(),
+                multiple_items: false,
+                status: PurchaseStatus::Bought,
+            },
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_with_quantity_3_creates_three_rows_and_redirects_to_list() {
+        let (state, dir) = test_support::test_app("inventory-batch-qty3");
+        let cat_id = cat_qry::insert(&state.conn(), "Decks").unwrap();
+        let purchase_id = multi_item_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_str = cat_id.to_string();
+        let pur_str = purchase_id.to_string();
+        let req = test_support::multipart_request_with_parts(
+            "/inventory",
+            &cookie,
+            &[
+                test_support::MultipartPart::Text {
+                    name: "name",
+                    value: "Deck",
+                },
+                test_support::MultipartPart::Text {
+                    name: "category_id",
+                    value: &cat_str,
+                },
+                test_support::MultipartPart::Text {
+                    name: "location",
+                    value: "germany",
+                },
+                test_support::MultipartPart::Text {
+                    name: "status",
+                    value: "available",
+                },
+                test_support::MultipartPart::Text {
+                    name: "source_type",
+                    value: "purchase",
+                },
+                test_support::MultipartPart::Text {
+                    name: "source_purchase_id",
+                    value: &pur_str,
+                },
+                test_support::MultipartPart::Text {
+                    name: "notes",
+                    value: "",
+                },
+                test_support::MultipartPart::Text {
+                    name: "quantity",
+                    value: "3",
+                },
+            ],
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers().get("location").unwrap(), "/inventory");
+        let count: i64 = state
+            .conn()
+            .query_row("SELECT COUNT(*) FROM inventory_item", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn create_with_quantity_2_from_single_item_purchase_returns_error_and_inserts_nothing() {
+        let (state, dir) = test_support::test_app("inventory-batch-single-item-purchase");
+        let cat_id = cat_qry::insert(&state.conn(), "Decks").unwrap();
+        let purchase_id = single_item_purchase(&state.conn());
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let cat_str = cat_id.to_string();
+        let pur_str = purchase_id.to_string();
+        let req = test_support::multipart_request_with_parts(
+            "/inventory",
+            &cookie,
+            &[
+                test_support::MultipartPart::Text {
+                    name: "name",
+                    value: "Deck",
+                },
+                test_support::MultipartPart::Text {
+                    name: "category_id",
+                    value: &cat_str,
+                },
+                test_support::MultipartPart::Text {
+                    name: "location",
+                    value: "germany",
+                },
+                test_support::MultipartPart::Text {
+                    name: "status",
+                    value: "available",
+                },
+                test_support::MultipartPart::Text {
+                    name: "source_type",
+                    value: "purchase",
+                },
+                test_support::MultipartPart::Text {
+                    name: "source_purchase_id",
+                    value: &pur_str,
+                },
+                test_support::MultipartPart::Text {
+                    name: "notes",
+                    value: "",
+                },
+                test_support::MultipartPart::Text {
+                    name: "quantity",
+                    value: "2",
+                },
+            ],
+        );
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body_text = test_support::body_text(res).await;
+        assert!(
+            body_text.contains("only allows one item"),
+            "expected single-item-purchase error in response: {body_text}"
+        );
+        let count: i64 = state
+            .conn()
+            .query_row("SELECT COUNT(*) FROM inventory_item", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

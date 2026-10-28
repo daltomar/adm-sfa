@@ -100,6 +100,10 @@
 
   {% if id.is_none() %}
   <div class="field">
+    <label for="quantity">{{ "inventory.field.quantity"|t(locale) }}</label>
+    <input type="number" id="quantity" name="quantity" value="1" min="1" max="99" style="width:4rem">
+  </div>
+  <div class="field" id="docs_toggle_field">
     <label>{{ "web.inventory.docs.question"|t(locale) }}</label>
     <div class="radio-group">
       <label><input type="radio" name="docs_toggle" value="no" checked> {{ "common.no"|t(locale) }}</label>
@@ -138,9 +142,28 @@
   var yesRadio = document.querySelector('input[name="docs_toggle"][value="yes"]');
   var noRadio = document.querySelector('input[name="docs_toggle"][value="no"]');
   var section = document.getElementById('docs_section');
+  var docsToggleField = document.getElementById('docs_toggle_field');
+  var quantityInput = document.getElementById('quantity');
   var rowsContainer = document.getElementById('doc_rows');
   var addBtn = document.getElementById('doc_row_add');
   if (!yesRadio || !section || !rowsContainer || !addBtn) { return; }
+
+  // When quantity > 1, hide the entire documents section — documents are
+  // attached per-item individually from the edit page after batch creation.
+  function syncQuantity() {
+    var qty = parseInt(quantityInput ? quantityInput.value : '1', 10);
+    var hide = qty > 1;
+    if (docsToggleField) { docsToggleField.style.display = hide ? 'none' : ''; }
+    if (hide) {
+      section.style.display = 'none';
+      rowsContainer.querySelectorAll('.doc-row').forEach(function(row) {
+        setRowDisabled(row, true);
+      });
+    } else {
+      sync();
+    }
+  }
+  if (quantityInput) { quantityInput.addEventListener('input', syncQuantity); }
 
   function setRowDisabled(row, disabled) {
     var controls = row.querySelectorAll('select, input');
@@ -189,7 +212,7 @@
     }
   });
 
-  sync();
+  syncQuantity();
 })();
 </script>
 {% endif %}
