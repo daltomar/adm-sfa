@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Form;
 use axum::Router;
+use axum_extra::extract::cookie::{Cookie, SameSite};
 use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
@@ -18,7 +19,8 @@ use adm_sfa_core::format;
 use adm_sfa_core::model::category::Category;
 use adm_sfa_core::model::donor::PhysicalDonationDraft;
 use adm_sfa_core::model::inventory::{
-    InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
+    CategoryGroup, InventoryItemDraft, InventoryItemRow, ItemFilter, ItemStatus, Location,
+    NameGroup, SourceType,
 };
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
 use adm_sfa_core::service::{self, PendingDocument};
@@ -28,7 +30,8 @@ use crate::routes::safe_return_to;
 use crate::state::AppState;
 use crate::templates::{
     AttachResult, CategoryOption, DonationOption, DonationRow, DonationsTemplate, Flash,
-    HtmlTemplate, InventoryFormTemplate, InventoryListTemplate, InventoryRow, PurchaseOption,
+    HtmlTemplate, InventoryCategoryGroup, InventoryFilterLink, InventoryFormTemplate,
+    InventoryListTemplate, InventoryNameGroup, InventoryRow, PurchaseOption,
 };
 
 /// Distinguishes concurrent uploads landing on the same temp path — same
@@ -285,27 +288,132 @@ fn item_form_error_response(conn: &rusqlite::Connection, id: i64, error: String)
     item_form_response(conn, id, Some(error), Vec::new())
 }
 
-async fn list(State(state): State<AppState>, jar: SignedCookieJar) -> impl IntoResponse {
+#[derive(Deserialize)]
+struct ListQuery {
+    show: Option<String>,
+}
+
+/// Remembers the list filter across every way back to bare `/inventory` (the
+/// sidebar, Cancel, the post-save redirects), matching desktop, which keeps
+/// its filter for the session. Server-side rather than a client redirect so a
+/// flash banner on that same page load isn't consumed by a page nobody sees.
+/// A browser-session cookie: only a display preference, so it needs no expiry.
+const FILTER_COOKIE: &str = "adm_sfa_inventory_show";
+
+/// An explicit `?show=` wins (an unknown value means All), otherwise the
+/// remembered filter applies. Returns the jar with any new choice recorded.
+fn resolve_filter(jar: SignedCookieJar, show: Option<&str>) -> (SignedCookieJar, ItemFilter) {
+    match show {
+        Some(show) => {
+            let filter = ItemFilter::from_str(show).unwrap_or_default();
+            let cookie = Cookie::build((FILTER_COOKIE, filter.as_str()))
+                .http_only(true)
+                .same_site(SameSite::Strict)
+                .path("/")
+                .build();
+            (jar.add(cookie), filter)
+        }
+        None => {
+            let filter = jar
+                .get(FILTER_COOKIE)
+                .and_then(|c| ItemFilter::from_str(c.value()))
+                .unwrap_or_default();
+            (jar, filter)
+        }
+    }
+}
+
+/// "40 available · 8 donated" for a name group's summary line.
+fn status_breakdown(group: &NameGroup, locale: &str) -> String {
+    group
+        .status_counts()
+        .into_iter()
+        .map(|(status, count)| {
+            rust_i18n::t!(status.count_key(count), locale = locale, count = count).into_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn name_group_row(category_id: i64, group: NameGroup, locale: &str) -> InventoryNameGroup {
+    InventoryNameGroup {
+        key: format!("name:{category_id}:{}", group.name),
+        heading: rust_i18n::t!(
+            "inventory.group.name",
+            locale = locale,
+            name = group.name,
+            count = group.items.len()
+        )
+        .into_owned(),
+        breakdown: status_breakdown(&group, locale),
+        name: group.name,
+        items: group
+            .items
+            .into_iter()
+            .map(|i| InventoryRow {
+                id: i.id,
+                location_label: location_label(i.location, locale),
+                status_label: status_label(i.status, locale),
+                source_desc: i.source_desc,
+            })
+            .collect(),
+    }
+}
+
+fn category_group_row(group: CategoryGroup, locale: &str) -> InventoryCategoryGroup {
+    let category_id = group.category_id;
+    InventoryCategoryGroup {
+        key: format!("category:{category_id}"),
+        heading: rust_i18n::t!(
+            "inventory.group.category",
+            locale = locale,
+            name = group.category_name,
+            count = group.total
+        )
+        .into_owned(),
+        names: group
+            .names
+            .into_iter()
+            .map(|n| name_group_row(category_id, n, locale))
+            .collect(),
+    }
+}
+
+async fn list(
+    State(state): State<AppState>,
+    jar: SignedCookieJar,
+    Query(query): Query<ListQuery>,
+) -> impl IntoResponse {
     let conn = state.conn();
     let locale = crate::i18n::resolve_locale(&conn);
-    let items = qry::list(&conn).unwrap_or_default();
-    let rows = items
+    let (jar, filter) = resolve_filter(jar, query.show.as_deref());
+    let categories = service::inventory_groups(&conn, filter)
+        .unwrap_or_default()
         .into_iter()
-        .map(|i| InventoryRow {
-            id: i.id,
-            name: i.name,
-            category_name: i.category_name,
-            location_label: location_label(i.location, &locale),
-            status_label: status_label(i.status, &locale),
-            source_desc: i.source_desc,
+        .map(|g| category_group_row(g, &locale))
+        .collect();
+    let filters = ItemFilter::ALL
+        .into_iter()
+        .map(|f| InventoryFilterLink {
+            value: f.as_str(),
+            label: rust_i18n::t!(f.label_key(), locale = &locale).into_owned(),
+            active: f == filter,
         })
         .collect();
+    let empty_message = if filter == ItemFilter::All {
+        rust_i18n::t!("inventory.empty", locale = &locale)
+    } else {
+        rust_i18n::t!("inventory.empty_filter", locale = &locale)
+    }
+    .into_owned();
     let (jar, kind) = flash::take_flash(jar);
     let flash = flash::flash_for_template(kind, &locale);
     (
         jar,
         HtmlTemplate(InventoryListTemplate {
-            items: rows,
+            categories,
+            filters,
+            empty_message,
             flash,
             locale,
         }),
@@ -1265,6 +1373,262 @@ mod tests {
         let body_text = test_support::body_text(res).await;
         assert!(body_text.contains("has been donated"));
         assert!(body_text.contains("disabled"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Inserts `count` donation-sourced items, returning the category id.
+    fn insert_items(
+        conn: &rusqlite::Connection,
+        name: &str,
+        category: &str,
+        status: ItemStatus,
+        count: usize,
+    ) -> i64 {
+        let cat_id = match cat_qry::list(conn)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == category)
+        {
+            Some(c) => c.id,
+            None => cat_qry::insert(conn, category).unwrap(),
+        };
+        let donation_id = donors_qry::insert_donation(
+            conn,
+            &PhysicalDonationDraft {
+                date_received: "2026-01-15".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for _ in 0..count {
+            qry::insert(
+                conn,
+                &InventoryItemDraft {
+                    name: name.to_string(),
+                    category_id: Some(cat_id),
+                    source_type: SourceType::Donation,
+                    source_donation_id: Some(donation_id),
+                    source_purchase_id: None,
+                    location: Location::Germany,
+                    status,
+                    notes: String::new(),
+                },
+            )
+            .unwrap();
+        }
+        cat_id
+    }
+
+    async fn list_page(app: axum::Router, cookie: &str, uri: &str) -> String {
+        let req = Request::builder()
+            .uri(uri)
+            .header("cookie", cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        test_support::body_text(res).await
+    }
+
+    #[tokio::test]
+    async fn list_consolidates_identical_names_with_counts_and_a_breakdown() {
+        let (state, dir) = test_support::test_app("inventory-list-grouped");
+        insert_items(
+            &state.conn(),
+            "Wheels 52mm",
+            "testwheels",
+            ItemStatus::Available,
+            3,
+        );
+        insert_items(
+            &state.conn(),
+            "Wheels 52mm",
+            "testwheels",
+            ItemStatus::Reserved,
+            1,
+        );
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory").await;
+
+        assert!(body.contains("testwheels (4)"));
+        assert!(body.contains("Wheels 52mm × 4"));
+        assert!(body.contains("3 available · 1 reserved"));
+        // Grouped, so the name appears as one heading rather than once per item.
+        assert_eq!(body.matches("Wheels 52mm × 4").count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_links_a_single_item_name_straight_to_its_edit_form() {
+        let (state, dir) = test_support::test_app("inventory-list-single");
+        insert_items(
+            &state.conn(),
+            "Lone helmet",
+            "testhelmet",
+            ItemStatus::Available,
+            1,
+        );
+        let id = qry::list(&state.conn()).unwrap()[0].id;
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory").await;
+
+        assert!(body.contains(&format!("<a href=\"/inventory/{id}/edit\">Lone helmet</a>")));
+        assert!(!body.contains("Lone helmet × 1"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_filter_narrows_counts_and_drops_empty_groups() {
+        let (state, dir) = test_support::test_app("inventory-list-filter");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 3);
+        insert_items(
+            &state.conn(),
+            "Old helmet",
+            "testhelmet",
+            ItemStatus::Donated,
+            2,
+        );
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let not_donated = list_page(app.clone(), &cookie, "/inventory?show=not_donated").await;
+        assert!(not_donated.contains("Deck A × 2"));
+        assert!(!not_donated.contains("Old helmet"));
+
+        let donated = list_page(app, &cookie, "/inventory?show=donated").await;
+        assert!(donated.contains("Deck A × 3"));
+        assert!(donated.contains("Old helmet × 2"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_treats_an_unknown_filter_as_all() {
+        let (state, dir) = test_support::test_app("inventory-list-bad-filter");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 1);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory?show=nonsense").await;
+
+        assert!(body.contains("Deck A × 3"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_shows_the_filter_message_when_nothing_matches() {
+        let (state, dir) = test_support::test_app("inventory-list-empty-filter");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            1,
+        );
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory?show=donated").await;
+
+        assert!(body.contains("No items match this filter."));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_remembers_the_filter_on_a_bare_return_until_it_is_changed() {
+        let (state, dir) = test_support::test_app("inventory-list-remember-filter");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 3);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .uri("/inventory?show=donated")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+        let filter_cookie = res
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .find(|v| v.starts_with(super::FILTER_COOKIE))
+            .expect("choosing a filter should set its cookie")
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let both = format!("{cookie}; {filter_cookie}");
+
+        let bare = list_page(app.clone(), &both, "/inventory").await;
+        assert!(bare.contains("Deck A × 3"));
+
+        let all = list_page(app, &both, "/inventory?show=all").await;
+        assert!(all.contains("Deck A × 5"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_uses_correct_portuguese_plurals_in_the_breakdown() {
+        let (state, dir) = test_support::test_app("inventory-list-pt-br");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 1);
+        adm_sfa_core::db::queries::settings::set(&state.conn(), "ui_locale", "pt-BR").unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory").await;
+
+        assert!(body.contains("2 disponíveis · 1 doado"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_escapes_item_names() {
+        let (state, dir) = test_support::test_app("inventory-list-escaping");
+        insert_items(
+            &state.conn(),
+            "<script>x</script>",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory").await;
+
+        assert!(!body.contains("<script>x</script>"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
