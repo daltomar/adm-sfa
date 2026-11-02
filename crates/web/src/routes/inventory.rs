@@ -1162,10 +1162,14 @@ mod tests {
         purchases as purchases_qry,
     };
     use adm_sfa_core::model::donor::{DonorDraft, PhysicalDonationDraft};
-    use adm_sfa_core::model::inventory::{InventoryItemDraft, ItemStatus, Location, SourceType};
+    use adm_sfa_core::model::inventory::{
+        InventoryItemDraft, ItemFilter, ItemStatus, Location, SourceType,
+    };
     use adm_sfa_core::model::purchase::{Currency, PurchaseDraft, PurchaseStatus};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use axum_extra::extract::cookie::{Cookie, Key, SameSite};
+    use axum_extra::extract::SignedCookieJar;
 
     /// Sets up a donated item directly through `core` (not through the web
     /// form) — this is regression coverage for the donated-item field-lock
@@ -1551,6 +1555,187 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The `name=value` part of the response's filter `Set-Cookie`, if any.
+    fn filter_set_cookie(res: &axum::response::Response) -> Option<String> {
+        res.headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .find(|v| v.starts_with(super::FILTER_COOKIE))
+            .map(|v| v.split(';').next().unwrap().to_string())
+    }
+
+    /// Renders a jar's pending cookie the way a browser would send it back,
+    /// signed with the app's real key.
+    fn request_cookie_from(jar: SignedCookieJar) -> String {
+        use axum::response::IntoResponse;
+        let res = (jar, StatusCode::OK).into_response();
+        res.headers()
+            .get("set-cookie")
+            .expect("the jar should hold a pending cookie")
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    /// A correctly signed filter cookie holding `value`.
+    fn signed_filter_cookie(state: &crate::state::AppState, value: &str) -> String {
+        let jar = SignedCookieJar::new(state.cookie_key.clone());
+        request_cookie_from(jar.add(Cookie::new(super::FILTER_COOKIE, value.to_string())))
+    }
+
+    #[test]
+    fn choosing_a_filter_sets_a_cookie_with_the_expected_security_attributes() {
+        let jar = SignedCookieJar::new(Key::generate());
+        let (jar, filter) = super::resolve_filter(jar, Some("donated"));
+        let cookie = jar
+            .get(super::FILTER_COOKIE)
+            .expect("resolve_filter should have added the filter cookie");
+
+        assert_eq!(filter, ItemFilter::DonatedOnly);
+        assert_eq!(cookie.http_only(), Some(true));
+        assert_eq!(cookie.same_site(), Some(SameSite::Strict));
+        assert_eq!(cookie.path(), Some("/"));
+        assert_eq!(cookie.max_age(), None);
+        assert_eq!(cookie.value(), "donated");
+    }
+
+    /// The reason the filter lives in a cookie rather than a client-side
+    /// redirect: the page a save lands on must show its banner and the
+    /// remembered filter together, consuming only the flash.
+    #[tokio::test]
+    async fn list_shows_a_flash_banner_and_the_remembered_filter_on_the_same_load() {
+        let (state, dir) = test_support::test_app("inventory-list-flash-and-filter");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 3);
+        let flash_cookie = request_cookie_from(crate::flash::set_flash(
+            SignedCookieJar::new(state.cookie_key.clone()),
+            crate::flash::FlashKind::Success,
+        ));
+        let filter_cookie = signed_filter_cookie(&state, "donated");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .uri("/inventory")
+            .header(
+                "cookie",
+                format!("{cookie}; {flash_cookie}; {filter_cookie}"),
+            )
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(filter_set_cookie(&res), None);
+        let flash_cleared = res
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .any(|v| v.starts_with("adm_sfa_flash=") && v.contains("Max-Age=0"));
+        assert!(flash_cleared);
+        let body = test_support::body_text(res).await;
+        assert!(body.contains("<div class=\"flash-success\">"));
+        assert!(body.contains("Deck A × 3"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_bare_list_request_sets_no_filter_cookie() {
+        let (state, dir) = test_support::test_app("inventory-list-bare-no-cookie");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .uri("/inventory")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app, req).await;
+
+        assert_eq!(filter_set_cookie(&res), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_unknown_show_value_overwrites_the_remembered_filter_with_all() {
+        let (state, dir) = test_support::test_app("inventory-list-unknown-overwrites");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 3);
+        let remembered = signed_filter_cookie(&state, "donated");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let req = Request::builder()
+            .uri("/inventory?show=nonsense")
+            .header("cookie", format!("{cookie}; {remembered}"))
+            .body(Body::empty())
+            .unwrap();
+        let res = test_support::send(app.clone(), req).await;
+        let replaced = filter_set_cookie(&res).expect("?show= should always record a filter");
+
+        let body = list_page(app, &format!("{cookie}; {replaced}"), "/inventory").await;
+        assert!(body.contains("Deck A × 5"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_filter_cookie_with_a_bad_signature_falls_back_to_all() {
+        let (state, dir) = test_support::test_app("inventory-list-forged-filter");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 3);
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+        let forged = format!("{}=donated", super::FILTER_COOKIE);
+
+        let body = list_page(app, &format!("{cookie}; {forged}"), "/inventory").await;
+
+        assert!(body.contains("Deck A × 5"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_validly_signed_unknown_filter_cookie_falls_back_to_all() {
+        let (state, dir) = test_support::test_app("inventory-list-unknown-filter-cookie");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            2,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 3);
+        let unknown = signed_filter_cookie(&state, "nonsense");
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &format!("{cookie}; {unknown}"), "/inventory").await;
+
+        assert!(body.contains("Deck A × 5"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn list_remembers_the_filter_on_a_bare_return_until_it_is_changed() {
         let (state, dir) = test_support::test_app("inventory-list-remember-filter");
@@ -1571,17 +1756,8 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let res = test_support::send(app.clone(), req).await;
-        let filter_cookie = res
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .map(|v| v.to_str().unwrap())
-            .find(|v| v.starts_with(super::FILTER_COOKIE))
-            .expect("choosing a filter should set its cookie")
-            .split(';')
-            .next()
-            .unwrap()
-            .to_string();
+        let filter_cookie =
+            filter_set_cookie(&res).expect("choosing a filter should set its cookie");
         let both = format!("{cookie}; {filter_cookie}");
 
         let bare = list_page(app.clone(), &both, "/inventory").await;

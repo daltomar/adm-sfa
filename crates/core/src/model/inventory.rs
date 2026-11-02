@@ -426,6 +426,50 @@ mod tests {
     }
 
     #[test]
+    fn names_that_sort_equally_order_by_exact_spelling() {
+        let groups = group_items(
+            vec![
+                row(1, "Straße", 1, "other", ItemStatus::Available),
+                row(2, "Strasse", 1, "other", ItemStatus::Available),
+            ],
+            ItemFilter::All,
+        );
+        let names: Vec<&str> = groups[0].names.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["Strasse", "Straße"]);
+    }
+
+    /// A mistyped key in `count_key` would compile and only show up at
+    /// runtime, so this resolves every key in every locale.
+    #[test]
+    fn every_status_count_key_resolves_in_every_locale() {
+        use ItemStatus::{Available, Donated, Reserved};
+        let cases = [
+            ("en", Available, 1, "1 available"),
+            ("en", Available, 2, "2 available"),
+            ("en", Reserved, 1, "1 reserved"),
+            ("en", Reserved, 2, "2 reserved"),
+            ("en", Donated, 1, "1 donated"),
+            ("en", Donated, 2, "2 donated"),
+            ("de", Available, 1, "1 verfügbar"),
+            ("de", Available, 2, "2 verfügbar"),
+            ("de", Reserved, 1, "1 reserviert"),
+            ("de", Reserved, 2, "2 reserviert"),
+            ("de", Donated, 1, "1 gespendet"),
+            ("de", Donated, 2, "2 gespendet"),
+            ("pt-BR", Available, 1, "1 disponível"),
+            ("pt-BR", Available, 2, "2 disponíveis"),
+            ("pt-BR", Reserved, 1, "1 reservado"),
+            ("pt-BR", Reserved, 2, "2 reservados"),
+            ("pt-BR", Donated, 1, "1 doado"),
+            ("pt-BR", Donated, 2, "2 doados"),
+        ];
+        for (locale, status, count, expected) in cases {
+            let text = rust_i18n::t!(status.count_key(count), locale = locale, count = count);
+            assert_eq!(text, expected, "{locale} {status:?} × {count}");
+        }
+    }
+
+    #[test]
     fn status_counts_omit_statuses_with_no_items() {
         let groups = group_items(
             vec![
