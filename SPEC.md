@@ -138,6 +138,13 @@ Every physical item, whether donated directly or purchased.
 | documents | Document[] | Photos — see Section 4 |
 | notes | text | Optional |
 
+**List presentation.** Storage stays one row per physical item, because status, location, source, documents, and outbound links are all tracked per unit. Quantity is never stored as a field. The Inventory list consolidates these rows for display only, on both front-ends:
+
+- **Grouping:** items are grouped by category, then by exact stored name, as a collapsible tree. Each category shows its item count; each name shows its count and a breakdown by status (e.g. "40 available · 8 donated"). Names that differ in any way, including case, stay separate, and the same name in two categories appears once under each.
+- **Individual items:** expanding a name lists its items with id, location, status, and source. Each one still opens its own edit form. A name with a single item links straight to that item.
+- **Order:** categories and names are alphabetical (ignoring case and accents), and items within a name are newest first.
+- **Filter:** All (default), Not donated, or Donated only. Counts reflect the active filter, and empty groups are not shown. The chosen filter is kept for the session on both front-ends.
+
 ### 3.8a Category
 
 A reusable entity per §2 ("item categories are first-class, reusable entities"), not a fixed enum — new categories can be added without a schema change, matching the treatment of donors and recipient projects.

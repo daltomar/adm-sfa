@@ -15,7 +15,9 @@ use crate::db::queries::{
     purchases as purchases_qry, transfers as transfers_qry,
 };
 use crate::docs_fs;
-use crate::model::inventory::{InventoryItemDraft, SourceType};
+use crate::model::inventory::{
+    group_items, CategoryGroup, InventoryItemDraft, ItemFilter, SourceType,
+};
 use crate::model::outbound::OutboundEventDraft;
 use crate::model::purchase::{PurchaseDraft, PurchaseStatus};
 use crate::model::transfer::TransferDraft;
@@ -272,6 +274,12 @@ pub fn create_transfer_with_documents(
         pending,
     );
     Ok(CreatedTransfer { id, attachments })
+}
+
+/// The consolidated Inventory list (SPEC.md §3.8): every item matching
+/// `filter`, grouped by category and then exact name.
+pub fn inventory_groups(conn: &Connection, filter: ItemFilter) -> Result<Vec<CategoryGroup>> {
+    Ok(group_items(inventory_qry::list(conn)?, filter))
 }
 
 pub fn create_item(conn: &Connection, draft: &InventoryItemDraft) -> Result<i64> {

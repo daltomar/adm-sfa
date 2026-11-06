@@ -60,6 +60,12 @@ Items confirmed open. See `archive.md` for the full resolved-backlog history.
   vanilla-JS dd/mm/yyyy widget (touches all seven date-input templates). Owner
   asked to shelve for now.
 
+- **Outbound item picker is still one checkbox per item** — the same long-list
+  problem the Inventory list's consolidation (`SPEC.md §3.8`) solved, so 48
+  identical units mean 48 checkboxes on both front-ends. Agreed as a follow-up.
+  Not yet decided: collapsible groups with "select all", or a "take N of 48"
+  quantity (items in a group can differ in source, so which N matters).
+
 - **Drag-and-drop document attach (desktop) — undiagnosed.** May not work on
   the target OS/desktop environment. Code is untouched by the restructure
   (phases 1–4 never touched `dropped_files`/`hovered_files` handling), so if

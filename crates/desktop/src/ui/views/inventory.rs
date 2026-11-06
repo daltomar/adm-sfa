@@ -13,7 +13,8 @@ use adm_sfa_core::model::category::Category;
 use adm_sfa_core::model::document::Document;
 use adm_sfa_core::model::donor::{DonorDraft, PhysicalDonation, PhysicalDonationDraft};
 use adm_sfa_core::model::inventory::{
-    InventoryItemDraft, InventoryItemRow, ItemStatus, Location, SourceType,
+    group_items, CategoryGroup, InventoryItemDraft, InventoryItemRow, ItemFilter, ItemStatus,
+    Location, NameGroup, SourceType,
 };
 use adm_sfa_core::model::purchase::{Purchase, PurchaseStatus};
 use adm_sfa_core::service;
@@ -36,6 +37,14 @@ struct PendingAttachment {
 
 pub struct InventoryView {
     items: Vec<InventoryItemRow>,
+    /// `items` consolidated for the list panel — rebuilt on reload and on
+    /// filter change rather than every frame.
+    groups: Vec<CategoryGroup>,
+    filter: ItemFilter,
+    /// Forces the list open along the path to the item being edited, for one
+    /// frame after a save (the item may have just been created or moved to
+    /// another group, whose header egui remembers as closed).
+    reveal_selected: bool,
     mode: Mode,
     draft: InventoryItemDraft,
     /// The status as currently persisted for the item being edited — used
@@ -79,6 +88,9 @@ impl Default for InventoryView {
     fn default() -> Self {
         Self {
             items: Vec::new(),
+            groups: Vec::new(),
+            filter: ItemFilter::default(),
+            reveal_selected: false,
             mode: Mode::List,
             draft: InventoryItemDraft::default(),
             persisted_status: None,
@@ -106,6 +118,78 @@ impl Default for InventoryView {
     }
 }
 
+fn name_group_holds(group: &NameGroup, id: Option<i64>) -> bool {
+    id.is_some_and(|id| group.items.iter().any(|i| i.id == id))
+}
+
+/// "Wheels 52mm × 48: 40 available · 8 donated" for a collapsed name group.
+fn name_group_heading(group: &NameGroup) -> String {
+    let breakdown = group
+        .status_counts()
+        .into_iter()
+        .map(|(status, count)| t!(status.count_key(count), count = count).into_owned())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    t!(
+        "inventory.group.name_with_breakdown",
+        name = group.name,
+        count = group.items.len(),
+        breakdown = breakdown
+    )
+    .into_owned()
+}
+
+/// One name within a category: a direct row for a single item, otherwise a
+/// collapsible group of its items.
+fn show_name_group(
+    ui: &mut egui::Ui,
+    category_id: i64,
+    group: &NameGroup,
+    selected_id: Option<i64>,
+    reveal: bool,
+    clicked: &mut Option<i64>,
+) {
+    if let [item] = group.items.as_slice() {
+        let row = t!(
+            "inventory.single_row",
+            name = item.name,
+            id = item.id,
+            location = item.location.label(),
+            status = item.status.label(),
+            source = item.source_desc
+        );
+        if ui
+            .selectable_label(selected_id == Some(item.id), row.as_ref())
+            .clicked()
+        {
+            *clicked = Some(item.id);
+        }
+        return;
+    }
+    let holds_selected = name_group_holds(group, selected_id);
+    egui::CollapsingHeader::new(name_group_heading(group))
+        .id_salt(("inventory_name", category_id, &group.name))
+        .default_open(holds_selected)
+        .open((reveal && holds_selected).then_some(true))
+        .show(ui, |ui| {
+            for item in &group.items {
+                let row = t!(
+                    "inventory.member_row",
+                    id = item.id,
+                    location = item.location.label(),
+                    status = item.status.label(),
+                    source = item.source_desc
+                );
+                if ui
+                    .selectable_label(selected_id == Some(item.id), row.as_ref())
+                    .clicked()
+                {
+                    *clicked = Some(item.id);
+                }
+            }
+        });
+}
+
 impl InventoryView {
     /// Clears any in-progress attachment, deleting the source file first if
     /// it was a screenshot capture (a temp file this app made) rather than
@@ -117,6 +201,10 @@ impl InventoryView {
                 let _ = std::fs::remove_file(&p.path);
             }
         }
+    }
+
+    fn rebuild_groups(&mut self) {
+        self.groups = group_items(self.items.clone(), self.filter);
     }
 
     pub fn invalidate(&mut self) {
@@ -133,6 +221,7 @@ impl InventoryView {
             match qry::list(db) {
                 Ok(list) => {
                     self.items = list;
+                    self.rebuild_groups();
                     self.needs_reload = false;
                 }
                 Err(e) => self.error = Some(e.to_string()),
@@ -252,51 +341,97 @@ impl InventoryView {
             ui.separator();
         }
 
+        let mut filter = self.filter;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(t!("inventory.filter.label").as_ref());
+            for f in ItemFilter::ALL {
+                ui.selectable_value(&mut filter, f, t!(f.label_key()).as_ref());
+            }
+        });
+        if filter != self.filter {
+            self.filter = filter;
+            self.rebuild_groups();
+            // The selected item may be back in view under the new filter, in
+            // a group egui remembers as closed.
+            self.reveal_selected = true;
+        }
+        ui.separator();
+
+        let selected_id = match self.mode {
+            Mode::Editing(id) => Some(id),
+            _ => None,
+        };
+        let reveal = std::mem::take(&mut self.reveal_selected);
+        let mut clicked = None;
         egui::ScrollArea::vertical()
             .id_salt("inventory_list_scroll")
             .show(ui, |ui| {
-                if self.items.is_empty() {
-                    ui.weak(t!("inventory.empty").as_ref());
+                if self.groups.is_empty() {
+                    let empty = if self.filter == ItemFilter::All {
+                        t!("inventory.empty")
+                    } else {
+                        t!("inventory.empty_filter")
+                    };
+                    ui.weak(empty.as_ref());
                     return;
                 }
-                for i in 0..self.items.len() {
-                    let item = &self.items[i];
-                    let id = item.id;
-                    let row = t!(
-                        "inventory.row",
-                        name = item.name,
-                        category = item.category_name,
-                        location = item.location.label(),
-                        status = item.status.label(),
-                        source = item.source_desc
-                    )
-                    .into_owned();
-                    let selected = matches!(self.mode, Mode::Editing(eid) if eid == id);
-                    if ui.selectable_label(selected, &row).clicked() {
-                        let item = &self.items[i];
-                        self.draft = InventoryItemDraft {
-                            name: item.name.clone(),
-                            category_id: Some(item.category_id),
-                            source_type: item.source_type,
-                            source_donation_id: item.source_donation_id,
-                            source_purchase_id: item.source_purchase_id,
-                            location: item.location,
-                            status: item.status,
-                            notes: item.notes.clone().unwrap_or_default(),
-                        };
-                        self.persisted_status = Some(item.status);
-                        self.mode = Mode::Editing(id);
-                        self.error = None;
-                        self.save_status = None;
-                        self.docs_needs_reload = true;
-                        self.discard_pending_doc();
-                        self.path_input = None;
-                        self.capture_note = None;
-                        self.new_donation = None;
-                        self.new_donor = None;
-                    }
+                for category in &self.groups {
+                    let holds_selected = category
+                        .names
+                        .iter()
+                        .any(|n| name_group_holds(n, selected_id));
+                    let heading = t!(
+                        "inventory.group.category",
+                        name = category.category_name,
+                        count = category.total
+                    );
+                    egui::CollapsingHeader::new(heading.as_ref())
+                        .id_salt(("inventory_category", category.category_id))
+                        .default_open(holds_selected)
+                        .open((reveal && holds_selected).then_some(true))
+                        .show(ui, |ui| {
+                            for group in &category.names {
+                                show_name_group(
+                                    ui,
+                                    category.category_id,
+                                    group,
+                                    selected_id,
+                                    reveal,
+                                    &mut clicked,
+                                );
+                            }
+                        });
                 }
             });
+        if let Some(id) = clicked {
+            self.select_item(id);
+        }
+    }
+
+    fn select_item(&mut self, id: i64) {
+        let Some(item) = self.items.iter().find(|i| i.id == id) else {
+            return;
+        };
+        self.draft = InventoryItemDraft {
+            name: item.name.clone(),
+            category_id: Some(item.category_id),
+            source_type: item.source_type,
+            source_donation_id: item.source_donation_id,
+            source_purchase_id: item.source_purchase_id,
+            location: item.location,
+            status: item.status,
+            notes: item.notes.clone().unwrap_or_default(),
+        };
+        self.persisted_status = Some(item.status);
+        self.mode = Mode::Editing(id);
+        self.error = None;
+        self.save_status = None;
+        self.docs_needs_reload = true;
+        self.discard_pending_doc();
+        self.path_input = None;
+        self.capture_note = None;
+        self.new_donation = None;
+        self.new_donor = None;
     }
 
     fn show_form(&mut self, ui: &mut egui::Ui, db: &Connection) {
@@ -491,6 +626,7 @@ impl InventoryView {
                             self.mode = Mode::Editing(*ids.last().unwrap());
                             self.docs_needs_reload = true;
                             self.needs_reload = true;
+                            self.reveal_selected = true;
                             self.error = None;
                             self.quantity = 1;
                             self.save_status = Some(Ok(if ids.len() == 1 {
@@ -506,6 +642,7 @@ impl InventoryView {
                         Ok(()) => {
                             self.persisted_status = Some(self.draft.status);
                             self.needs_reload = true;
+                            self.reveal_selected = true;
                             self.error = None;
                             self.save_status =
                                 Some(Ok(t!("common.status.save_success").into_owned()));
