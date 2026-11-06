@@ -7,24 +7,70 @@
 {% block content %}
 <h1>{{ "sidebar.inventory"|t(locale) }}</h1>
 <p><a class="button" href="/inventory/new">{{ "inventory.button.add"|t(locale) }}</a></p>
-<div class="table-scroll">
-<table>
-<thead>
-<tr><th>{{ "common.col.name"|t(locale) }}</th><th>{{ "common.col.category"|t(locale) }}</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "common.field.source"|t(locale) }}</th></tr>
-</thead>
-<tbody>
-{% for i in items %}
-<tr>
-  <td><a href="/inventory/{{ i.id }}/edit">{{ i.name }}</a></td>
-  <td>{{ i.category_name }}</td>
-  <td>{{ i.location_label }}</td>
-  <td>{{ i.status_label }}</td>
-  <td>{{ i.source_desc }}</td>
-</tr>
+<p class="inventory-filter">
+  <span>{{ "inventory.filter.label"|t(locale) }}:</span>
+  {% for f in filters %}
+  <a href="/inventory?show={{ f.value }}"{% if f.active %} aria-current="page"{% endif %}>{{ f.label }}</a>
+  {% endfor %}
+</p>
+{% for c in categories %}
+<details class="inventory-category" data-key="{{ c.key }}">
+  <summary>{{ c.heading }}</summary>
+  {% for n in c.names %}
+  {% if n.items.len() == 1 %}
+  <div class="inventory-name">
+    {% for i in n.items %}
+    <a href="/inventory/{{ i.id }}/edit">{{ n.name }}</a>
+    <span class="hint">#{{ i.id }} · {{ i.location_label }} · {{ i.status_label }} · {{ i.source_desc }}</span>
+    {% endfor %}
+  </div>
+  {% else %}
+  <details class="inventory-name" data-key="{{ n.key }}">
+    <summary>{{ n.heading }} <span class="hint">{{ n.breakdown }}</span></summary>
+    <div class="table-scroll">
+    <table>
+    <thead>
+    <tr><th>#</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "common.field.source"|t(locale) }}</th></tr>
+    </thead>
+    <tbody>
+    {% for i in n.items %}
+    <tr>
+      <td><a href="/inventory/{{ i.id }}/edit">#{{ i.id }}</a></td>
+      <td>{{ i.location_label }}</td>
+      <td>{{ i.status_label }}</td>
+      <td>{{ i.source_desc }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    </table>
+    </div>
+  </details>
+  {% endif %}
+  {% endfor %}
+</details>
 {% else %}
-<tr><td colspan="5">{{ "inventory.empty"|t(locale) }}</td></tr>
+<p>{{ empty_message }}</p>
 {% endfor %}
-</tbody>
-</table>
-</div>
+<script>
+(function() {
+  // Keep expanded groups expanded across the edit-and-save round trip, which
+  // would otherwise land back on a fully collapsed list. Purely a convenience:
+  // the page works the same if storage is unavailable.
+  var KEY = 'inventory-open-groups';
+  var open = [];
+  try {
+    var stored = JSON.parse(sessionStorage.getItem(KEY));
+    if (Array.isArray(stored)) { open = stored; }
+  } catch (e) {}
+  document.querySelectorAll('details[data-key]').forEach(function(d) {
+    if (open.indexOf(d.dataset.key) !== -1) { d.open = true; }
+    d.addEventListener('toggle', function() {
+      var at = open.indexOf(d.dataset.key);
+      if (d.open && at === -1) { open.push(d.dataset.key); }
+      if (!d.open && at !== -1) { open.splice(at, 1); }
+      try { sessionStorage.setItem(KEY, JSON.stringify(open)); } catch (e) {}
+    });
+  });
+})();
+</script>
 {% endblock %}

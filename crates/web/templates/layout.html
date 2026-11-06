@@ -21,6 +21,13 @@
   table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
   .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .table-scroll table { margin-top: 0; }
+  .inventory-filter { margin: 1rem 0; display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .inventory-filter a[aria-current] { font-weight: 600; text-decoration: none; color: inherit; }
+  .inventory-category { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
+  .inventory-category > summary { font-weight: 600; cursor: pointer; padding: 0.25rem 0; }
+  .inventory-name { margin-left: 1.1rem; padding: 0.35rem 0; }
+  .inventory-name > summary { cursor: pointer; }
+  .inventory-name .hint { display: inline; margin-left: 0.4rem; }
   th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; }
   th { background: #f4f4f4; }
   form.inline { display: inline; }

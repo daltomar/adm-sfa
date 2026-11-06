@@ -282,17 +282,40 @@ pub struct TransferFormTemplate {
 
 pub struct InventoryRow {
     pub id: i64,
-    pub name: String,
-    pub category_name: String,
     pub location_label: String,
     pub status_label: String,
     pub source_desc: String,
 }
 
+/// One exact name within a category. `items` has more than one entry when
+/// the template should render a collapsible group, and exactly one when it
+/// should link straight to that item.
+pub struct InventoryNameGroup {
+    pub key: String,
+    pub name: String,
+    pub heading: String,
+    pub breakdown: String,
+    pub items: Vec<InventoryRow>,
+}
+
+pub struct InventoryCategoryGroup {
+    pub key: String,
+    pub heading: String,
+    pub names: Vec<InventoryNameGroup>,
+}
+
+pub struct InventoryFilterLink {
+    pub value: &'static str,
+    pub label: String,
+    pub active: bool,
+}
+
 #[derive(Template)]
 #[template(path = "inventory/list.html")]
 pub struct InventoryListTemplate {
-    pub items: Vec<InventoryRow>,
+    pub categories: Vec<InventoryCategoryGroup>,
+    pub filters: Vec<InventoryFilterLink>,
+    pub empty_message: String,
     pub flash: Option<Flash>,
     pub locale: String,
 }
