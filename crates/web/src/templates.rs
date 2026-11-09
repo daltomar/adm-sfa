@@ -293,14 +293,17 @@ pub struct InventoryRow {
 pub struct InventoryNameGroup {
     pub key: String,
     pub name: String,
-    pub heading: String,
-    pub breakdown: String,
+    /// The number the count column aligns on — the first status's count.
+    pub lead_count: String,
+    /// The status breakdown after `lead_count`: "available · 8 donated".
+    pub status_text: String,
     pub items: Vec<InventoryRow>,
 }
 
 pub struct InventoryCategoryGroup {
     pub key: String,
-    pub heading: String,
+    pub name: String,
+    pub total: usize,
     pub names: Vec<InventoryNameGroup>,
 }
 

@@ -15,22 +15,22 @@
 </p>
 {% for c in categories %}
 <details class="inventory-category" data-key="{{ c.key }}">
-  <summary>{{ c.heading }}</summary>
+  <summary class="inventory-row"><span class="inventory-row-name">{{ c.name }}</span><span class="inventory-row-count">{{ c.total }}</span></summary>
   {% for n in c.names %}
   {% if n.items.len() == 1 %}
-  <div class="inventory-name">
+  <div class="inventory-name inventory-row">
     {% for i in n.items %}
-    <a href="/inventory/{{ i.id }}/edit">{{ n.name }}</a>
-    <span class="hint">#{{ i.id }} · {{ i.location_label }} · {{ i.status_label }} · {{ i.source_desc }}</span>
+    <span class="inventory-row-name"><a href="/inventory/{{ i.id }}/edit">{{ n.name }}</a></span><span class="inventory-row-count">{{ n.lead_count }}</span>
+    <span class="hint">{{ n.status_text }} · #{{ i.id }} · {{ i.location_label }} · {{ i.source_desc }}</span>
     {% endfor %}
   </div>
   {% else %}
   <details class="inventory-name" data-key="{{ n.key }}">
-    <summary>{{ n.heading }} <span class="hint">{{ n.breakdown }}</span></summary>
+    <summary class="inventory-row"><span class="inventory-row-name">{{ n.name }}</span><span class="inventory-row-count">{{ n.lead_count }}</span><span class="hint">{{ n.status_text }}</span></summary>
     <div class="table-scroll">
     <table>
     <thead>
-    <tr><th>#</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "common.field.source"|t(locale) }}</th></tr>
+    <tr><th>{{ "inventory.col.item_number"|t(locale) }}</th><th>{{ "common.field.location"|t(locale) }}</th><th>{{ "common.field.status"|t(locale) }}</th><th>{{ "common.field.source"|t(locale) }}</th></tr>
     </thead>
     <tbody>
     {% for i in n.items %}
