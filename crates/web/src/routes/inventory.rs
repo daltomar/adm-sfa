@@ -323,29 +323,37 @@ fn resolve_filter(jar: SignedCookieJar, show: Option<&str>) -> (SignedCookieJar,
     }
 }
 
-/// "40 available · 8 donated" for a name group's summary line.
-fn status_breakdown(group: &NameGroup, locale: &str) -> String {
-    group
-        .status_counts()
-        .into_iter()
-        .map(|(status, count)| {
+/// A name group's status breakdown, split into its leading number and the
+/// rest ("40", "available · 8 donated") so the number can sit in the aligned
+/// count column. A translation that doesn't start with the count stays whole
+/// in the text part: unaligned, but still fully visible.
+fn status_breakdown(group: &NameGroup, locale: &str) -> (String, String) {
+    let counts = group.status_counts();
+    let text = counts
+        .iter()
+        .map(|&(status, count)| {
             rust_i18n::t!(status.count_key(count), locale = locale, count = count).into_owned()
         })
         .collect::<Vec<_>>()
-        .join(" · ")
+        .join(" · ");
+    let lead = counts
+        .first()
+        .map_or_else(String::new, |(_, count)| count.to_string());
+    match text.strip_prefix(lead.as_str()) {
+        Some(rest) => {
+            let rest = rest.trim_start().to_string();
+            (lead, rest)
+        }
+        None => (String::new(), text),
+    }
 }
 
 fn name_group_row(category_id: i64, group: NameGroup, locale: &str) -> InventoryNameGroup {
+    let (lead_count, status_text) = status_breakdown(&group, locale);
     InventoryNameGroup {
         key: format!("name:{category_id}:{}", group.name),
-        heading: rust_i18n::t!(
-            "inventory.group.name",
-            locale = locale,
-            name = group.name,
-            count = group.items.len()
-        )
-        .into_owned(),
-        breakdown: status_breakdown(&group, locale),
+        lead_count,
+        status_text,
         name: group.name,
         items: group
             .items
@@ -364,13 +372,8 @@ fn category_group_row(group: CategoryGroup, locale: &str) -> InventoryCategoryGr
     let category_id = group.category_id;
     InventoryCategoryGroup {
         key: format!("category:{category_id}"),
-        heading: rust_i18n::t!(
-            "inventory.group.category",
-            locale = locale,
-            name = group.category_name,
-            count = group.total
-        )
-        .into_owned(),
+        name: group.category_name,
+        total: group.total,
         names: group
             .names
             .into_iter()
@@ -1423,6 +1426,14 @@ mod tests {
         cat_id
     }
 
+    /// The markup of a tree row's name and aligned count, at either level.
+    fn count_row(name: &str, count: usize) -> String {
+        format!(
+            "<span class=\"inventory-row-name\">{name}</span>\
+             <span class=\"inventory-row-count\">{count}</span>"
+        )
+    }
+
     async fn list_page(app: axum::Router, cookie: &str, uri: &str) -> String {
         let req = Request::builder()
             .uri(uri)
@@ -1456,11 +1467,14 @@ mod tests {
 
         let body = list_page(app, &cookie, "/inventory").await;
 
-        assert!(body.contains("testwheels (4)"));
-        assert!(body.contains("Wheels 52mm × 4"));
-        assert!(body.contains("3 available · 1 reserved"));
+        assert!(body.contains(&count_row("testwheels", 4)));
+        assert!(body.contains(&count_row("Wheels 52mm", 3)));
+        assert!(body.contains("available · 1 reserved"));
+        assert!(body.contains("<th>Item no.</th>"));
+        assert!(!body.contains("×"));
+        assert!(!body.contains("testwheels (4)"));
         // Grouped, so the name appears as one heading rather than once per item.
-        assert_eq!(body.matches("Wheels 52mm × 4").count(), 1);
+        assert_eq!(body.matches(&count_row("Wheels 52mm", 3)).count(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1481,7 +1495,11 @@ mod tests {
         let body = list_page(app, &cookie, "/inventory").await;
 
         assert!(body.contains(&format!("<a href=\"/inventory/{id}/edit\">Lone helmet</a>")));
-        assert!(!body.contains("Lone helmet × 1"));
+        assert!(body.contains(
+            "/edit\">Lone helmet</a></span><span class=\"inventory-row-count\">1</span>"
+        ));
+        assert!(body.contains(&format!("available · #{id} ·")));
+        assert!(!body.contains("×"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1507,12 +1525,14 @@ mod tests {
         let cookie = test_support::login(&app).await;
 
         let not_donated = list_page(app.clone(), &cookie, "/inventory?show=not_donated").await;
-        assert!(not_donated.contains("Deck A × 2"));
+        assert!(not_donated.contains(&count_row("Deck A", 2)));
+        // The category total tells a working filter apart from an ignored one.
+        assert!(not_donated.contains(&count_row("testdeck", 2)));
         assert!(!not_donated.contains("Old helmet"));
 
         let donated = list_page(app, &cookie, "/inventory?show=donated").await;
-        assert!(donated.contains("Deck A × 3"));
-        assert!(donated.contains("Old helmet × 2"));
+        assert!(donated.contains(&count_row("Deck A", 3)));
+        assert!(donated.contains(&count_row("Old helmet", 2)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1532,7 +1552,7 @@ mod tests {
 
         let body = list_page(app, &cookie, "/inventory?show=nonsense").await;
 
-        assert!(body.contains("Deck A × 3"));
+        assert!(body.contains(&count_row("testdeck", 3)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1645,7 +1665,7 @@ mod tests {
         assert!(flash_cleared);
         let body = test_support::body_text(res).await;
         assert!(body.contains("<div class=\"flash-success\">"));
-        assert!(body.contains("Deck A × 3"));
+        assert!(body.contains(&count_row("Deck A", 3)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1690,7 +1710,7 @@ mod tests {
         let replaced = filter_set_cookie(&res).expect("?show= should always record a filter");
 
         let body = list_page(app, &format!("{cookie}; {replaced}"), "/inventory").await;
-        assert!(body.contains("Deck A × 5"));
+        assert!(body.contains(&count_row("testdeck", 5)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1711,7 +1731,7 @@ mod tests {
 
         let body = list_page(app, &format!("{cookie}; {forged}"), "/inventory").await;
 
-        assert!(body.contains("Deck A × 5"));
+        assert!(body.contains(&count_row("testdeck", 5)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1732,7 +1752,7 @@ mod tests {
 
         let body = list_page(app, &format!("{cookie}; {unknown}"), "/inventory").await;
 
-        assert!(body.contains("Deck A × 5"));
+        assert!(body.contains(&count_row("testdeck", 5)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1761,10 +1781,10 @@ mod tests {
         let both = format!("{cookie}; {filter_cookie}");
 
         let bare = list_page(app.clone(), &both, "/inventory").await;
-        assert!(bare.contains("Deck A × 3"));
+        assert!(bare.contains(&count_row("Deck A", 3)));
 
         let all = list_page(app, &both, "/inventory?show=all").await;
-        assert!(all.contains("Deck A × 5"));
+        assert!(all.contains(&count_row("testdeck", 5)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1785,7 +1805,33 @@ mod tests {
 
         let body = list_page(app, &cookie, "/inventory").await;
 
-        assert!(body.contains("2 disponíveis · 1 doado"));
+        assert!(body.contains(&count_row("Deck A", 2)));
+        assert!(body.contains("disponíveis · 1 doado"));
+        assert!(body.contains("<th>Nº do item</th>"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn list_splits_the_german_breakdown_and_labels_the_item_number_column() {
+        let (state, dir) = test_support::test_app("inventory-list-de");
+        insert_items(
+            &state.conn(),
+            "Deck A",
+            "testdeck",
+            ItemStatus::Available,
+            40,
+        );
+        insert_items(&state.conn(), "Deck A", "testdeck", ItemStatus::Donated, 8);
+        adm_sfa_core::db::queries::settings::set(&state.conn(), "ui_locale", "de").unwrap();
+        let app = crate::build_app(state.clone());
+        let cookie = test_support::login(&app).await;
+
+        let body = list_page(app, &cookie, "/inventory").await;
+
+        assert!(body.contains(&count_row("testdeck", 48)));
+        assert!(body.contains(&count_row("Deck A", 40)));
+        assert!(body.contains("verfügbar · 8 gespendet"));
+        assert!(body.contains("<th>Item-Nr.</th>"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

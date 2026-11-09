@@ -23,11 +23,19 @@
   .table-scroll table { margin-top: 0; }
   .inventory-filter { margin: 1rem 0; display: flex; flex-wrap: wrap; gap: 0.75rem; }
   .inventory-filter a[aria-current] { font-weight: 600; text-decoration: none; color: inherit; }
-  .inventory-category { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
-  .inventory-category > summary { font-weight: 600; cursor: pointer; padding: 0.25rem 0; }
-  .inventory-name { margin-left: 1.1rem; padding: 0.35rem 0; }
-  .inventory-name > summary { cursor: pointer; }
-  .inventory-name .hint { display: inline; margin-left: 0.4rem; }
+  .inventory-category { --inv-name-col: min(22rem, 40vw); --inv-indent: 1.1rem; --inv-marker: 1.1rem; border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
+  .inventory-category > summary { font-weight: 600; padding-block: 0.25rem; }
+  .inventory-name { margin-left: var(--inv-indent); padding: 0.35rem 0; }
+  .inventory-name .hint { margin: 0; overflow-wrap: anywhere; }
+  /* The name column of an indented row is narrower by exactly the indent, so the count column sits on one vertical line across both levels. */
+  .inventory-row { display: grid; grid-template-columns: var(--inv-name-col) 3rem minmax(0, 1fr); column-gap: 0.5rem; align-items: baseline; position: relative; padding-left: var(--inv-marker); }
+  div.inventory-row, .inventory-name > .inventory-row { grid-template-columns: calc(var(--inv-name-col) - var(--inv-indent)) 3rem minmax(0, 1fr); }
+  summary.inventory-row { cursor: pointer; list-style: none; }
+  summary.inventory-row::-webkit-details-marker { display: none; }
+  summary.inventory-row::before { content: "\25B8"; position: absolute; left: 0; }
+  details[open] > summary.inventory-row::before { content: "\25BE"; }
+  .inventory-row-name { min-width: 0; overflow-wrap: anywhere; }
+  .inventory-row-count { text-align: right; font-weight: normal; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; }
   th { background: #f4f4f4; }
   form.inline { display: inline; }
