@@ -32,18 +32,18 @@
 
 <form method="post" action="{% if let Some(id) = id %}/inventory/{{ id }}{% else %}/inventory{% endif %}" {% if id.is_none() %}enctype="multipart/form-data"{% endif %}>
   <div class="field">
-    <label for="name">{{ "common.field.name"|t(locale) }}</label>
-    <input type="text" id="name" name="name" value="{{ name }}" required autofocus {% if locked %}readonly{% endif %}>
-  </div>
-  <div class="field">
     <label for="category_id">{{ "inventory.field.category"|t(locale) }}</label>
-    <select id="category_id" name="category_id" required {% if locked %}disabled{% endif %}>
+    <select id="category_id" name="category_id" required autofocus {% if locked %}disabled{% endif %}>
       <option value="">{{ "common.combo.choose_one"|t(locale) }}</option>
       {% for c in categories %}
       <option value="{{ c.id }}" {% if c.selected %}selected{% endif %}>{{ c.name }}</option>
       {% endfor %}
     </select>
     {% if locked %}<input type="hidden" name="category_id" value="{% if let Some(cid) = category_id %}{{ cid }}{% endif %}">{% endif %}
+  </div>
+  <div class="field">
+    <label for="name">{{ "common.field.name"|t(locale) }}</label>
+    <input type="text" id="name" name="name" value="{{ name }}" required {% if locked %}readonly{% endif %}>
   </div>
   <div class="field">
     <label>{{ "common.field.location"|t(locale) }}</label>

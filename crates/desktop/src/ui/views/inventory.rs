@@ -472,16 +472,6 @@ impl InventoryView {
             .spacing([12.0, 8.0])
             .min_col_width(90.0)
             .show(ui, |ui| {
-                ui.label(t!("common.field.name").as_ref());
-                ui.add_enabled_ui(!locked, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.draft.name)
-                            .hint_text(t!("inventory.field.name_hint").as_ref())
-                            .desired_width(280.0),
-                    );
-                });
-                ui.end_row();
-
                 ui.label(t!("inventory.field.category").as_ref());
                 let selected_name = self
                     .draft
@@ -501,6 +491,16 @@ impl InventoryView {
                                 );
                             }
                         });
+                });
+                ui.end_row();
+
+                ui.label(t!("common.field.name").as_ref());
+                ui.add_enabled_ui(!locked, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.draft.name)
+                            .hint_text(t!("inventory.field.name_hint").as_ref())
+                            .desired_width(280.0),
+                    );
                 });
                 ui.end_row();
 
